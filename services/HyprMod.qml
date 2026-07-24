@@ -22,6 +22,11 @@ Singleton {
     property var overrides: ({})
     property var customBinds: []
 
+    // Saved monitor layout: name -> {mode, position, scale, ...}, plus the
+    // primary monitor name (workspace 1 pinned there)
+    property var monitors: ({})
+    property string primaryMonitor
+
     property var pendingCommands: []
 
     function get(key: string, fallback: var): var {
@@ -55,6 +60,25 @@ Singleton {
         enqueue(["unset-option", name], name);
     }
 
+    function setMonitor(name: string, spec: var): void {
+        const updated = Object.assign({}, monitors);
+        updated[name] = spec;
+        monitors = updated;
+        enqueue(["set-monitor", name, JSON.stringify(spec)], "monitor:" + name);
+    }
+
+    function delMonitor(name: string): void {
+        const updated = Object.assign({}, monitors);
+        delete updated[name];
+        monitors = updated;
+        enqueue(["del-monitor", name], "monitor:" + name);
+    }
+
+    function setPrimary(name: string): void {
+        primaryMonitor = name;
+        enqueue(["set-primary", name], "primary");
+    }
+
     function addBind(combo: string, kind: string, value: string, flags: string): void {
         enqueue(["add-bind", combo, kind, value, flags], null);
     }
@@ -65,6 +89,10 @@ Singleton {
 
     function refreshSchema(): void {
         schemaProc.running = true;
+        overridesProc.running = true;
+    }
+
+    function refreshState(): void {
         overridesProc.running = true;
     }
 
@@ -133,6 +161,8 @@ Singleton {
                     const state = JSON.parse(text);
                     root.overrides = state.options;
                     root.customBinds = state.binds;
+                    root.monitors = state.monitors ?? {};
+                    root.primaryMonitor = state.primary ?? "";
                 } catch (e) {
                 }
             }

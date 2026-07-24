@@ -3,6 +3,7 @@ pragma Singleton
 import Quickshell
 import Caelestia
 import Caelestia.Config
+import qs.services
 import qs.utils
 
 Searcher {
@@ -11,9 +12,17 @@ Searcher {
     function launch(entry: DesktopEntry): void {
         appDb.incrementFrequency(entry.id);
 
+        const gpuEnv = GpuPrefs.launchEnv(entry.id);
         if (entry.runInTerminal)
             Quickshell.execDetached({
                 command: [...GlobalConfig.general.apps.terminal, `${Quickshell.shellDir}/assets/wrap_term_launch.sh`, ...entry.command],
+                environment: gpuEnv ?? {},
+                workingDirectory: entry.workingDirectory
+            });
+        else if (gpuEnv)
+            Quickshell.execDetached({
+                command: entry.command,
+                environment: gpuEnv,
                 workingDirectory: entry.workingDirectory
             });
         else

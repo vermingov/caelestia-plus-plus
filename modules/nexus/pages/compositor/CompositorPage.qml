@@ -95,6 +95,22 @@ PageBase {
 
         NavRow {
             visible: HyprMod.available
+            icon: "monitor"
+            label: qsTr("Monitors")
+            status: Hypr.monitors.values.length === 1 ? qsTr("1 monitor") : qsTr("%1 monitors").arg(Hypr.monitors.values.length)
+            onClicked: root.nState.openSubPage(8)
+        }
+
+        NavRow {
+            visible: HyprMod.available
+            icon: "memory"
+            label: qsTr("App GPUs")
+            status: qsTr("Per-app GPU selection")
+            onClicked: root.nState.openSubPage(9)
+        }
+
+        NavRow {
+            visible: HyprMod.available
             last: true
             icon: "manufacturing"
             label: qsTr("All options")

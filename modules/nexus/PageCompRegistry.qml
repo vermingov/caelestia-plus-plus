@@ -106,6 +106,12 @@ QtObject {
                 Component {
                     CompositorOptions {}
                 }
+                Component {
+                    CompositorMonitors {}
+                }
+                Component {
+                    CompositorAppGpus {}
+                }
             }
         },
         Component {
