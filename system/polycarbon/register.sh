@@ -13,6 +13,7 @@ set -eu
 SHELLDIR=${1:?shell dir}
 FORCE=${2:-}
 DESKTOP_ID="caelestia-polycarbon.desktop"
+SETTINGS_ID="caelestia-polycarbon-settings.desktop"
 LEGACY_ID="caelestia-winrun.desktop"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 MIME_TYPES="application/x-ms-dos-executable application/vnd.microsoft.portable-executable application/x-msdownload application/x-msi application/x-ms-shortcut text/x-msdos-batch text/vbscript text/x-ms-regedit"
@@ -28,6 +29,20 @@ Icon=application-x-executable
 Terminal=false
 NoDisplay=true
 MimeType=${MIME_TYPES// /;};
+EOF
+
+# Launcher-visible settings entry: opens the permission manager GUI
+# (`polycarbon config`) from the app launcher.
+cat > "$APPS_DIR/$SETTINGS_ID" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Polycarbon
+GenericName=Windows App Settings
+Comment=Permissions for Windows programs run through Polycarbon
+Exec=$SHELLDIR/system/polycarbon/polycarbon config
+Icon=preferences-system
+Terminal=false
+Categories=Settings;
 EOF
 
 for type in $MIME_TYPES; do
