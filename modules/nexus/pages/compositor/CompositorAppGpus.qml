@@ -14,22 +14,30 @@ PageBase {
     id: root
 
     readonly property int maxResults: 30
-    property string query
-    // One entry per desktop id — DesktopEntries already dedupes multiple
-    // .desktop files for the same id, assigned apps sort first
-    readonly property var filtered: {
+
+    // Filtered imperatively (not a binding): the sort reads GpuPrefs
+    // assignments, and tracking them would resort the list under the
+    // cursor every time a chip is clicked.
+    property var shown: []
+    property int matchCount
+
+    function refilter(query: string): void {
         const q = query.toLowerCase();
-        return [...DesktopEntries.applications.values].filter(a => !q || a.name.toLowerCase().includes(q)).sort((a, b) => {
+        const matches = [...DesktopEntries.applications.values].filter(a => !q || a.name.toLowerCase().includes(q)).sort((a, b) => {
             const aSet = GpuPrefs.assignments[a.id] !== undefined;
             const bSet = GpuPrefs.assignments[b.id] !== undefined;
             if (aSet !== bSet)
                 return aSet ? -1 : 1;
             return a.name.localeCompare(b.name);
         });
+        matchCount = matches.length;
+        shown = matches.slice(0, maxResults);
     }
 
     title: qsTr("App GPUs")
     isSubPage: true
+
+    Component.onCompleted: refilter("")
 
     ColumnLayout {
         anchors.horizontalCenter: parent.horizontalCenter
@@ -60,15 +68,15 @@ PageBase {
                 id: queryDebounce
 
                 interval: 150
-                onTriggered: root.query = searchField.text
+                onTriggered: root.refilter(searchField.text)
             }
         }
 
         StyledText {
             Layout.alignment: Qt.AlignHCenter
             Layout.bottomMargin: Tokens.spacing.small
-            visible: root.filtered.length > root.maxResults
-            text: qsTr("Showing %1 of %2 apps — keep typing to narrow down").arg(root.maxResults).arg(root.filtered.length)
+            visible: root.matchCount > root.maxResults
+            text: qsTr("Showing %1 of %2 apps — keep typing to narrow down").arg(root.maxResults).arg(root.matchCount)
             color: Colours.palette.m3outline
             font: Tokens.font.label.small
         }
@@ -76,7 +84,7 @@ PageBase {
         Repeater {
             id: list
 
-            model: root.filtered.slice(0, root.maxResults)
+            model: root.shown
 
             ConnectedRect {
                 id: appItem
@@ -87,10 +95,8 @@ PageBase {
 
                 Layout.fillWidth: true
                 first: index === 0
-                last: index === Math.min(list.count, root.maxResults) - 1
+                last: index === list.count - 1
                 implicitHeight: appRow.implicitHeight + appRow.anchors.margins * 2
-                clip: false
-                z: gpuButton.expanded ? 1 : 0
 
                 RowLayout {
                     id: appRow
@@ -107,63 +113,30 @@ PageBase {
                         source: Quickshell.iconPath(appItem.modelData.icon, "image-missing")
                     }
 
-                    ColumnLayout {
+                    StyledText {
                         Layout.fillWidth: true
-                        spacing: 0
-
-                        StyledText {
-                            Layout.fillWidth: true
-                            text: appItem.modelData.name
-                            font: Tokens.font.body.small
-                            elide: Text.ElideRight
-                        }
-
-                        StyledText {
-                            Layout.fillWidth: true
-                            visible: text
-                            text: appItem.assignedGpu?.name ?? ""
-                            color: Colours.palette.m3primary
-                            font: Tokens.font.label.small
-                            elide: Text.ElideRight
-                        }
+                        text: appItem.modelData.name
+                        font: Tokens.font.body.small
+                        elide: Text.ElideRight
                     }
 
-                    SplitButton {
-                        id: gpuButton
+                    TextButton {
+                        type: TextButton.Tonal
+                        checked: !appItem.assignedGpu
+                        text: qsTr("Default")
+                        onClicked: GpuPrefs.setGpu(appItem.modelData.id, "")
+                    }
 
-                        type: SplitButton.Tonal
-                        fallbackIcon: "memory"
-                        fallbackText: qsTr("Default")
-                        active: menuItems.find(i => i.text === appItem.assignedGpu?.name) ?? null
-                        stateLayer.onClicked: gpuButton.expanded = !gpuButton.expanded
-                        menu.onItemSelected: item => {
-                            const gpu = GpuPrefs.gpus.find(g => g.name === item.text);
-                            GpuPrefs.setGpu(appItem.modelData.id, gpu?.slot ?? "");
-                        }
-                        menuItems: {
-                            const items = [defaultItem];
-                            for (let i = 0; i < gpuVariants.instances.length; i++)
-                                items.push(gpuVariants.instances[i]);
-                            return items;
-                        }
+                    Repeater {
+                        model: GpuPrefs.gpus
 
-                        readonly property MenuItem defaultItem: MenuItem {
-                            text: qsTr("Default")
-                            icon: appItem.assignedGpu ? "" : "check"
-                        }
+                        TextButton {
+                            required property var modelData
 
-                        Variants {
-                            id: gpuVariants
-
-                            model: GpuPrefs.gpus
-
-                            MenuItem {
-                                required property var modelData
-
-                                text: modelData.name
-                                icon: appItem.assignedGpu?.slot === modelData.slot ? "check" : ""
-                                activeIcon: "memory"
-                            }
+                            type: TextButton.Tonal
+                            checked: appItem.assignedGpu?.slot === modelData.slot
+                            text: modelData.name
+                            onClicked: GpuPrefs.setGpu(appItem.modelData.id, modelData.slot)
                         }
                     }
                 }
