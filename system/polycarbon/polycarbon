@@ -411,10 +411,21 @@ gpu_count() { grep -aoE 'Found device: .*' "${1:-$LOG}" 2>/dev/null | sort -u | 
 # chatter alone is not a crash — it appears in every healthy Vulkan run, so
 # matching it made the dxvk_off/gpu_soft guards fire for ANY crash. Require a
 # real fault signal AND a graphics context in the same slice.
+# Two independent whole-file greps used to decide this: "does the log mention graphics"
+# AND "does the log contain any error word anywhere". Every DXVK app satisfies both — a
+# healthy Vortex session matched on `err: readMonitorEdidFromKey: Failed to get EDID reg
+# key size`, which is routine chatter — so dxvk_off and gpu_soft were tried after any
+# failure whatsoever, including ones with nothing to do with graphics.
+#
+# Both signals must now appear on the SAME line, the failure tokens are scoped to real
+# device-level faults (keeping "failed to create <device|swapchain|...>", the canonical
+# DXVK/VKD3D hard failure), and lines known to be noise are dropped first.
+GFX_BENIGN='EDID|colorimetry|display metadata|Ignoring flags|Unknown interface query|MakeWindowAssociation'
 graphics_crash() {
     local s=${1:-$LOG}
-    grep -aqiE 'DXVK|vkd3d|vulkan|d3d1[012]|dxgi|opengl|Renderer|Found device' "$s" 2>/dev/null \
-        && grep -aqiE 'err:|panic|exception|VK_ERROR|device lost|failed to create|DXGI_ERROR|assert|fatal|crash' "$s" 2>/dev/null
+    grep -aiE 'DXVK|vkd3d|vulkan|d3d1[012]|dxgi|opengl|renderer|wined3d' "$s" 2>/dev/null |
+        grep -aviE "$GFX_BENIGN" |
+        grep -aqiE 'panic|unhandled exception|VK_ERROR|device lost|DXGI_ERROR|assertion|fatal|crashed|failed to create (the )?(device|swap ?chain|surface|instance|context|adapter)'
 }
 
 wgi_crash() {
@@ -470,7 +481,10 @@ recovery_env() {
 # Proton builds live in their own tags (not releases/latest), so scan the
 # release list — newest first — for the first stable-pattern match.
 runner_latest_tag() {
-    curl -fsSL --max-time 8 "https://api.github.com/repos/$RUNNER_REPO/releases?per_page=30" 2>/dev/null \
+    # This runs on the launch path, before the app starts, holding the setup lock. A
+    # slow or half-open link therefore delays every double-click by whatever curl waits,
+    # so cap the connect separately from the transfer: an unreachable host costs 2 s, not 8.
+    curl -fsSL --connect-timeout 2 --max-time 5 "https://api.github.com/repos/$RUNNER_REPO/releases?per_page=30" 2>/dev/null \
         | grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 | grep -E "$RUNNER_TAG_PATTERN" | head -1
 }
 
@@ -758,14 +772,28 @@ ensure_ready() {
 # the window-class checks must key on the target. The target path is embedded
 # in the binary .lnk; pull the last .exe out of it. Falls back to the .lnk
 # basename if extraction finds nothing.
+# Sets EXE_GUESSED=1 when the name is a fallback rather than a real target, so the
+# watchdog knows the process name it was handed is not one it can look for. Assigned on
+# every call, so it always describes the most recent resolve.
+EXE_GUESSED=""
 resolve_exe() { # target-path -> process/exe basename
+    EXE_GUESSED=""
     case "${1,,}" in
     *.lnk)
         local hit
+        # Match everything Windows permits in a filename rather than an allow-list:
+        # the old [a-z0-9_. -] dropped '(', ')' and '+', so "App+Tool.exe" resolved to
+        # "Tool.exe" — a process name that never matches, which reads as a hang.
         hit=$( { strings -e l "$1" 2>/dev/null; strings "$1" 2>/dev/null; } \
-            | grep -ioE '[a-z0-9_. -]+\.exe' | grep -iv '^ *$' | tail -1)
+            | grep -ioE '[^\\/:*?"<>|]+\.exe' | grep -iv '^ *$' | tail -1)
         hit=$(basename "$hit" 2>/dev/null)
-        printf '%s' "${hit:-$(basename "$1")}"
+        if [ -n "$hit" ]; then
+            printf '%s' "$hit"
+        else
+            # A .lnk with no .exe anywhere in it (7-Zip's Help link points at a .chm).
+            EXE_GUESSED=1
+            printf '%s' "$(basename "$1")"
+        fi
         ;;
     *)
         basename "$1"
@@ -931,6 +959,15 @@ run_with_watchdog() {
             fi
         fi
         if [ "$t" -ge "$WATCHDOG_GRACE" ]; then
+            # A guessed name is not a process name — _app_alive above could never have
+            # answered truthfully, so "no window and still running" is not evidence of a
+            # hang. Killing on it is how a healthy app gets shot and sent through the
+            # recovery ladder; leave it alone and report success.
+            if [ -n "$EXE_GUESSED" ]; then
+                logmsg "$exe: no window after ${WATCHDOG_GRACE}s, but its real process name is unknown — leaving it running"
+                wait "$launcher" 2>/dev/null
+                return 0
+            fi
             logmsg "$exe never opened a window in ${WATCHDOG_GRACE}s and is still running — treating as hung"
             # Kill THIS program only — wineserver -k would take every other
             # app running on the shared prefix down with it
