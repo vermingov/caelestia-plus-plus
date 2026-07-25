@@ -48,7 +48,9 @@ Variants {
                 anchors.fill: parent
                 active: !Config.background.wallpaperEnabled && ShellPrefs.dnaEnabled
 
-                sourceComponent: DnaBackground {}
+                sourceComponent: DnaBackground {
+                    screen: win.screen
+                }
             }
 
             Loader {
