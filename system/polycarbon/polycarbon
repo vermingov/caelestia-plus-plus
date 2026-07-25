@@ -49,7 +49,7 @@ RUNNER_CHECK_SECONDS=86400
 COMPONENTS_VER="2026-07-21b"
 # The winetricks runtime-library layer, tracked separately so its verb set
 # can grow without re-running the heavier component install
-BINDINGS_VER="2026-07-21"
+BINDINGS_VER="2026-07-25"
 WINETRICKS_VER="20260125"
 WINETRICKS_URL="https://raw.githubusercontent.com/Winetricks/winetricks/${WINETRICKS_VER}/src/winetricks"
 WINETRICKS_SHA256="431f82fc74000e6c864409f1d8fb495d696c03928808e3e8acffc45179312a7b"
@@ -59,7 +59,21 @@ WINETRICKS_SHA256="431f82fc74000e6c864409f1d8fb495d696c03928808e3e8acffc45179312
 # vcrun2010 are separate older runtimes. .NET is covered by wine-mono, so
 # winetricks' heavy dotnet verbs are left out on purpose. Each verb is
 # best-effort — a failure never blocks a run.
-WINETRICKS_VERBS="corefonts vcrun2022 vcrun2013 vcrun2010 d3dcompiler_47 d3dx9"
+# Deliberately EXCLUDED, and why — these look like obvious additions but make
+# things worse: riched20/gdiplus (Wine's builtins are better than the native
+# DLLs and overriding them regresses text and drawing), xact (Wine ships FAudio,
+# so XAudio2 is already native), mf (Media Foundation replacement is famously
+# destabilising), dotnet48 (wine-mono already covers .NET and the native
+# installer is slow and failure-prone), dinput8/xinput/usp10 (builtins are
+# current). Everything listed below is media="download" in the pinned winetricks
+# and declares no conflicts, so the whole set installs unattended.
+#
+# COST NOTE: msxml3 is the expensive one. winetricks extracts its 64-bit DLL out
+# of the Windows 7 SP1 package, so that single verb pulls ~904 MB (measured) and
+# leaves it in ~/.cache/winetricks. It earns its place — plenty of older software
+# and installers require MSXML 3 and Wine's builtin isn't always enough — but
+# drop it here if a lean first run matters more. The other 15 total under 200 MB.
+WINETRICKS_VERBS="corefonts tahoma vcrun2022 vcrun2013 vcrun2010 vcrun2008 vcrun2005 vcrun6 mfc140 d3dcompiler_47 d3dcompiler_43 d3dx9 d3dx10 d3dx11_43 msxml3 msxml6"
 DXVK_VER="3.0.2"
 DXVK_URL="https://github.com/doitsujin/dxvk/releases/download/v${DXVK_VER}/dxvk-${DXVK_VER}.tar.gz"
 DXVK_SHA256="9c538924110a7cdef871ca36dee218c0774124374ffdeb38af4b76be55bdf7c2"
@@ -74,7 +88,10 @@ GECKO_URL="https://dl.winehq.org/wine/wine-gecko/${GECKO_VER}/wine-gecko-${GECKO
 GECKO64_SHA256="e590b7d988a32d6aa4cf1d8aa3aa3d33766fdd4cf4c89c2dcc2095ecb28d066f"
 GECKO32_SHA256="26cecc47706b091908f7f814bddb074c61beb8063318e9efc5a7f789857793d6"
 
-SELF=$(realpath "$0")
+SELF=$(realpath -- "$0")
+# Pre-escaped for the Exec= lines of generated .desktop files; a %% or a
+# quote anywhere in the install path would otherwise corrupt every launcher.
+SELF_Q=""
 # Harvested launchers live flat here with a polycarbon- name prefix, so their
 # desktop IDs stay simple and every launcher/menu finds them
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
@@ -97,7 +114,9 @@ notify() { # title body [icon]
 # crash leaves a trail of exactly how far it got. The log is on disk and
 # append-flushed, so it survives the program (or wine) dying.
 logmsg() {
-    printf '[%s] polycarbon: %s\n' "$(date '+%H:%M:%S')" "$1" >> "$LOG"
+    # %(...)T is bash's own strftime — logmsg runs on every step of every
+    # launch, and $(date) paid a fork for each one.
+    printf '[%(%H:%M:%S)T] polycarbon: %s\n' -1 "$1" >> "$LOG"
     say "$1"
 }
 
@@ -149,6 +168,7 @@ salient_error() {
 # touched — into our log, so "cat last-run.log" shows the program's own error,
 # not just our vantage point. Also surfaces the GPUs in play, since graphics
 # crashes are common on multi-GPU machines.
+GPU_LOGGED=""
 collect_app_logs() {
     local dir=$1 marker=$2 f found=""
     while IFS= read -r f; do
@@ -163,12 +183,45 @@ collect_app_logs() {
             ;;
         esac
     done < <(find "$dir" -maxdepth 3 -type f \( -iname '*.log' -o -iname 'log*.txt' -o -iname '*.dmp' \) -newer "$marker" 2>/dev/null | head -4)
-    grep -aoE 'Found device: .*' "$LOG" 2>/dev/null | sort -u | while IFS= read -r d; do logmsg "GPU seen — $d"; done
+    # Only once per run: this writes "GPU seen — Found device: X" into $LOG,
+    # which the very same grep matches on the next recovery rung, so every
+    # attempt re-logged the whole GPU list.
+    if [ -z "$GPU_LOGGED" ]; then
+        GPU_LOGGED=1
+        grep -aoE 'Found device: .*' "$LOG" 2>/dev/null | sort -u | while IFS= read -r d; do logmsg "GPU seen — $d"; done
+    fi
     [ -n "$found" ]
 }
 
 export WINEDEBUG="-all"
-export WINEFSYNC=1
+
+# Wine 11 dropped the staging esync/fsync patches for upstream in-process
+# synchronisation: wineserver opens /dev/ntsync by itself and there is no
+# environment knob for it. Verified against this build — ntdll.so and wineserver
+# contain zero esync/fsync strings, and wineserver reads only WINEARCH and
+# WINEPREFIX. `export WINEFSYNC=1` therefore did nothing at all. What DOES
+# matter is whether the device is usable: without it Wine falls back to
+# server-side synchronisation, which costs real frames in games, so report that
+# rather than pretend a variable fixes it.
+sync_backend() {
+    if [ -r /dev/ntsync ] && [ -w /dev/ntsync ]; then printf 'ntsync'; else printf 'server'; fi
+}
+
+# A 32-bit program that sets the LARGEADDRESSAWARE flag gets the full 4 GB of
+# address space instead of 2 GB. Proton enables this by default; several 32-bit
+# games and older productivity apps run out of address space without it.
+export WINE_LARGE_ADDRESS_AWARE=1
+
+# Shader and pipeline caches. Left alone, DXVK writes its state cache next to
+# the .exe and Mesa writes to ~/.cache — and a restricted app's sandbox mounts
+# / read-only, so BOTH writes fail silently and every single launch recompiles
+# every shader. One writable location, bound rw by confine_setup, keeps the
+# caches across launches, app reinstalls and runtime updates.
+CACHE_DIR="$BASE/cache"
+mkdir -p "$CACHE_DIR/dxvk" "$CACHE_DIR/vkd3d" "$CACHE_DIR/mesa"
+export DXVK_STATE_CACHE_PATH="$CACHE_DIR/dxvk"
+export VKD3D_SHADER_CACHE_PATH="$CACHE_DIR/vkd3d"
+export MESA_SHADER_CACHE_DIR="$CACHE_DIR/mesa"
 
 # Per-machine tuning hook. Anything exported in this file applies to every
 # program and can override the defaults above — the escape hatch for hardware
@@ -193,17 +246,30 @@ if [ ! -f "$POLY_ENV" ]; then
 #    driver bugs):
 #export WINEDLLOVERRIDES="d3d9,d3d10core,d3d11,dxgi=b"
 
-# 3. fsync misbehaving on this kernel (rare crashes at launch)?
-#export WINEFSYNC=0
+# 3. Diagnosing stutter or low frame rate? Show a performance overlay:
+#export DXVK_HUD=fps,frametimes,gpuload
 
 # Write the list of Vulkan devices into last-run.log for diagnosis:
 #export MESA_VK_DEVICE_SELECT=list
 ENVTPL
 fi
+# Env files generated before Wine 11 suggest `#export WINEFSYNC=0`, which now
+# does nothing. Refresh that one block in place, but only while it is still
+# commented out — a line the user actually enabled is never touched.
+# Older files use the same wording without the "3. " numbering, and the two
+# lines are rewritten independently so a half-migrated file repairs itself.
+if [ -f "$POLY_ENV" ] && command grep -qE '^(#export WINEFSYNC=0|# (3\. )?fsync misbehaving)' "$POLY_ENV"; then
+    sed -i -E 's|^# (3\. )?fsync misbehaving on this kernel \(rare crashes at launch\)\?$|# \1Diagnosing stutter or low frame rate? Show a performance overlay:|; s|^#export WINEFSYNC=0$|#export DXVK_HUD=fps,frametimes,gpuload|' "$POLY_ENV"
+fi
 [ -f "$POLY_ENV" ] && . "$POLY_ENV"
 
+# --speed-limit/--speed-time: a half-open connection stalls at 0 B/s forever,
+# and every fetch here runs while ensure_ready holds the setup lock — so a dead
+# mirror wedged every double-click indefinitely instead of failing. Abort a
+# transfer that cannot sustain 1 KB/s for a minute.
 fetch() { # url sha256 dest
-    curl -fsSL --retry 3 -o "$3" "$1" || die "Download failed" "$1 — check your connection and try again"
+    curl -fsSL --retry 3 --connect-timeout 15 --speed-limit 1024 --speed-time 60 \
+        -o "$3" "$1" || die "Download failed" "$1 — check your connection and try again"
     echo "$2  $3" | sha256sum -c --quiet - || {
         rm -f "$3"
         die "Download corrupted" "Checksum mismatch on $(basename "$3") — try again"
@@ -355,7 +421,10 @@ confine_setup() { # target-path
     # exec), and runner/ (the wine binary polycarbon itself runs). Mount the
     # whole tree read-only, then re-bind only the Wine prefix writable — that
     # is the only part a running app legitimately writes to.
-    CONFINE+=(--ro-bind "$BASE" "$BASE" --bind "$WINEPREFIX" "$WINEPREFIX")
+    # ...except the shader cache, which is inert data the app must be able to
+    # write. Without this the ro-bind above silently defeats every shader cache
+    # for restricted apps and they recompile from scratch on every launch.
+    CONFINE+=(--ro-bind "$BASE" "$BASE" --bind "$WINEPREFIX" "$WINEPREFIX" --bind "$CACHE_DIR" "$CACHE_DIR")
     # polycarbon's own source is under $HOME, not $BASE, so FILES=home left the script
     # that builds this sandbox writable by the app it confines — one write and the next
     # launch is unconfined. The compositor config and the shell's QML are the same class:
@@ -385,6 +454,18 @@ confine_setup() { # target-path
     [ -e /run/dbus/system_bus_socket ] && CONFINE+=(--tmpfs /run/dbus)
     [ "$(perm_get "$pf" NET on)" = off ] && CONFINE+=(--unshare-net)
     logmsg "sandbox: files=$files net=$(perm_get "$pf" NET on)${mem:+ mem=$mem}${cpu:+ cpu=$cpu%}"
+}
+
+# Per-executable Windows version override, used by the win7 recovery rung.
+# Scoped to one exe via AppDefaults so the shared prefix keeps its Windows 10
+# default for everything else. Passing an empty version removes the override.
+_set_app_winver() { # exe version|""
+    if [ -n "${2:-}" ]; then
+        "$WINE" reg add "HKCU\\Software\\Wine\\AppDefaults\\$1" /v Version /d "$2" /f >>"$LOG" 2>&1
+    else
+        "$WINE" reg delete "HKCU\\Software\\Wine\\AppDefaults\\$1" /v Version /f >>"$LOG" 2>&1
+    fi
+    return 0
 }
 
 # --- Self-recovery ---------------------------------------------------------
@@ -439,7 +520,7 @@ recovery_guard() {
     gpu_prime) [ "$(gpu_count "$slice")" -ge 2 ] ;;    # 2+ GPUs: force the discrete one
     dxvk_off)  graphics_crash "$slice" ;;              # graphics death: D3D over GL, not Vulkan
     wgi_off)   wgi_crash "$slice" ;;                   # gamepad-API panic
-    fsync_off) true ;;                                  # kernel sync issues: last simple lever
+    win7)      true ;;                                  # app rejects/crashes on the Windows 10 default
     combined)  true ;;                                  # everything applicable at once
     gpu_soft)  graphics_crash "$slice" ;;              # graphics death: CPU rendering, no GPU at all
     esac
@@ -450,7 +531,7 @@ recovery_human() {
     gpu_prime) echo "use the discrete GPU" ;;
     dxvk_off)  echo "run Direct3D on OpenGL" ;;
     wgi_off)   echo "disable the crashing gamepad API" ;;
-    fsync_off) echo "turn off fsync" ;;
+    win7)      echo "report Windows 7 to this program" ;;
     combined)  echo "all compatibility fixes together" ;;
     gpu_soft)  echo "render without the GPU (slower, but reliable)" ;;
     esac
@@ -463,7 +544,11 @@ recovery_env() {
     gpu_prime) echo 'export DRI_PRIME=1' ;;
     dxvk_off)  echo 'export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}d3d9,d3d10core,d3d11,d3d12,d3d12core,dxgi=b"' ;;
     wgi_off)   echo 'export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}windows.gaming.input="' ;;
-    fsync_off) echo 'export WINEFSYNC=0 WINEESYNC=0' ;;
+    # Not env: a per-executable registry override. AppDefaults scopes it to this
+    # one exe, so nothing else in the shared prefix sees a different Windows
+    # version. Wine reports Windows 10 by default and a long tail of installers
+    # and older programs refuse to run on it.
+    win7)      printf '_set_app_winver %q win7\n' "$exe" ;;
     # Last resort for a graphics crash: no GPU in the picture at all. D3D on
     # OpenGL, OpenGL on Mesa's CPU rasteriser. Slow but sidesteps every GPU /
     # multi-GPU / driver bug — a program that renders anything renders here.
@@ -472,7 +557,7 @@ recovery_env() {
         recovery_guard gpu_prime "$slice" && recovery_env gpu_prime
         recovery_guard dxvk_off "$slice" && recovery_env dxvk_off
         recovery_guard wgi_off "$slice" && recovery_env wgi_off
-        recovery_env fsync_off
+        recovery_guard win7 "$slice" && recovery_env win7
         ;;
     esac
 }
@@ -496,7 +581,8 @@ runner_install_tag() {
     local asset="wine-$tag-$RUNNER_FLAVOR.tar.xz"
     local base_url="https://github.com/$RUNNER_REPO/releases/download/$tag"
     say "downloading runtime $tag (~95 MB)..."
-    curl -fsSL --retry 3 -o "$BASE/runner.tar.xz" "$base_url/$asset" || die "Runtime download failed" "Check your connection and try again"
+    curl -fsSL --retry 3 --connect-timeout 15 --speed-limit 1024 --speed-time 60 \
+        -o "$BASE/runner.tar.xz" "$base_url/$asset" || die "Runtime download failed" "Check your connection and try again"
     # Verification is mandatory: a download that can't be checked against the
     # release's published sums is never installed.
     local want
@@ -656,7 +742,9 @@ link_dir() {
 
 install_bindings() {
     [ "$(cat "$BASE/bindings.version" 2>/dev/null)" = "$BINDINGS_VER" ] && return 0
-    local wt="$RUNNER_DIR/bin/winetricks"
+    # $BASE, not $RUNNER_DIR: a runtime update runs `rm -rf "$RUNNER_DIR"`, so
+    # winetricks parked in there was deleted and re-downloaded on every update.
+    local wt="$BASE/winetricks"
     if [ ! -x "$wt" ]; then
         fetch "$WINETRICKS_URL" "$WINETRICKS_SHA256" "$wt"
         chmod +x "$wt"
@@ -699,6 +787,7 @@ install_bindings() {
 }
 
 _dll_native() { # dll...
+    local dll
     for dll in "$@"; do
         "$WINE" reg add 'HKCU\Software\Wine\DllOverrides' /v "$dll" /d native /f >>"$LOG" 2>&1
     done
@@ -751,6 +840,54 @@ install_components() {
     notify "Windows apps ready" "Runner, .NET, HTML and Direct3D support installed" checkmark
 }
 
+# Windows programs render at 96 DPI unless told otherwise, so on a scaled
+# display every Wine window comes out physically smaller than every native one —
+# the most visible way a program does NOT look 1:1. Mirror the compositor's
+# scale into the prefix. Cached, because a registry write costs a wine start.
+sync_dpi() {
+    command -v hyprctl >/dev/null 2>&1 || return 0
+    local scale dpi
+    scale=$(hyprctl monitors -j 2>/dev/null | python3 -c '
+import json, sys
+try: mons = json.load(sys.stdin)
+except ValueError: sys.exit(0)
+# The focused monitor decides — that is where a launched window lands.
+for m in mons:
+    if m.get("focused"):
+        print(m.get("scale", 1)); break
+else:
+    if mons: print(mons[0].get("scale", 1))
+' 2>/dev/null)
+    [ -n "$scale" ] || return 0
+    dpi=$(python3 -c 'import sys; print(max(96, min(480, round(96 * float(sys.argv[1])))))' "$scale" 2>/dev/null)
+    [ -n "$dpi" ] || return 0
+    [ "$dpi" = "$(cat "$BASE/.dpi" 2>/dev/null)" ] && return 0
+    "$WINE" reg add 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d "$dpi" /f >>"$LOG" 2>&1 || return 0
+    printf '%s' "$dpi" > "$BASE/.dpi"
+    logmsg "display scale $scale — Windows DPI set to $dpi"
+}
+
+# feral gamemode: CPU governor to performance and raised I/O priority for as
+# long as the process lives. Only worth paying for on actual games — on a laptop
+# it is a battery cost — so it is per-program and learned from evidence rather
+# than guessed from the filename: a run in which DXVK or VKD3D brought up a
+# device is a Direct3D program.
+GAMEWRAP=()
+game_wrap_setup() { # exe
+    GAMEWRAP=()
+    command -v gamemoderun >/dev/null 2>&1 || return 0
+    [ -f "$BASE/games/$1" ] || return 0
+    GAMEWRAP=(gamemoderun)
+    logmsg "$1 previously initialised Direct3D — running it under gamemode"
+}
+
+mark_game() { # exe log-slice
+    command grep -aqE 'Found device: |Game: |vkd3d|VKD3D' "$2" 2>/dev/null || return 0
+    mkdir -p "$BASE/games"
+    : > "$BASE/games/$1"
+    return 0
+}
+
 ensure_ready() {
     # Two rapid double-clicks must not race the setup; the second waits on
     # the lock, finds everything ready and runs normally. An explicit --setup
@@ -763,7 +900,9 @@ ensure_ready() {
     install_components
     link_filesystem   # cheap + idempotent; also upgrades pre-existing prefixes
     install_bindings
+    sync_dpi
     flock -u 9
+    exec 9>&-
 }
 
 # The name of the process a target will actually run as. For a .exe it is
@@ -775,7 +914,16 @@ ensure_ready() {
 # Sets EXE_GUESSED=1 when the name is a fallback rather than a real target, so the
 # watchdog knows the process name it was handed is not one it can look for. Assigned on
 # every call, so it always describes the most recent resolve.
+# RESOLVED_EXE mirrors what this function prints, because EXE_GUESSED cannot
+# survive the way callers invoke it: `exe=$(resolve_exe ...)` runs the function
+# in a command-substitution subshell, so the flag died with that subshell and
+# the watchdog's guessed-name guard was permanently false. A .lnk with no .exe
+# inside it (7-Zip's Help link points at a .chm) was therefore killed at the
+# grace deadline and dragged through the whole recovery ladder while running
+# fine. Callers needing the flag call this directly and read RESOLVED_EXE;
+# callers that only want the name keep using $( ).
 EXE_GUESSED=""
+RESOLVED_EXE=""
 resolve_exe() { # target-path -> process/exe basename
     EXE_GUESSED=""
     case "${1,,}" in
@@ -788,17 +936,18 @@ resolve_exe() { # target-path -> process/exe basename
             | grep -ioE '[^\\/:*?"<>|]+\.exe' | grep -iv '^ *$' | tail -1)
         hit=$(basename "$hit" 2>/dev/null)
         if [ -n "$hit" ]; then
-            printf '%s' "$hit"
+            RESOLVED_EXE=$hit
         else
             # A .lnk with no .exe anywhere in it (7-Zip's Help link points at a .chm).
             EXE_GUESSED=1
-            printf '%s' "$(basename "$1")"
+            RESOLVED_EXE=$(basename "$1")
         fi
         ;;
     *)
-        basename "$1"
+        RESOLVED_EXE=$(basename "$1")
         ;;
     esac
+    printf '%s' "$RESOLVED_EXE"
 }
 
 # Kill any lingering instances of THIS program before launching. Stale copies
@@ -811,7 +960,7 @@ kill_stale() { # exe-basename [mode]
     # mode=recovery: this run's own just-failed attempt — kill unconditionally.
     # mode empty (initial, pre-launch): the process is from a PRIOR run and may
     # be a live tray-minimized app with no window — be conservative.
-    local re; re=$(_comm_re "$1") mode=${2:-}
+    local re mode; re=$(_comm_re "$1"); mode=${2:-}
     pgrep -x "$re" >/dev/null 2>&1 || return 0
     # A LIVE session is not stale. Wine maps app windows with class = the exe
     # basename, so if this exe has a window up right now the user is simply
@@ -883,7 +1032,12 @@ WATCHDOG_GRACE=${POLYCARBON_GRACE:-40}
 # mistaken for the app coming up. $exe is read from the caller (dynamic scope).
 _win_addrs() {
     command -v hyprctl >/dev/null 2>&1 || return 0
-    hyprctl clients -j 2>/dev/null | python3 -c '
+    local j; j=$(hyprctl clients -j 2>/dev/null) || return 0
+    # The watchdog polls this once a second for up to WATCHDOG_GRACE seconds,
+    # and until the app maps its window there is nothing to extract. A literal
+    # pre-filter settles that common case without starting a JSON parser.
+    printf '%s' "$j" | grep -qiF "\"class\": \"$exe\"" || return 0
+    printf '%s' "$j" | python3 -c '
 import json, sys
 try: clients = json.load(sys.stdin)
 except ValueError: sys.exit(0)
@@ -983,26 +1137,29 @@ run_target() {
     local target=$1
     shift
     cd "$(dirname "$target")" || exit 1
-    # ${CONFINE[@]} is the per-app sandbox (empty = unrestricted, the default)
+    # ${GAMEWRAP[@]} is gamemode (empty unless this program is a known game),
+    # ${CONFINE[@]} the per-app sandbox (empty = unrestricted, the default).
+    # gamemode goes outermost so the governor covers the sandbox's children too.
+    local -a pre=("${GAMEWRAP[@]}" "${CONFINE[@]}")
     case "${target,,}" in
     *.msi)
-        "${CONFINE[@]}" "$WINE" msiexec /i "$target" "$@" >>"$LOG" 2>&1
+        "${pre[@]}" "$WINE" msiexec /i "$target" "$@" >>"$LOG" 2>&1
         ;;
     *.lnk)
-        "${CONFINE[@]}" "$WINE" start /wait /unix "$target" >>"$LOG" 2>&1
+        "${pre[@]}" "$WINE" start /wait /unix "$target" >>"$LOG" 2>&1
         ;;
     *.bat | *.cmd)
-        "${CONFINE[@]}" "$WINE" cmd /c "$(winpath "$target")" "$@" >>"$LOG" 2>&1
+        "${pre[@]}" "$WINE" cmd /c "$(winpath "$target")" "$@" >>"$LOG" 2>&1
         ;;
     *.vbs | *.vbe | *.wsf)
-        "${CONFINE[@]}" "$WINE" wscript "$(winpath "$target")" "$@" >>"$LOG" 2>&1
+        "${pre[@]}" "$WINE" wscript "$(winpath "$target")" "$@" >>"$LOG" 2>&1
         ;;
     *.reg)
         # regedit shows the standard import-confirmation, same as Windows
-        "${CONFINE[@]}" "$WINE" regedit "$(winpath "$target")" >>"$LOG" 2>&1
+        "${pre[@]}" "$WINE" regedit "$(winpath "$target")" >>"$LOG" 2>&1
         ;;
     *)
-        "${CONFINE[@]}" "$WINE" "$target" "$@" >>"$LOG" 2>&1
+        "${pre[@]}" "$WINE" "$target" "$@" >>"$LOG" 2>&1
         ;;
     esac
 }
@@ -1036,9 +1193,22 @@ dispatch_url() {
         return 1
     fi
     local -a argv
-    mapfile -d '' -t argv < <(python3 -c '
+    mapfile -d '' -t argv < <(_win_cmd_argv "$cmd" "$uri")
+    [ "${#argv[@]}" -ge 1 ] || {
+        notify "Link not handled" "The registered handler command is empty or unparseable"
+        return 1
+    }
+    _launch_registered_handler link
+}
+
+# Tokenise a Windows registry command line ("…\Vortex.exe" "%1") the way Windows
+# does, replacing %1 with the supplied argument as ONE argv element — so a query
+# string (?a=1&b=2) or a path with spaces reaches the program intact instead of
+# being split. Emits NUL-separated tokens for `mapfile -d ''`.
+_win_cmd_argv() { # command-string replacement
+    python3 -c '
 import sys
-cmd, uri = sys.argv[1], sys.argv[2]
+cmd, arg = sys.argv[1], sys.argv[2]
 toks, cur, inq = [], "", False
 for ch in cmd:
     if ch == "\"": inq = not inq
@@ -1046,47 +1216,69 @@ for ch in cmd:
         if cur: toks.append(cur); cur = ""
     else: cur += ch
 if cur: toks.append(cur)
-# a bare %1 token becomes the whole URI; embedded %1 (rare) is substituted
-sys.stdout.write("\0".join((uri if t == "%1" else t.replace("%1", uri)) for t in toks))
-' "$cmd" "$uri")
-    [ "${#argv[@]}" -ge 1 ] || {
-        notify "Link not handled" "The registered handler command is empty or unparseable"
-        return 1
-    }
+# a bare %1 token becomes the whole argument; embedded %1 (rare) is substituted
+sys.stdout.write("\0".join((arg if t == "%1" else t.replace("%1", arg)) for t in toks))
+' "$1" "$2"
+}
 
-    # Launch from the handler program's OWN directory. This is what makes the
-    # app's single-instance handoff work: a portable app (Vortex, Telegram…)
-    # keeps its running-instance lock/socket next to the exe or in a data dir
-    # it resolves relative to the working directory, so launching a link from
-    # the wrong cwd makes the second copy fail to see the first and open a
-    # brand-new window every time. Matching run_target's cwd lets the second
-    # copy find the first, forward the URI, and exit — like on Windows.
-    local exe_unix exe_dir perm_target
+# Run a program the prefix registry named as a handler — for a URL scheme or a
+# file type — under its saved permissions and from its OWN directory. Reads the
+# caller's $argv array (bash dynamic scope).
+#
+# The working directory matters: a portable app (Vortex, Telegram…) keeps its
+# running-instance lock or socket next to the exe, or in a data dir it resolves
+# relative to the cwd. Launch from the wrong place and the second copy cannot see
+# the first, so instead of handing over the link or file it opens a brand-new
+# window every time. Matching run_target's cwd makes the handoff work like Windows.
+_launch_registered_handler() { # human-label
+    local what=$1 exe_unix exe_dir perm_target
     exe_unix=$("$WINE" winepath -u "${argv[0]}" 2>/dev/null)
     exe_dir=$(dirname "$exe_unix" 2>/dev/null)
-    # The handler app's saved permissions apply to link launches too — set
-    # up confinement in BOTH branches so the fallback never runs unrestricted.
+    # The handler's saved permissions apply here too — set up confinement in BOTH
+    # branches so the fallback never runs unrestricted.
     #
     # winepath can fail (broken prefix, wineserver mid-restart) and used to return
     # empty, which walked confine_setup into "no permission file -> no sandbox" and
-    # ran a Restricted app unconfined off a URL a browser handed us. Fall back to the
-    # Windows path's own basename so the saved policy still applies.
+    # ran a Restricted app unconfined off input a browser or file manager handed us.
+    # Fall back to the Windows path's own basename so the saved policy still applies.
     perm_target=$exe_unix
     [ -n "$perm_target" ] || perm_target="${argv[0]//\\//}"
     confine_setup "$perm_target"
     if [ ${#CONFINE[@]} -eq 0 ] && [ -f "$PERMS_DIR/$(perm_key "$perm_target").perm" ]; then
         : # a permission file exists and chose ROOT=on — unconfined is the user's decision
     elif [ ${#CONFINE[@]} -eq 0 ] && [ -z "$exe_unix" ]; then
-        logmsg "link handler: cannot resolve ${argv[0]} and it has no saved permissions — refusing"
-        notify "Link blocked" "Polycarbon could not identify the program registered for this link, so it was not run." dialog-warning
+        logmsg "$what handler: cannot resolve ${argv[0]} and it has no saved permissions — refusing"
+        notify "${what^} blocked" "Polycarbon could not identify the program registered for this $what, so it was not run." dialog-warning
         return 1
     fi
     if [ -n "$exe_dir" ] && [ -d "$exe_dir" ]; then
-        logmsg "routing link to $(basename "${argv[0]}") (cwd: ${exe_dir})"
+        logmsg "routing $what to $(basename "${argv[0]}") (cwd: ${exe_dir})"
         ( cd "$exe_dir" && "${CONFINE[@]}" "$WINE" "${argv[@]}" >>"$LOG" 2>&1 )
     else
         "${CONFINE[@]}" "$WINE" "${argv[@]}" >>"$LOG" 2>&1
     fi
+}
+
+# Open a file with the Windows program that registered its type. The Linux side
+# of this is harvest_file_assocs; this is what the generated .desktop calls.
+dispatch_file() { # unix-path
+    local f=$1 ext cmd winf
+    case "$f" in *.*) ext=".${f##*.}" ;; *) ext="" ;; esac
+    [ -n "$ext" ] || { notify "File not handled" "That file has no extension to match a Windows program to."; return 1; }
+    cmd=$(_prefix_file_assocs | awk -F'\t' -v e="${ext,,}" '$1 == e {print $3; exit}')
+    if [ -z "$cmd" ]; then
+        notify "File not handled" "No Windows program is registered for $ext files"
+        return 1
+    fi
+    winf=$("$WINE" winepath -w "$f" 2>/dev/null)
+    [ -n "$winf" ] || winf=$f
+    local -a argv
+    mapfile -d '' -t argv < <(_win_cmd_argv "$cmd" "$winf")
+    [ "${#argv[@]}" -ge 1 ] || {
+        notify "File not handled" "The registered handler command is empty or unparseable"
+        return 1
+    }
+    _launch_registered_handler file
 }
 
 # The directories an installer drops shortcuts into
@@ -1120,6 +1312,13 @@ _proton_shortcuts_dir() { printf '%s' "$WINEPREFIX/drive_c/proton_shortcuts"; }
 _install_shortcut_icons() {
     local src; src="$(_proton_shortcuts_dir)/icons"
     [ -d "$src" ] || return 0
+    # harvest_shortcuts runs every 3 s from the live watcher during an install,
+    # and this used to re-copy every icon and force a full icon-cache rebuild
+    # (-f) each time. The runtime only writes icons when it converts a new
+    # shortcut, so do the work only when the source set actually changed.
+    local sig stamp="$BASE/.icons.sig"
+    sig=$(find "$src" -type f -printf '%T@ %s %p\n' 2>/dev/null | sort | md5sum)
+    [ "$sig" = "$(cat "$stamp" 2>/dev/null)" ] && return 0
     local theme="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
     local sz
     for sz in "$src"/*/; do
@@ -1130,6 +1329,7 @@ _install_shortcut_icons() {
     done
     command -v gtk-update-icon-cache >/dev/null 2>&1 \
         && gtk-update-icon-cache -q -t -f "$theme" 2>/dev/null || true
+    printf '%s' "$sig" > "$stamp"
 }
 
 # winemenubuilder converts shortcuts asynchronously — an installer that exits
@@ -1157,6 +1357,16 @@ _settle_shortcuts() {
 # programs land in the app menu exactly like they do on Windows. Called with
 # the shortcut listing captured before the run; only genuinely new entries
 # are registered, and icons extracted by Wine's own menu builder are reused.
+# Escape a path for a .desktop Exec= line: reserved chars (\ " ` $) take a
+# backslash per the spec so an installer-controlled name cannot smuggle its own
+# Exec, and a literal % becomes %% so launchers don't eat it as a field code.
+# Shared by the line that gets written and the "is this entry already ours?"
+# test below — those two had drifted (the test omitted the %% rule), so any
+# shortcut with a % in its name failed to match itself and got a duplicate
+# launcher minted on every harvest.
+_desktop_exec_quote() { printf '%s' "$1" | sed 's/%/%%/g; s/[\\"`$]/\\&/g'; }
+SELF_Q=$(_desktop_exec_quote "$SELF")
+
 harvest_shortcuts() {
     local before=$1 lnk name slug dest icon lnk_q added=""
     mkdir -p "$APPS_DIR"
@@ -1177,7 +1387,7 @@ harvest_shortcuts() {
         # Two different apps can ship a same-named shortcut (Launcher.lnk).
         # If this slug is already taken by a DIFFERENT .lnk, disambiguate with
         # a hash of the full path so the second never overwrites the first.
-        if [ -e "$dest" ] && ! grep -qxF "Exec=\"$SELF\" \"$(printf '%s' "$lnk" | sed 's/[\\"`$]/\\&/g')\"" "$dest" 2>/dev/null; then
+        if [ -e "$dest" ] && ! grep -qxF "Exec=\"$SELF\" \"$(_desktop_exec_quote "$lnk")\"" "$dest" 2>/dev/null; then
             slug="$slug-$(printf '%s' "$lnk" | md5sum | cut -c1-6)"
             dest="$APPS_DIR/polycarbon-$slug.desktop"
         fi
@@ -1192,7 +1402,7 @@ harvest_shortcuts() {
         # get a backslash so a hostile name can't smuggle its own Exec, and a
         # literal % becomes %% so launchers don't eat it as a field code.
         # Keep Name to one printable line.
-        lnk_q=$(printf '%s' "$lnk" | sed 's/%/%%/g; s/[\\"`$]/\\&/g')
+        lnk_q=$(_desktop_exec_quote "$lnk")
         name=$(printf '%s' "$name" | tr -d '[:cntrl:]')
         cat > "$dest" <<EOF
 [Desktop Entry]
@@ -1275,8 +1485,19 @@ _find_wine_icon() {
 # app" buttons on websites reach the Windows program like they would on
 # Windows. Web/system schemes are never touched, and a scheme some Linux app
 # already handles is left alone (native Steam keeps steam://, and so on).
-harvest_schemes() {
-    local reg scheme handler entry
+harvest_schemes() { # [force]
+    local scheme handler entry
+    # Discovery is an awk pass over the entire prefix registry (system.reg runs
+    # to several MB) plus a fork per scheme, and the launch path calls this
+    # three times per run. A scheme can only appear when the registry changes,
+    # so key the whole pass on the registry files' identity. `force` (used by
+    # --setup) reconciles unconditionally, so a launcher deleted by hand is
+    # always recoverable.
+    local sigfile="$BASE/.schemes.sig" sig
+    sig=$(stat -c '%Y:%s' "$WINEPREFIX/system.reg" "$WINEPREFIX/user.reg" 2>/dev/null | tr '\n' ' ')
+    if [ "${1:-}" != force ] && [ -n "$sig" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ]; then
+        return 0
+    fi
     for scheme in $(awk '
         /^\[/ { sec = $0 }
         /"URL Protocol"/ {
@@ -1300,7 +1521,7 @@ harvest_schemes() {
 Type=Application
 Name=${scheme^} link (Polycarbon)
 Comment=Opens $scheme:// links in the Windows program that registered them
-Exec="$SELF" --url %u
+Exec="$SELF_Q" --url %u
 Icon=application-x-executable
 Terminal=false
 NoDisplay=true
@@ -1309,9 +1530,199 @@ EOF
         xdg-mime default "$entry" "x-scheme-handler/$scheme"
         notify "${scheme^} links connected" "$scheme:// links from your browser now open the Windows program" checkmark
     done
+    [ -n "$sig" ] && printf '%s' "$sig" > "$sigfile"
+    return 0
+}
+
+# Extensions that must never be bridged to the Linux desktop: the system already
+# owns them, or they are executable types that have no business being routed
+# through a file manager. Wine registers most of them itself for its builtins.
+ASSOC_BLOCK=" exe com bat cmd lnk msi msp scr pif vbs vbe js jse wsf wsh reg inf cpl chm hlp url ini txt htm html "
+
+# File types a Windows PROGRAM registered inside the prefix, as
+# "ext<TAB>app-name<TAB>open-command" lines. A handler living under C:\windows is
+# one of Wine's own builtins (notepad, regedit, winhlp32…) and is skipped —
+# bridging those would aim the Linux desktop at Wine for files it already opens
+# natively. user.reg is read first so HKCU wins over HKLM, as on Windows.
+_prefix_file_assocs() {
+    python3 - "$WINEPREFIX/user.reg" "$WINEPREFIX/system.reg" <<'PYASSOC'
+import sys, re
+
+def unescape(v):
+    out, i = [], 0
+    while i < len(v):
+        if v[i] == "\\" and i + 1 < len(v):
+            out.append(v[i + 1]); i += 2
+        else:
+            out.append(v[i]); i += 1
+    return "".join(out)
+
+vals = {}
+for path in sys.argv[1:]:
+    try:
+        fh = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    key = None
+    with fh:
+        for line in fh:
+            line = line.rstrip("\r\n")
+            if line[:1] == "[":
+                end = line.find("]")
+                key = unescape(line[1:end]).lower() if end > 0 else None
+            elif key and line[:3] == '@="' and line.endswith('"'):
+                vals.setdefault(key, unescape(line[3:-1]))
+
+PREFIX = "software\\classes\\"
+EXT_RE = re.compile(r"^\.[a-z0-9][a-z0-9_+-]{0,15}$")
+for key in sorted(vals):
+    if not key.startswith(PREFIX):
+        continue
+    ext = key[len(PREFIX):]
+    if "\\" in ext or not EXT_RE.match(ext):
+        continue
+    progid = vals.get(key) or ""
+    cmd = None
+    if progid:
+        cmd = vals.get(PREFIX + progid.lower() + "\\shell\\open\\command")
+    if not cmd:
+        cmd = vals.get(PREFIX + ext + "\\shell\\open\\command")
+    if not cmd:
+        continue
+    m = re.match(r'\s*"([^"]+)"', cmd) or re.match(r"\s*(\S+)", cmd)
+    if not m:
+        continue
+    exe = m.group(1).replace("/", "\\")
+    low = exe.lower()
+    # Wine's own bundled programs are not apps worth bridging. They sit under
+    # C:\windows, or in the handful of Program Files directories Wine populates
+    # (wordpad lives in "Windows NT\Accessories", not C:\windows), or they are
+    # invoked as a bare name resolved on PATH, e.g. "rundll32.exe ieframe.dll".
+    if "\\" not in exe:
+        continue
+    if low.startswith("c:\\windows"):
+        continue
+    if re.match(r"c:\\program files( \(x86\))?\\(windows nt|internet explorer|windows media player|common files\\microsoft shared)\\", low):
+        continue
+    name = exe.split("\\")[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    if not name:
+        continue
+    sys.stdout.write("%s\t%s\t%s\n" % (ext, name, cmd))
+PYASSOC
+}
+
+# The system MIME type for an extension, empty when the shared MIME database has
+# never heard of it. globs2 lines are "weight:mimetype:*.ext".
+_linux_mime_for() { # bare-ext
+    local g m
+    for g in /usr/share/mime/globs2 "${XDG_DATA_HOME:-$HOME/.local/share}/mime/globs2"; do
+        [ -f "$g" ] || continue
+        m=$(awk -F: -v e="*.$1" 'tolower($3) == e { print $2; exit }' "$g" 2>/dev/null)
+        [ -n "$m" ] && { printf '%s' "$m"; return 0; }
+    done
+    return 0
+}
+
+# Bridge Windows file types to the Linux desktop — the file-manager counterpart
+# of harvest_schemes. Double-clicking a document in your Linux file manager opens
+# it in the Windows program that owns it, the way it would on Windows.
+#
+# Two rules keep this from doing damage:
+#   - a type the Linux desktop ALREADY handles is left completely alone. Taking
+#     .pdf or .psd off a native application is a hijack, not a feature.
+#   - Wine's own builtins never qualify (see _prefix_file_assocs), so .txt and
+#     .reg can never end up pointing at Wine's notepad or regedit.
+# What is left — the long tail of types only the Windows program knows — gets a
+# MIME type of its own and becomes double-clickable.
+harvest_file_assocs() { # [force]
+    command -v update-mime-database >/dev/null 2>&1 || return 0
+    local sigfile="$BASE/.assocs.sig" sig
+    sig=$(stat -c '%Y:%s' "$WINEPREFIX/system.reg" "$WINEPREFIX/user.reg" 2>/dev/null | tr '\n' ' ')
+    if [ "${1:-}" != force ] && [ -n "$sig" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ]; then
+        return 0
+    fi
+    local mimedir="${XDG_DATA_HOME:-$HOME/.local/share}/mime"
+    local ext name cmd bare mime entry cur fresh newtypes="" name_x name_d
+    mkdir -p "$APPS_DIR"
+    while IFS=$'\t' read -r ext name cmd; do
+        [ -n "$ext" ] && [ -n "$cmd" ] || continue
+        bare=${ext#.}
+        case "$ASSOC_BLOCK" in *" $bare "*) continue ;; esac
+        entry="polycarbon-assoc-$bare.desktop"
+        # $name is the handler's filename straight out of the prefix registry —
+        # installer-controlled — and it lands in two files with different
+        # escaping rules. A program named "AT&T <Client>" makes the MIME XML
+        # malformed, and update-mime-database then fails for the WHOLE batch, so
+        # every other file type registered in the same run breaks with it.
+        name_x=$(printf '%s' "$name" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
+        name_d=$(printf '%s' "$name" | tr -d '[:cntrl:]')
+        mime=$(_linux_mime_for "$bare")
+        if [ -n "$mime" ]; then
+            # Known to the system. Only proceed if nothing owns it yet, or the
+            # thing that owns it is us.
+            cur=$(xdg-mime query default "$mime" 2>/dev/null)
+            [ -n "$cur" ] && [ "$cur" != "$entry" ] && continue
+        else
+            mime="application/x-polycarbon-$bare"
+            mkdir -p "$mimedir/packages"
+            cat > "$mimedir/packages/polycarbon-$bare.xml" <<XMLPKG
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="$mime">
+    <comment>$bare file ($name_x)</comment>
+    <glob pattern="*.$bare"/>
+  </mime-type>
+</mime-info>
+XMLPKG
+            newtypes=1
+        fi
+        fresh=""; [ -e "$APPS_DIR/$entry" ] || fresh=1
+        cat > "$APPS_DIR/$entry" <<EOFASSOC
+[Desktop Entry]
+Type=Application
+Name=$name_d (Windows)
+Comment=Opens .$bare files with the Windows program that registered them
+Exec="$SELF_Q" --file %f
+Icon=application-x-executable
+Terminal=false
+NoDisplay=true
+MimeType=$mime;
+X-Polycarbon=true
+EOFASSOC
+        xdg-mime default "$entry" "$mime" 2>/dev/null
+        if [ -n "$fresh" ]; then
+            logmsg "file type .$bare now opens with $name_d"
+            notify ".$bare files connected" "Double-clicking a .$bare file opens it in $name_d" checkmark
+        fi
+    done < <(_prefix_file_assocs)
+    # One rebuild for the whole batch — update-mime-database is not cheap.
+    [ -n "$newtypes" ] && update-mime-database "$mimedir" 2>/dev/null
+    [ -n "$sig" ] && printf '%s' "$sig" > "$sigfile"
+    return 0
 }
 
 main() {
+    # Without this, an unknown flag fell through to the launch path and was
+    # treated as a filename to run.
+    case "${1:-}" in
+    -h | --help | help)
+        cat <<USAGE
+polycarbon — run Windows programs on Linux
+
+  polycarbon <file> [args...]   run a .exe .msi .lnk .bat .cmd .vbs .reg
+  polycarbon config             open the per-app permission manager
+  polycarbon --setup            install/update the runtime, then exit
+  polycarbon --url <uri>        open a link with the program that registered it
+  polycarbon --file <path>      open a file with the program that registered its type
+
+Log:                $LOG
+Per-machine tuning: $POLY_ENV
+USAGE
+        exit 0
+        ;;
+    esac
     [ $# -ge 1 ] || die "Nothing to run" "polycarbon expects a .exe, .msi or .lnk path"
 
     # Permission manager GUI: `polycarbon config` in a terminal
@@ -1325,7 +1736,8 @@ main() {
         SETUP_MODE=1
         new_log
         ensure_ready force
-        harvest_schemes
+        harvest_schemes force
+        harvest_file_assocs force
         # Reconcile every existing shortcut, not just this run's new ones:
         # apps installed before harvesting existed (or whose installer ran
         # outside polycarbon) get a launcher now. Empty "before" = treat all
@@ -1364,21 +1776,60 @@ Full log: $LOG" dialog-error
         exit "$ucode"
     fi
 
+    # File-type launch: the Linux file manager double-clicked a document whose
+    # type a Windows program owns. Same reasoning as --url — the program must
+    # already be installed for its type to be registered, so skip setup.
+    if [ "$1" = "--file" ]; then
+        shift
+        [ $# -ge 1 ] || die "Nothing to open" "no file given"
+        [ -x "$WINE" ] || die "Windows apps not set up yet" "Run the program once before its file types work"
+        new_log
+        logmsg "opening file: $1"
+        dispatch_file "$1"
+        local fcode=$?
+        if [ "$fcode" -ne 0 ]; then
+            local ferr; ferr=$(salient_error)
+            [ -n "$ferr" ] || ferr="The Windows program could not open the file."
+            notify "Could not open file" "$ferr
+Full log: $LOG" dialog-error
+        fi
+        exit "$fcode"
+    fi
+
     local target
-    target=$(realpath "$1")
+    # `--` or the shell will hand a leading-dash argument to realpath as an option:
+    # `polycarbon --help` printed realpath's entire usage text into the FATAL
+    # notification instead of saying the file was not found.
+    target=$(realpath -- "$1" 2>/dev/null)
+    # realpath fails outright when a PARENT component is missing, leaving target
+    # empty — the "File not found" notification then named no file at all. Fall
+    # back to what the user actually passed so the message identifies it.
+    [ -n "$target" ] || target=$1
     shift
 
-    new_log
+    # Validate BEFORE new_log: rotating pushes last-run.log out to
+    # previous-run.log, so a mistyped path used to discard a real session's log
+    # just to report that the file was missing.
     [ -e "$target" ] || die "File not found" "$target"
-    logmsg "launching $(basename "$target")"
+    new_log
+    local sb; sb=$(sync_backend)
+    logmsg "launching $(basename "$target") [sync: $sb]"
+    if [ "$sb" = server ] && [ ! -e "$BASE/.ntsync-warned" ]; then
+        touch "$BASE/.ntsync-warned"
+        logmsg "no usable /dev/ntsync — Wine is falling back to server-side synchronisation, which costs real performance in games"
+    fi
     # The process name this target runs as (a .lnk runs as its target exe,
     # not the .lnk) — everything that matches the running app keys on this.
-    local exe; exe=$(resolve_exe "$target")
+    # Called directly rather than in $( ): resolve_exe reports "this name is a
+    # fallback, not a real process name" through EXE_GUESSED, which a
+    # command-substitution subshell would discard.
+    local exe; resolve_exe "$target" >/dev/null; exe=$RESOLVED_EXE
 
     # First launch of this program: ask how much access it should have.
     # Every launch then builds its confinement from the saved answer.
     ask_first_run "$target"
     confine_setup "$target"
+    game_wrap_setup "$exe"
     # Clear leftover instances of THIS program up front, before setup runs:
     # stale copies keep wineserver alive, and the runtime auto-updater defers
     # whenever it sees Wine running — so zombies would block the auto-update
@@ -1392,16 +1843,20 @@ Full log: $LOG" dialog-error
     # trigger the after-run harvest, so its browser-link handler has to be
     # live while it runs, not after
     harvest_schemes
-    # A first-ever launch registers its scheme mid-startup; catch that too,
-    # from a detached watcher, without blocking the app
-    ( sleep 8; harvest_schemes ) >/dev/null 2>&1 &
+    harvest_file_assocs
 
     # Transient per-run state is suffixed with the pid so two apps launched
     # at once (normal usage — double-clicking two .exe files) don't corrupt
     # each other: shared fixed paths would let one run's snapshot/marker/slice
     # clobber the other's mid-flight. A trap cleans them on any exit.
-    local run=$$ shortcut_watcher=""
-    trap 'rm -f "$BASE/.shortcuts.pre.$run" "$BASE/.launch-marker.$run" "$BASE/.attempt.$run.log" "$BASE/.attempt.$run.log.crash" 2>/dev/null; [ -n "$shortcut_watcher" ] && kill "$shortcut_watcher" 2>/dev/null' EXIT
+    local run=$$ shortcut_watcher="" scheme_watcher=""
+    trap 'rm -f "$BASE/.shortcuts.pre.$run" "$BASE/.launch-marker.$run" "$BASE/.attempt.$run.log" "$BASE/.attempt.$run.log.crash" 2>/dev/null; [ -n "$shortcut_watcher" ] && kill "$shortcut_watcher" 2>/dev/null; [ -n "$scheme_watcher" ] && kill "$scheme_watcher" 2>/dev/null' EXIT
+
+    # A first-ever launch registers its scheme mid-startup; catch that too, from
+    # a detached watcher, without blocking the app. Started after the trap is in
+    # place so an app that exits inside 8 s doesn't leave it running loose.
+    ( sleep 8; harvest_schemes; harvest_file_assocs ) >/dev/null 2>&1 &
+    scheme_watcher=$!
 
     # Snapshot existing shortcuts so an installer's new ones can be spotted
     local before="$BASE/.shortcuts.pre.$run"
@@ -1429,8 +1884,8 @@ Full log: $LOG" dialog-error
     # The recovery ladder: each rung is a Wine quirk tried in its own restart.
     # "" = as-is (with any learned fix); the rest are attempted only if their
     # guard matches the crash, most-likely first, then everything combined.
-    local -a ladder=("" gpu_prime dxvk_off wgi_off fsync_off combined gpu_soft)
-    local code started err failed step extra had_app_logs=""
+    local -a ladder=("" gpu_prime dxvk_off wgi_off win7 combined gpu_soft)
+    local code started err failed step extra
     local -a tried=()
     # Guards read the signature of the LAST crash; each attempt is judged on
     # its OWN output slice, so an earlier crash's error never taints a later
@@ -1479,8 +1934,7 @@ Full log: $LOG" dialog-error
         # those must not taint whether THIS launch failed.
         tail -n +$((rung_start + 1)) "$LOG" > "$slice" 2>/dev/null
         err=$(salient_error "$slice")
-        had_app_logs=""
-        collect_app_logs "$(dirname "$target")" "$marker" && had_app_logs=1
+        collect_app_logs "$(dirname "$target")" "$marker" || true
         # A failure worth recovering from is one where the program never got
         # going: it hung (124), or it exited fast with an error/nonzero code.
         # A clean exit, or a nonzero after a real windowed session, is a normal
@@ -1495,9 +1949,16 @@ Full log: $LOG" dialog-error
             cp -f "$slice" "$crash_slice" 2>/dev/null   # stable copy for the next guard
             [ "$code" = 124 ] && logmsg "FAILED: hung with no window"
             [ -n "$err" ] && logmsg "FAILED: $err"
+            # Every other rung is environment-only and evaporates with the
+            # attempt; this one wrote to the prefix, so a rung that did not help
+            # has to put the Windows version back.
+            case $step in win7 | combined) _set_app_winver "$exe" "" ;; esac
         fi
 
         if [ -z "$failed" ]; then
+            # Learn whether this is a Direct3D program, so the next launch gets
+            # gamemode without anyone having to configure anything.
+            mark_game "$exe" "$slice"
             # It worked. If a rung fixed it, remember it so next time is clean.
             if [ -n "$step" ]; then
                 printf '%s\n' "$extra" >> "$qf"
@@ -1527,6 +1988,7 @@ Tried: ${tried[*]:-none}. Full details: $LOG" dialog-error
     harvest_shortcuts "$before"
     clear_runner_menu_entries
     harvest_schemes
+    harvest_file_assocs
     exit "$code"
 }
 
@@ -1561,6 +2023,10 @@ diagnose_failure() {
         *.lnk)  timeout "$WATCHDOG_GRACE" "${CONFINE[@]}" "$WINE" start /wait /unix "$target" ;;
         *.msi)  timeout "$WATCHDOG_GRACE" "${CONFINE[@]}" "$WINE" msiexec /i "$target" "${appargs[@]}" ;;
         *.bat|*.cmd) timeout "$WATCHDOG_GRACE" "${CONFINE[@]}" "$WINE" cmd /c "$(winpath "$target")" "${appargs[@]}" ;;
+        # Script targets need their interpreter here too, or the "diagnosis"
+        # just records wine failing to exec a .vbs as a binary.
+        *.vbs|*.vbe|*.wsf) timeout "$WATCHDOG_GRACE" "${CONFINE[@]}" "$WINE" wscript "$(winpath "$target")" "${appargs[@]}" ;;
+        *.reg)  timeout "$WATCHDOG_GRACE" "${CONFINE[@]}" "$WINE" regedit "$(winpath "$target")" ;;
         *)      timeout "$WATCHDOG_GRACE" "${CONFINE[@]}" "$WINE" "$target" "${appargs[@]}" ;;
         esac
     ) >"$dlog" 2>&1
