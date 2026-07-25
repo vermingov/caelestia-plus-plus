@@ -297,8 +297,16 @@ confine_setup() { # target-path
     CONFINE=()
     local pf="$PERMS_DIR/$(perm_key "$1").perm" tdir; tdir=$(dirname "$1")
     [ -f "$pf" ] || return 0
-    [ "$(perm_get "$pf" ROOT on)" = on ] && return 0
-    command -v bwrap >/dev/null 2>&1 || { logmsg "bwrap not installed — running unrestricted"; return 0; }
+    # Default off, not on: the file existing means the user already answered, so a
+    # truncated or hand-mangled file with no readable ROOT= must fall back to the
+    # restricted side. Reading "unset" as "unrestricted" made a half-written file —
+    # write_perms truncates in place — a silent grant of full system access.
+    [ "$(perm_get "$pf" ROOT off)" = on ] && return 0
+    command -v bwrap >/dev/null 2>&1 || {
+        logmsg "bwrap not installed — running $1 unrestricted"
+        notify "Sandbox unavailable" "bwrap is not installed, so per-app restrictions can't be enforced. $(basename "$1") runs with full access." dialog-warning
+        return 0
+    }
     # bwrap can be present but non-functional (unprivileged user namespaces
     # disabled in the kernel). Without this probe every restricted launch would
     # fail instantly through the whole recovery ladder with no hint that the
@@ -348,8 +356,33 @@ confine_setup() { # target-path
     # whole tree read-only, then re-bind only the Wine prefix writable — that
     # is the only part a running app legitimately writes to.
     CONFINE+=(--ro-bind "$BASE" "$BASE" --bind "$WINEPREFIX" "$WINEPREFIX")
+    # polycarbon's own source is under $HOME, not $BASE, so FILES=home left the script
+    # that builds this sandbox writable by the app it confines — one write and the next
+    # launch is unconfined. The compositor config and the shell's QML are the same class:
+    # the session executes both at login.
+    local guard
+    for guard in "$SELF" "$HOME/.config/quickshell" "$HOME/.config/hypr"; do
+        [ -e "$guard" ] && CONFINE+=(--ro-bind "$guard" "$guard")
+    done
     CONFINE+=(--bind /tmp /tmp --dev-bind /dev /dev --proc /proc)
-    [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] && CONFINE+=(--bind "$XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR")
+    # /run/user/$UID carries the session bus, the compositor's control socket and
+    # ydotool's input-injection socket. Each one is code execution OUTSIDE the sandbox:
+    # `systemd-run --user` or `hyprctl dispatch exec` starts a process bwrap never sees,
+    # and a Windows app reaches them because Z:\ maps to / and Wine can exec native
+    # binaries. A read-only bind does not help — connect() on a socket inode ignores
+    # EROFS — so the directory must be replaced, not just mounted ro. Wine needs nothing
+    # in here: its own socket is /tmp/.wine-$UID.
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ]; then
+        CONFINE+=(--tmpfs "$XDG_RUNTIME_DIR")
+        local sock
+        for sock in ${WAYLAND_DISPLAY:+"$WAYLAND_DISPLAY" "$WAYLAND_DISPLAY.lock"} \
+            pipewire-0 pipewire-0.lock pulse; do
+            [ -e "$XDG_RUNTIME_DIR/$sock" ] &&
+                CONFINE+=(--bind "$XDG_RUNTIME_DIR/$sock" "$XDG_RUNTIME_DIR/$sock")
+        done
+    fi
+    # The system bus is the same hole one step further out.
+    [ -e /run/dbus/system_bus_socket ] && CONFINE+=(--tmpfs /run/dbus)
     [ "$(perm_get "$pf" NET on)" = off ] && CONFINE+=(--unshare-net)
     logmsg "sandbox: files=$files net=$(perm_get "$pf" NET on)${mem:+ mem=$mem}${cpu:+ cpu=$cpu%}"
 }
@@ -991,12 +1024,26 @@ sys.stdout.write("\0".join((uri if t == "%1" else t.replace("%1", uri)) for t in
     # the wrong cwd makes the second copy fail to see the first and open a
     # brand-new window every time. Matching run_target's cwd lets the second
     # copy find the first, forward the URI, and exit — like on Windows.
-    local exe_unix exe_dir
+    local exe_unix exe_dir perm_target
     exe_unix=$("$WINE" winepath -u "${argv[0]}" 2>/dev/null)
     exe_dir=$(dirname "$exe_unix" 2>/dev/null)
     # The handler app's saved permissions apply to link launches too — set
-    # up confinement in BOTH branches so the fallback never runs unrestricted
-    confine_setup "$exe_unix"
+    # up confinement in BOTH branches so the fallback never runs unrestricted.
+    #
+    # winepath can fail (broken prefix, wineserver mid-restart) and used to return
+    # empty, which walked confine_setup into "no permission file -> no sandbox" and
+    # ran a Restricted app unconfined off a URL a browser handed us. Fall back to the
+    # Windows path's own basename so the saved policy still applies.
+    perm_target=$exe_unix
+    [ -n "$perm_target" ] || perm_target="${argv[0]//\\//}"
+    confine_setup "$perm_target"
+    if [ ${#CONFINE[@]} -eq 0 ] && [ -f "$PERMS_DIR/$(perm_key "$perm_target").perm" ]; then
+        : # a permission file exists and chose ROOT=on — unconfined is the user's decision
+    elif [ ${#CONFINE[@]} -eq 0 ] && [ -z "$exe_unix" ]; then
+        logmsg "link handler: cannot resolve ${argv[0]} and it has no saved permissions — refusing"
+        notify "Link blocked" "Polycarbon could not identify the program registered for this link, so it was not run." dialog-warning
+        return 1
+    fi
     if [ -n "$exe_dir" ] && [ -d "$exe_dir" ]; then
         logmsg "routing link to $(basename "${argv[0]}") (cwd: ${exe_dir})"
         ( cd "$exe_dir" && "${CONFINE[@]}" "$WINE" "${argv[@]}" >>"$LOG" 2>&1 )
