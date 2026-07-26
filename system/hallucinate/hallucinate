@@ -33,13 +33,25 @@ import threading
 # ~/.config/caelestia/gemini.key. The model is an alias tracking the current
 # flash release, so it survives individual versions being retired.
 KEY_FILE = os.path.expanduser("~/.config/caelestia/gemini.key")
-# flash-LITE honours thinkingBudget:0 (thoughts=0 -> fast, ~2-3s). The plain
-# flash alias is a thinking model that ignores the budget, thinks for tens of
-# seconds and returns truncated specs (a calculator with no buttons). Lite is
-# both faster and more reliable for this constrained schema.
+# flash-LITE spends no thought tokens and answers in ~2s. The plain flash alias
+# is a thinking model — it burns hundreds of thought tokens per turn and returns
+# thinner specs. Lite is both faster and more reliable for this narrow schema.
 DEFAULT_MODEL = "gemini-flash-lite-latest"
 _HOST = "generativelanguage.googleapis.com"
 _PATH = "/v1beta/models/{model}:generateContent"
+
+# Thinking stays off: left on, the model reasons *inside* the JSON and runs out
+# of output before finishing the widget list. How you ask for that is the one
+# part of the request whose shape changes between model generations — Gemini 2.x
+# took `thinkingBudget: 0`; Gemini 3 replaced it with `thinkingLevel` and rejects
+# the old key with a bare HTTP 400 ("Request contains an invalid argument", no
+# field named). Because the model alias rolls forward on its own, this is sent
+# optimistically and dropped if the API refuses it — see gemini(). "off" is not
+# a valid level; "minimal" is the floor.
+THINKING_CONFIG = {"thinkingLevel": "minimal"}
+
+# A spec with nothing to press is not an app: see dream().
+INTERACTIVE_TYPES = {"button", "entry", "checkbox", "slider"}
 
 # The widget vocabulary the model is allowed to use. Small on purpose: a narrow
 # palette of well-behaved primitives means the model can only assemble things
@@ -166,18 +178,18 @@ def _read_key_file() -> str | None:
         return None
 
 
-def _payload(system: str, user_text: str, schema: dict) -> bytes:
+def _payload(system: str, user_text: str, schema: dict, thinking: bool) -> bytes:
+    config = {
+        "responseMimeType": "application/json",
+        "responseSchema": schema,
+        "temperature": 1.0,
+    }
+    if thinking:
+        config["thinkingConfig"] = THINKING_CONFIG
     return json.dumps({
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user_text}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": schema,
-            "temperature": 1.0,
-            # Thinking off (lite honours this): replies are instant and never
-            # reason inside the JSON.
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
+        "generationConfig": config,
     }).encode()
 
 
@@ -185,34 +197,36 @@ class GeminiError(RuntimeError):
     pass
 
 
+def _api_error(status: int, raw: bytes) -> str:
+    """Google's failures are a JSON envelope; surface the message, not the box."""
+    try:
+        err = json.loads(raw)["error"]
+        return f"HTTP {status}: {err.get('message')} [{err.get('status')}]"
+    except (ValueError, KeyError, TypeError):
+        return f"HTTP {status}: {raw[:300].decode(errors='replace')}"
+
+
 # One HTTPS connection is kept alive across interactions: reusing it skips the
 # TLS handshake every keypress, a big slice of the per-press latency. Guarded
 # by a lock (only one request is ever in flight — the UI gates on `busy`).
 _conn = None
 _conn_lock = threading.Lock()
+# Cleared for the rest of the process the first time the model turns out not to
+# understand THINKING_CONFIG, so the doomed attempt is made only once.
+_thinking = True
 
 
-def gemini(api_key: str, model: str, user_text: str, schema: dict,
-           system: str = SYSTEM_PROMPT, timeout: int = 60) -> dict:
-    """One structured-output round-trip over a kept-alive HTTPS connection."""
+def _post(path: str, body: bytes, headers: dict, timeout: int) -> tuple[int, bytes]:
+    """POST on the kept-alive connection, reconnecting once if it went stale."""
     global _conn
-    body = _payload(system, user_text, schema)
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-    path = _PATH.format(model=model)
     with _conn_lock:
-        raw = None
-        for attempt in (1, 2):  # a stale keep-alive socket fails once; reconnect
+        for attempt in (1, 2):
             try:
                 if _conn is None:
                     _conn = http.client.HTTPSConnection(_HOST, timeout=timeout)
                 _conn.request("POST", path, body=body, headers=headers)
                 resp = _conn.getresponse()
-                raw = resp.read()
-                if resp.status != 200:
-                    raise GeminiError(f"HTTP {resp.status}: {raw[:300].decode(errors='replace')}")
-                break
-            except GeminiError:
-                raise
+                return resp.status, resp.read()
             except (http.client.HTTPException, OSError) as e:
                 try:
                     if _conn:
@@ -221,6 +235,27 @@ def gemini(api_key: str, model: str, user_text: str, schema: dict,
                     _conn = None
                 if attempt == 2:
                     raise GeminiError(f"network: {e}") from e
+
+
+def gemini(api_key: str, model: str, user_text: str, schema: dict,
+           system: str = SYSTEM_PROMPT, timeout: int = 60) -> dict:
+    """One structured-output round-trip over a kept-alive HTTPS connection."""
+    global _thinking
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+    path = _PATH.format(model=model)
+    status, raw = _post(path, _payload(system, user_text, schema, _thinking), headers, timeout)
+    if status == 400 and _thinking:
+        # The thinking knob is the only field whose spelling drifts between
+        # model generations, and running with default thinking beats not running
+        # at all — so a rejection costs one retry, not the whole app. The latch
+        # is only set if dropping it actually helped; otherwise the 400 was
+        # about something else and the original error stands.
+        retry = _post(path, _payload(system, user_text, schema, False), headers, timeout)
+        if retry[0] == 200:
+            _thinking = False
+            status, raw = retry
+    if status != 200:
+        raise GeminiError(_api_error(status, raw))
     payload = json.loads(raw)
     try:
         text = payload["candidates"][0]["content"]["parts"][0]["text"]
@@ -231,6 +266,25 @@ def gemini(api_key: str, model: str, user_text: str, schema: dict,
         return json.loads(text)
     except json.JSONDecodeError as e:
         raise GeminiError(f"model returned non-JSON: {text[:200]}") from e
+
+
+def dream(api_key: str, model: str, concept: str, attempts: int = 3) -> dict:
+    """The opening spec, asked again while the model hands back a stub.
+
+    Roughly one first draft in four comes back as the display label alone and
+    nothing else — finishReason STOP, so the model believes it is finished; it
+    renders as a window with a 0 in the middle and nothing to press. Having no
+    interactive widget at all is that failure's signature, and a stub arrives in
+    well under a second, so asking again is cheap. Two or more widgets is taken
+    as a deliberately static app and left alone.
+    """
+    prompt = f"Create the initial app for this concept: {concept!r}"
+    for _ in range(attempts):
+        spec = gemini(api_key, model, prompt, RESPONSE_SCHEMA, SYSTEM_PROMPT)
+        widgets = spec.get("widgets") or []
+        if len(widgets) > 1 or any(w.get("type") in INTERACTIVE_TYPES for w in widgets):
+            break
+    return spec
 
 
 # --------------------------------------------------------------------------- #
@@ -299,18 +353,16 @@ class Hallucination:
         self._queue = queue.Queue()
         self.root.after(60, self._drain)
         # First dream happens off the UI thread so the window paints immediately.
-        self._run_async(f"Create the initial app for this concept: {self.concept!r}",
-                        RESPONSE_SCHEMA, SYSTEM_PROMPT, self._apply)
+        self._run_async(lambda: dream(self.api_key, self.model, self.concept), self._apply)
 
     # -- async plumbing ---------------------------------------------------- #
-    def _run_async(self, user_text: str, schema: dict, system: str, apply_fn) -> None:
+    def _run_async(self, fetch, apply_fn) -> None:
         self.busy = True
         self._set_title_busy(True)
 
         def work():
             try:
-                res = gemini(self.api_key, self.model, user_text, schema, system)
-                self._queue.put(("ok", res, apply_fn))
+                self._queue.put(("ok", fetch(), apply_fn))
             except GeminiError as e:
                 self._queue.put(("err", str(e), None))
 
@@ -346,7 +398,11 @@ class Hallucination:
             "memory": self.memory,
             "event": {"widget_id": widget_id, "type": kind},
         }
-        self._run_async(json.dumps(req), EVENT_SCHEMA, EVENT_SYSTEM_PROMPT, self._apply_patch)
+        self._run_async(
+            lambda: gemini(self.api_key, self.model, json.dumps(req), EVENT_SCHEMA,
+                           EVENT_SYSTEM_PROMPT),
+            self._apply_patch,
+        )
 
     def _snapshot(self) -> list:
         snap = []
@@ -600,9 +656,7 @@ def main() -> int:
 
     if args.dry_run:
         try:
-            spec = gemini(api_key, args.model,
-                          f"Create the initial app for this concept: {args.concept!r}",
-                          RESPONSE_SCHEMA, SYSTEM_PROMPT)
+            spec = dream(api_key, args.model, args.concept)
         except GeminiError as e:
             print(f"hallucinate: {e}", file=sys.stderr)
             return 1

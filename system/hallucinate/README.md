@@ -47,8 +47,19 @@ window; they fall back to a dark theme.
   carry a full `widgets` list when the app genuinely needs a new screen.
 - **Structured output.** Gemini is pinned to a JSON schema (`responseMimeType`
   + `responseSchema`) so replies are always valid, never prose or markdown.
-  Thinking is disabled (flash-lite honours `thinkingBudget: 0`) — left on, the
-  model reasons *inside* the JSON and runs out of output before finishing.
+  Thinking is turned down to the floor — left on, the model reasons *inside* the
+  JSON and runs out of output before finishing the widget list.
+- **The thinking knob is negotiated, not pinned.** Its spelling changes between
+  model generations (`thinkingBudget: 0` on Gemini 2.x, `thinkingLevel` on 3.x,
+  which rejects the old key with a bare HTTP 400) and the model alias rolls
+  forward on its own. It is sent optimistically and dropped for the rest of the
+  run if the API refuses it: a knob the model doesn't recognise costs one retry,
+  not the whole app.
+- **Stub specs are asked again.** Roughly one first draft in four comes back as
+  the display label alone — `finishReason: STOP`, the model thinks it's done —
+  which renders as a window with a `0` in it and nothing to press. A spec with
+  no interactive widget at all is that failure, so it is re-dreamed (up to 3
+  tries; a stub returns in under a second, so retrying is cheap).
 - **Kept-alive HTTPS.** One connection is reused across presses, so there is no
   TLS handshake per interaction.
 - **Threading.** Model calls run on a worker thread; results cross back to the
@@ -86,11 +97,11 @@ install -m600 /dev/stdin ~/.config/caelestia/gemini.key <<<'YOUR_GEMINI_KEY'
 ## Config
 
 - `HALLUCINATE_MODEL` — overrides the model (default `gemini-flash-lite-latest`).
-  Lite is used on purpose: it honours `thinkingBudget: 0` so there is zero
-  thinking latency (~2-3s/turn). The non-lite `gemini-flash-latest` is a
-  thinking model that ignores the budget — it stalls for tens of seconds and
-  returns truncated UIs (a calculator with no buttons). `gemini-2.5-flash` and
-  friends are already 404 for new keys, so pinning a version is avoided.
+  Lite is used on purpose: it spends no thought tokens, so a turn costs ~2s and
+  the whole widget set arrives. The non-lite `gemini-flash-latest` thinks
+  regardless — hundreds of thought tokens, ~4s, and a thinner UI for the money.
+  Version-pinned ids (`gemini-2.5-flash-lite` and friends) are already 404 for
+  new keys, hence the rolling alias.
 - `hallucinate --dry-run "concept"` — print the initial UI spec as JSON and
   exit, no window (handy for debugging / headless checks).
 
