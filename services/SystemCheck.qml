@@ -287,8 +287,10 @@ Singleton {
             {dir: "anti-heat", name: qsTr("anti-heat")},
             {dir: "dynamic", name: qsTr("dynamic performance"), upgradeOnly: SysInfo.isLaptop},
             {dir: "bed-mode", name: qsTr("bed mode"), upgradeOnly: true},
-            // Protection installs from its own tab; only flag version upgrades
-            {dir: "redguard", name: qsTr("protection"), upgradeOnly: true}
+            // Protection and the firewall install from their own tabs; only
+            // flag version upgrades, never a missing install
+            {dir: "redguard", name: qsTr("protection"), upgradeOnly: true},
+            {dir: "redwall", name: qsTr("firewall"), upgradeOnly: true}
         ];
         for (const h of rootHalves) {
             const v = vers[h.dir] ?? {repo: 0, inst: 0, enabled: false};

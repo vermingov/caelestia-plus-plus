@@ -33,12 +33,14 @@ for f in max-perf anti-heat dynamic bed-mode; do
     if systemctl is-enabled -q "$f-sync.path" 2>/dev/null; then en=1; else en=0; fi
     echo "ver|$f|$repo|$inst|$en"
 done
-# redguard is a plain service (no sync.path); track it the same way
-rrepo=$(grep -m1 '^root_half_version=' "$SHELLDIR/system/redguard/install.sh" 2>/dev/null | cut -d= -f2)
-[ -n "$rrepo" ] || rrepo=0
-rinst=$(cat "/etc/caelestia/redguard.version" 2>/dev/null || echo 0)
-if systemctl is-enabled -q redguardd.service 2>/dev/null; then ren=1; else ren=0; fi
-echo "ver|redguard|$rrepo|$rinst|$ren"
+# redguard and redwall are plain services (no sync.path); track them the same way
+for f in redguard redwall; do
+    repo=$(grep -m1 '^root_half_version=' "$SHELLDIR/system/$f/install.sh" 2>/dev/null | cut -d= -f2)
+    [ -n "$repo" ] || repo=0
+    inst=$(cat "/etc/caelestia/$f.version" 2>/dev/null || echo 0)
+    if systemctl is-enabled -q "${f}d.service" 2>/dev/null; then en=1; else en=0; fi
+    echo "ver|$f|$repo|$inst|$en"
+done
 echo "gitdirty|$(git -C "$SHELLDIR" status --porcelain 2>/dev/null | grep -c .)"
 
 # sandrunner is user-level (no root half): a symlink in ~/.local/bin is the

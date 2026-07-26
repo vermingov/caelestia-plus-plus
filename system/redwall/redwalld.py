@@ -18,7 +18,13 @@ Design / safety:
   connections from an unknown app produce one popup, and the verdict is applied
   to every held packet for that exe.
 - The UI (a Quickshell widget) speaks newline-delimited JSON over a Unix socket.
-  No UI connected => fail open (never brick networking when the bar is down).
+  No UI connected => fail open (never brick networking when the bar is down),
+  and anything still held is released the moment the last UI goes away.
+- Holding is bounded in both directions: ASK_TIMEOUT seconds per prompt and
+  MAX_HELD_PER_EXE packets per app. The nft `bypass` flag only fails open when
+  nothing is bound to the queue — it does NOT cover a full queue, where the
+  kernel drops instead. So an unanswered prompt must never be able to fill the
+  queue, or every new outbound connection on the machine dies with it.
 
 Run `redwalld.py --simulate` to exercise the whole rule engine + UI protocol
 with synthetic connection events, no root and no NFQUEUE. That mode is for
@@ -42,6 +48,20 @@ QUEUE_NUM = 0
 SOCK_PATH = "/run/redwall/ui.sock"
 RULES_PATH = "/var/lib/redwall/rules.json"
 NFT_TABLE = "redwall"
+
+# Slots the kernel keeps for packets we have not verdicted yet. Held packets
+# occupy them for as long as we hold them, and the two limits below exist to
+# make sure we can never use them all up.
+QUEUE_MAX_LEN = 4096
+# A held connection may never outlive this. The nft `bypass` flag only fails
+# open when *nothing* is bound to the queue, so a daemon that is bound but
+# waiting on a prompt nobody answers has to bound the wait itself.
+ASK_TIMEOUT = 60
+# One unanswered app must not be able to fill the queue on its own: a held SYN
+# is retransmitted at 1s/3s/7s/15s/31s and every parallel connection lands here
+# too, so a single prompt can otherwise pile up thousands of packets. Past the
+# cap the extras go through — the prompt still decides the app's future.
+MAX_HELD_PER_EXE = 32
 
 IPPROTO = {6: "tcp", 17: "udp"}
 
@@ -367,7 +387,13 @@ class Redwall:
                 return
             entry = self.pending.get(exe)
             if entry:
-                entry["pkts"].append(pkt)  # dedupe: same app, one prompt
+                # Dedupe: same app, one prompt. Holding is capped so retransmits
+                # and parallel connections from this one app cannot starve the
+                # queue for every other process on the machine.
+                if len(entry["pkts"]) >= MAX_HELD_PER_EXE:
+                    pkt.accept()
+                else:
+                    entry["pkts"].append(pkt)
                 return
             ask_id = self._next_id
             self._next_id += 1
@@ -447,6 +473,11 @@ class Redwall:
                 writer.close()
             except Exception:
                 pass
+            # No UI left means no one can answer, and handle() already passes
+            # new packets straight through in that state — so anything still
+            # held has to go through too, or a shell reload would strand it.
+            if not self.clients:
+                self.release_all("no UI connected")
 
     def _on_ui_message(self, msg: dict) -> None:
         t = msg.get("t")
@@ -491,6 +522,36 @@ class Redwall:
         os.chmod(SOCK_PATH, 0o660)
         async with server:
             await server.serve_forever()
+
+    def release_all(self, reason: str) -> None:
+        """Accept everything held right now and withdraw its prompts."""
+        with self._lock:
+            held = list(self.pending.keys())
+        for exe in held:
+            self._resolve(exe, True)
+            self._broadcast({"t": "resolved", "exe": exe})
+        if held:
+            print(f"[redwall] released {len(held)} held app(s): {reason}", flush=True)
+
+    async def reap_stale_asks(self) -> None:
+        # Fail-open reaper, same contract as redguardd's: nothing may stay held
+        # forever waiting for a verdict. Without this an unanswered prompt keeps
+        # its packets in the kernel queue indefinitely, and once the queue fills
+        # every NEW outbound connection on the machine is dropped — the whole
+        # box looks frozen even though the desktop is fine.
+        while True:
+            await asyncio.sleep(5)
+            now = time.time()
+            with self._lock:
+                stale = [e for e, p in self.pending.items()
+                         if now - p["ts"] > ASK_TIMEOUT]
+            for exe in stale:
+                with self._lock:
+                    entry = self.pending.get(exe)
+                name = entry.get("name", exe) if entry else exe
+                self._resolve(exe, True)
+                self._broadcast({"t": "resolved", "exe": exe})
+                print(f"[redwall] released after timeout: {name}", flush=True)
 
     # -- simulate mode ------------------------------------------------------ #
     class _FakePkt:
@@ -553,7 +614,7 @@ def nfqueue_thread(fw: Redwall) -> None:
                         "port": dport, "proto": proto, "pid": pid})
 
     nfq = NetfilterQueue()
-    nfq.bind(QUEUE_NUM, cb, max_len=4096)
+    nfq.bind(QUEUE_NUM, cb, max_len=QUEUE_MAX_LEN)
     try:
         nfq.run()
     finally:
@@ -579,7 +640,8 @@ def main() -> None:
         threading.Thread(target=nfqueue_thread, args=(fw,), daemon=True).start()
 
     async def _run():
-        tasks = [asyncio.create_task(fw.run_server())]
+        tasks = [asyncio.create_task(fw.run_server()),
+                 asyncio.create_task(fw.reap_stale_asks())]
         if args.simulate:
             tasks.append(asyncio.create_task(fw._sim_seed()))
         await asyncio.gather(*tasks)

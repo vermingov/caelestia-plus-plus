@@ -9,6 +9,11 @@
 # Usage: sudo ./install.sh
 set -euo pipefail
 
+# Bump on every change to the daemon or the ruleset. The system scan compares
+# this against /etc/caelestia/redwall.version and offers to re-run this script,
+# which is the only way a daemon fix reaches an already-installed machine.
+root_half_version=1
+
 if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo $0" >&2
     exit 1
@@ -37,6 +42,9 @@ echo ">> Installing nftables ruleset + systemd unit"
 install -d /etc/redwall
 install -m644 "$here/redwall.nft" /etc/redwall/redwall.nft
 sed "s/__UIGID__/$uigid/" "$here/redwalld.service" > /etc/systemd/system/redwalld.service
+
+install -d /etc/caelestia
+echo "$root_half_version" > /etc/caelestia/redwall.version
 
 echo ">> Enabling service"
 systemctl daemon-reload
