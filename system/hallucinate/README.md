@@ -1,115 +1,156 @@
 # hallucinate — one-shot apps dreamed up live by AI
 
-    hallucinate "basic calculator with weird font"
+    hallucinate "a web browser but every image is Garry Newman"
 
-There is no real application behind the window. An LLM (Gemini) invents the
-whole thing on the spot: it designs the UI, and then it *is* the backend.
-Press `2`, `+`, `2`, `=` and the model — not any local code — decides what the
-display now reads. Every click, keystroke, toggle and slider release is sent
-back to the model, which returns the next state of the app. Close the window
-and it's gone forever; nothing was ever saved, nothing was ever real.
+There is no real application behind the window. An LLM (Gemini) writes the whole
+thing on the spot — real HTML, real CSS, real JavaScript — and a real browser
+engine runs it. What the app can compute, it computes: a calculator does
+arithmetic instantly, for free. What it cannot know, it asks the model for while
+you use it: the page behind a URL you typed, an NPC's next line, the picture in
+an image slot. Close the window and it's gone; nothing was ever saved, nothing
+was ever real.
 
 ```
-hallucinate "basic calculator with weird font"
+hallucinate "a web browser but every image is Garry Newman"
+hallucinate "a calculator that gets increasingly passive-aggressive"
 hallucinate "a mood ring that guesses my feelings"
-hallucinate "number guessing game, 1 to 100"
 hallucinate "a fake terminal that lies about everything"
-hallucinate "unit converter designed by a caffeinated goblin"
+hallucinate "a file manager for files that don't exist"
 ```
 
 ## How it works
 
 ```
 hallucinate "concept"
-   -> Gemini dreams the initial UI as constrained JSON widgets  -> Tkinter renders it
-   -> user clicks / types / toggles
-        -> a compact snapshot (ids + current values) + the event are sent to Gemini
-        -> Gemini returns a tiny PATCH — only the widgets whose value changed
-           (it did the "computation"); the window updates those in place
-   -> repeat until closed; hidden state lives in a round-tripped `memory` field
+   -> Gemini writes the app as HTML/CSS/JS against a design system it is handed
+      (streamed into the splash, so you watch it being written)
+   -> Chromium runs it: real layout, real CSS, real events
+   -> you use it
+        clicking, typing, dragging      -> the app's own JS. no model, no cost
+        <img data-dream="...">          -> host draws it as SVG, cached on disk
+        await hallucinate.dream(...)    -> model invents what the app can't know
+   -> Ctrl+R dreams the same concept again from scratch
 ```
 
-The model may only use a small, well-behaved widget palette — `label`,
-`button`, `entry`, `text`, `checkbox`, `slider` — laid out on a grid. A narrow
-vocabulary means it can only assemble things that actually render, however
-weird the concept gets. Bad colours or unknown font names never crash the
-window; they fall back to a dark theme.
+## The three pieces
 
-## Design notes
+**`kit.css` — the design system.** Injected into every dreamed page, never
+generated. Tokens (`--bg`, `--accent`, `--s1..--s6`, `--r`, …) plus about forty
+component classes: `.app .titlebar .toolbar .sidebar .main .card .list .item
+.tabs .chip .badge .sheet .toast .keypad .display .spinner .overlay`, and bare
+`button`/`input`/`table` are styled already. Separately, `.page` carries
+*document* typography — margins, lists, links, blockquote, code — because app
+chrome wants those margins gone and a dreamed article or web page needs them
+back; dreamed HTML arrives wrapped in it and can override it with its own style. This is the whole quality argument
+*and* the whole token argument: naming the classes costs ~350 input tokens once
+and saves the model writing a stylesheet — thousands of output tokens — on every
+single dream. A concept that wants to be loud overrides `:root` and inherits the
+rest of the system.
 
-- **The AI is the backend.** No arithmetic, no game logic, no state machine
-  runs locally. A compact snapshot of the widgets (ids + current values) plus a
-  round-tripped `memory` string are the entire state the model gets each turn —
-  enough for calculators, games with a secret, converters, etc.
-- **Patch, not full redraw.** Per interaction the model returns only the
-  changed widget values (`updates: [{id, value}]`), not the whole regenerated
-  UI — that alone cut the per-press latency from ~2s to ~0.7s. A patch may
-  carry a full `widgets` list when the app genuinely needs a new screen.
-- **Structured output.** Gemini is pinned to a JSON schema (`responseMimeType`
-  + `responseSchema`) so replies are always valid, never prose or markdown.
-  Thinking is turned down to the floor — left on, the model reasons *inside* the
-  JSON and runs out of output before finishing the widget list.
-- **The thinking knob is negotiated, not pinned.** Its spelling changes between
-  model generations (`thinkingBudget: 0` on Gemini 2.x, `thinkingLevel` on 3.x,
-  which rejects the old key with a bare HTTP 400) and the model alias rolls
-  forward on its own. It is sent optimistically and dropped for the rest of the
-  run if the API refuses it: a knob the model doesn't recognise costs one retry,
-  not the whole app.
-- **Stub specs are asked again.** Roughly one first draft in four comes back as
-  the display label alone — `finishReason: STOP`, the model thinks it's done —
-  which renders as a window with a `0` in it and nothing to press. A spec with
-  no interactive widget at all is that failure, so it is re-dreamed (up to 3
-  tries; a stub returns in under a second, so retrying is cheap).
-- **Kept-alive HTTPS.** One connection is reused across presses, so there is no
-  TLS handshake per interaction.
-- **Threading.** Model calls run on a worker thread; results cross back to the
-  UI through a queue drained by a main-thread poller (Tk is single-threaded and
-  crashes if touched off-thread). The title shows `· hallucinating…` while a
-  turn is in flight.
-- **Pure standard library** apart from the HTTP call: Tkinter for the UI,
-  `http.client` for Gemini. No pip, no venv.
+**`runtime.js` — the line back to the model.** Also injected, also free:
 
-## Latency
+| | |
+|---|---|
+| `await hallucinate.dream(prompt)` | invented text or markup, as a string |
+| `await hallucinate.json(prompt, shape)` | invented data, shaped like the example you pass |
+| `hallucinate.mount(el, html)` | put dreamed markup on screen **and run it** |
+| `hallucinate.root` | inside a dreamed page's script, its own container |
+| `<img data-dream="...">` | filled in automatically, no call needed |
 
-Every interaction is still a real model round-trip — *everything* is
-hallucinated; pressing a digit literally asks the AI what the display should
-say next. Two things keep the "backend" fast (~0.6-0.8s/press vs ~2s naively):
-the model returns a **patch** (just the changed widget values, a few output
-tokens) instead of regenerating the whole UI, and the HTTPS connection is kept
-alive so there is no TLS handshake per press. The one slower step is the
-initial dream (~2-3s), which builds the whole app.
+Images are caught however they arrive — in the first markup, added later by the
+app's own code, or inserted bare and briefed a moment afterwards.
+
+`mount()` is what makes dreamed content *work*. `innerHTML` silently refuses to
+execute `<script>` elements, so a page assigned that way is a photograph of an
+app: its tabs, filters and forms do nothing. `mount()` re-creates each script so
+it runs — and since it runs in the same world, **a dreamed page can dream its own
+next page.** Type a URL, get a working site; click a category on that site and it
+filters; follow a link and the next page is dreamed in turn.
+
+**`dreamer.py` — everything that talks to Gemini.** The opening dream (streamed),
+content a running app asks for (cached by prompt), and art (cached on disk by
+content hash, deduplicated in flight, drawn at a detail level chosen from the
+slot size).
+
+## Images
+
+Every image is a dreamed SVG illustration — the text model draws it, styled to
+sit in the app's palette. Vector, not photoreal, and free.
+
+Real photographic generation was the other option and is deliberately not wired
+up: `gemini-3.1-flash-image`, `nano-banana-pro` and the imagen models all return
+HTTP 429 on a free-tier key, and would cost money and ~5-10s per picture. SVG is
+unlimited, ~1s for an icon, and stylistically consistent with the app around it.
+
+Slot size buys detail, because a 32px favicon that costs as much as a hero image
+is the budget spent on something nobody can see:
+
+| slot | detail | ceiling | measured |
+|---|---|---|---|
+| ≤128px | icon | 1200 tok | ~1.0s, 0.6 KB |
+| ≤360px | thumbnail | 5000 tok | ~6s, 5.8 KB |
+| larger | full scene | 9000 tok | ~11s, 8.3 KB |
+
+An `<img>` parses SVG as strict XML, so a drawing truncated mid-attribute is a
+broken image rather than a rougher one. Anything that doesn't end in `</svg>` is
+redrawn once with double the ceiling, and a broken drawing is never cached.
+
+## Latency and cost
+
+Measured on `gemini-flash-lite-latest`:
+
+| | time | output tokens |
+|---|---|---|
+| opening dream | 7-10s | ~3k |
+| a dreamed page / reply | 1-3s | a few hundred |
+| an image | 1-11s by size | 600-9000 |
+| pressing a button, typing, dragging | 0 ms | **0** |
+
+That last row is the point of the hybrid design. Under the old
+every-event-round-trips model, a calculator keypress cost a request and ~0.6s;
+now the app's own JavaScript handles it, and the model is spent only on things
+that have to be invented.
+
+Caches: art on disk at `~/.cache/hallucinate/art/<sha1>.svg` (so a repeat image
+is free forever), dreamed content in memory for the session (so navigating back
+to a page is instant).
+
+## Config
+
+- `HALLUCINATE_MODEL` — default `gemini-flash-lite-latest`. Lite spends no
+  thought tokens and returns a complete app in 7-10s. `gemini-flash-latest` is a
+  thinking model: 40-60s and 8-13k output tokens, for a markedly richer app (one
+  browser came back with 31 image slots instead of 4). Worth it when you want to
+  stare at the result, not when you want to use it. Version-pinned ids are 404
+  for new keys, hence the rolling alias.
+- Thinking is asked for at `thinkingLevel: minimal` and *negotiated*, not pinned:
+  the field's spelling changes between model generations, so it is sent
+  optimistically and dropped for the rest of the run if a model rejects it.
+- `hallucinate --print "concept"` — write the dreamed HTML to stdout, no window.
+- `Ctrl+R` / `F5` — dream the concept again.
+- The dreamed page's console is forwarded to the terminal, prefixed
+  `hallucinate[page:N]` — the only way to see why an app nobody reviewed
+  misbehaves.
 
 ## API key
 
-The key is never committed to this repo (secret scanning blocks that, rightly).
-It is resolved at runtime, in order:
+Never committed (secret scanning blocks that, rightly). Resolved at runtime:
 
 1. `--api-key <key>`
 2. `$GEMINI_API_KEY`
-3. `~/.config/caelestia/gemini.key` (one line; `chmod 600`)
-
-Drop your Gemini key in the file once and the command just works:
+3. `~/.config/caelestia/gemini.key` (one line, `chmod 600`)
 
 ```
 install -m600 /dev/stdin ~/.config/caelestia/gemini.key <<<'YOUR_GEMINI_KEY'
 ```
 
-## Config
-
-- `HALLUCINATE_MODEL` — overrides the model (default `gemini-flash-lite-latest`).
-  Lite is used on purpose: it spends no thought tokens, so a turn costs ~2s and
-  the whole widget set arrives. The non-lite `gemini-flash-latest` thinks
-  regardless — hundreds of thought tokens, ~4s, and a thinner UI for the money.
-  Version-pinned ids (`gemini-2.5-flash-lite` and friends) are already 404 for
-  new keys, hence the rolling alias.
-- `hallucinate --dry-run "concept"` — print the initial UI spec as JSON and
-  exit, no window (handy for debugging / headless checks).
-
 ## Install
 
-Two steps (the installer and the system scan do both automatically):
-
 ```
-sudo pacman -S --needed tk
+sudo pacman -S --needed python-pyqt6-webengine
 ln -sf "$HOME/.config/quickshell/caelestia/system/hallucinate/hallucinate" ~/.local/bin/hallucinate
 ```
+
+`qt6-webengine` — the ~100 MB Chromium half — is already a caelestia dependency;
+only the Python bindings are added. No pip, no venv. The `tk` dependency the
+first version needed is gone.

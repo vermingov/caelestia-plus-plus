@@ -1,676 +1,112 @@
 #!/usr/bin/env python3
-"""hallucinate — a one-shot desktop app whose UI *and* backend are dreamed up
-live by an LLM.
+"""hallucinate — a one-shot desktop app whose UI *and* its imagination are
+dreamed up live by an LLM.
 
-    hallucinate "basic calculator with weird font"
+    hallucinate "a web browser but every image is Garry Newman"
 
-There is no real application behind the window. Gemini invents the whole UI as
-a small set of constrained widgets (so it can't build broken components), and
-then *is* the backend: every button press, every Enter, every toggle is sent
-back to the model, which returns the next state of the app. Press 2 + 2 = and
-the model decides what the display now reads. Nothing is computed locally; it
-is hallucination all the way down, and it evaporates when you close the window.
-
-Pure standard library apart from the HTTP call — Tkinter for the UI (a
-deliberately basic toolkit), urllib for Gemini.
+There is no real application behind the window. Gemini writes the whole thing as
+HTML, CSS and JavaScript against a design system it is handed, and the browser
+engine runs it. What the app can compute, it computes — a calculator really does
+arithmetic, at no cost and no latency. What it cannot know it asks the model for:
+the page behind a URL, an NPC's next line, the picture in an image slot. Close
+the window and it is gone; nothing was ever saved, nothing was ever real.
 """
 from __future__ import annotations
 
 import argparse
-import http.client
-import json
 import os
-import queue
 import sys
 import threading
 
-# --------------------------------------------------------------------------- #
-# Config                                                                       #
-# --------------------------------------------------------------------------- #
-# The API key is NEVER stored in this repo (secret scanning would block the
-# push, rightly). It is resolved at runtime from, in order: --api-key, the
-# GEMINI_API_KEY env var, then a local key file the user/installer drops at
-# ~/.config/caelestia/gemini.key. The model is an alias tracking the current
-# flash release, so it survives individual versions being retired.
+# Installed as a symlink on PATH, so the real directory has to be resolved before
+# the sibling modules can be imported.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+from dreamer import DEFAULT_MODEL, DreamError, Dreamer  # noqa: E402
+
 KEY_FILE = os.path.expanduser("~/.config/caelestia/gemini.key")
-# flash-LITE spends no thought tokens and answers in ~2s. The plain flash alias
-# is a thinking model — it burns hundreds of thought tokens per turn and returns
-# thinner specs. Lite is both faster and more reliable for this narrow schema.
-DEFAULT_MODEL = "gemini-flash-lite-latest"
-_HOST = "generativelanguage.googleapis.com"
-_PATH = "/v1beta/models/{model}:generateContent"
 
-# Thinking stays off: left on, the model reasons *inside* the JSON and runs out
-# of output before finishing the widget list. How you ask for that is the one
-# part of the request whose shape changes between model generations — Gemini 2.x
-# took `thinkingBudget: 0`; Gemini 3 replaced it with `thinkingLevel` and rejects
-# the old key with a bare HTTP 400 ("Request contains an invalid argument", no
-# field named). Because the model alias rolls forward on its own, this is sent
-# optimistically and dropped if the API refuses it — see gemini(). "off" is not
-# a valid level; "minimal" is the floor.
-THINKING_CONFIG = {"thinkingLevel": "minimal"}
 
-# A spec with nothing to press is not an app: see dream().
-INTERACTIVE_TYPES = {"button", "entry", "checkbox", "slider"}
-
-# The widget vocabulary the model is allowed to use. Small on purpose: a narrow
-# palette of well-behaved primitives means the model can only assemble things
-# that actually render, however weird the concept.
-WIDGET_TYPES = ["label", "button", "entry", "text", "checkbox", "slider"]
-
-RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "title": {"type": "string"},
-        "width": {"type": "integer"},
-        "height": {"type": "integer"},
-        "bg": {"type": "string"},
-        # Free-form scratchpad the model owns: hidden app state that has no
-        # widget (a secret number, a score, a mode). Rounded-tripped verbatim.
-        "memory": {"type": "string"},
-        "widgets": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"},
-                    "type": {"type": "string", "enum": WIDGET_TYPES},
-                    "text": {"type": "string"},
-                    "value": {"type": "string"},
-                    "checked": {"type": "boolean"},
-                    "font": {"type": "string"},
-                    "font_size": {"type": "integer"},
-                    "bold": {"type": "boolean"},
-                    "italic": {"type": "boolean"},
-                    "align": {"type": "string", "enum": ["left", "center", "right"]},
-                    "fg": {"type": "string"},
-                    "bg": {"type": "string"},
-                    "row": {"type": "integer"},
-                    "col": {"type": "integer"},
-                    "colspan": {"type": "integer"},
-                    "rowspan": {"type": "integer"},
-                    "min": {"type": "number"},
-                    "max": {"type": "number"},
-                },
-                "required": ["id", "type", "row", "col"],
-            },
-        },
-    },
-    "required": ["title", "widgets"],
-}
-# Per-interaction responses are a tiny PATCH, not the whole UI: the model
-# returns only the widgets whose visible value changed. Regenerating all ~20
-# widgets as JSON on every keypress was the entire ~2s "backend" latency;
-# emitting one {id,value} pair takes a fraction of the output tokens.
-EVENT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "updates": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"id": {"type": "string"}, "value": {"type": "string"}},
-                "required": ["id", "value"],
-            },
-        },
-        "memory": {"type": "string"},
-        "title": {"type": "string"},
-    },
-    "required": ["updates"],
-}
-
-SYSTEM_PROMPT = f"""\
-You are HALLUCINATE: you are simultaneously the user interface AND the entire \
-backend of a small desktop application that does not otherwise exist. You dream \
-the app into being and then keep dreaming its behaviour, one interaction at a time.
-
-You describe the app as a grid of widgets. Allowed widget types ONLY:
-- label: static text (use for displays, titles, results).
-- button: clickable; clicking sends you an event.
-- entry: single-line text field the user can type into.
-- text: multi-line text field.
-- checkbox: on/off; toggling sends you an event.
-- slider: numeric; needs min and max; releasing sends you an event.
-
-Layout is a grid: every widget needs row and col (0-based); colspan/rowspan \
-optional. Keep it tidy and aligned. Style with: font (family name), font_size, \
-bold, italic, align, fg and bg (hex like "#1e1e2e"). Lean into the concept — if \
-the concept says weird, be weird (odd fonts, colours, wording).
-
-You ARE the backend. When the user interacts, you receive the current UI (with \
-the live values the user has entered) plus the event. You return the COMPLETE \
-next UI — recompute results yourself, advance any game, update displays. For a \
-calculator, YOU do the arithmetic and put the answer in the display. Never \
-assume real code runs; every result is yours to produce.
-
-Rules:
-- Keep the same widget `id`s and overall layout across events unless the concept \
-genuinely calls for a new screen — only change the values/text that should change.
-- Use `memory` for hidden state that has no widget (scores, secrets, modes). \
-It is handed back to you next turn; nothing else persists.
-- Output ONLY the final JSON. Never write reasoning, explanations, comments or \
-placeholder prose inside ANY field. Keep every string short and human-facing.
-- `value` is ONLY the current contents of an entry/text/slider. Labels and \
-buttons use `text`. Never put anything else in `value`.
-- Emit the COMPLETE set of widgets every time (e.g. a calculator needs all its \
-digit and operator buttons), not a partial screen.
-"""
-EVENT_SYSTEM_PROMPT = """\
-You are the live backend of a running app that already exists on screen. You \
-are given the app concept, its current widgets (id, type, current text/value), \
-any hidden `memory`, and the user's event (which widget, what kind). YOU decide \
-what happens next — arithmetic, game logic, text transforms, everything — \
-exactly as this app should behave. It is all hallucinated by you; no real code \
-runs.
-
-Return ONLY the widgets whose visible value must change right now, as `updates`: \
-a list of {id, value}. `value` is the new text of a label/button, or the new \
-contents of an entry/slider, or "true"/"false" for a checkbox. Change as few \
-widgets as possible — usually just one display. Never resend unchanged widgets. \
-Put any hidden state you need next turn in `memory`. Output only the JSON, no \
-prose, no reasoning."""
-
-def _read_key_file() -> str | None:
+def resolve_key(explicit: str | None) -> str | None:
+    """The key is never stored in the repo — secret scanning would block that,
+    rightly. Flag, then environment, then a file the installer drops."""
+    if explicit:
+        return explicit
+    if os.environ.get("GEMINI_API_KEY"):
+        return os.environ["GEMINI_API_KEY"]
     try:
-        key = open(KEY_FILE, encoding="utf-8").read().strip()
-        return key or None
+        with open(KEY_FILE, encoding="utf-8") as f:
+            return f.read().strip() or None
     except OSError:
         return None
 
 
-def _payload(system: str, user_text: str, schema: dict, thinking: bool) -> bytes:
-    config = {
-        "responseMimeType": "application/json",
-        "responseSchema": schema,
-        "temperature": 1.0,
-    }
-    if thinking:
-        config["thinkingConfig"] = THINKING_CONFIG
-    return json.dumps({
-        "system_instruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
-        "generationConfig": config,
-    }).encode()
+def dream_into(window, dreamer: Dreamer) -> None:
+    """Run one dream off the UI thread, streaming it into the splash."""
+    window.show_splash()
 
-
-class GeminiError(RuntimeError):
-    pass
-
-
-def _api_error(status: int, raw: bytes) -> str:
-    """Google's failures are a JSON envelope; surface the message, not the box."""
-    try:
-        err = json.loads(raw)["error"]
-        return f"HTTP {status}: {err.get('message')} [{err.get('status')}]"
-    except (ValueError, KeyError, TypeError):
-        return f"HTTP {status}: {raw[:300].decode(errors='replace')}"
-
-
-# One HTTPS connection is kept alive across interactions: reusing it skips the
-# TLS handshake every keypress, a big slice of the per-press latency. Guarded
-# by a lock (only one request is ever in flight — the UI gates on `busy`).
-_conn = None
-_conn_lock = threading.Lock()
-# Cleared for the rest of the process the first time the model turns out not to
-# understand THINKING_CONFIG, so the doomed attempt is made only once.
-_thinking = True
-
-
-def _post(path: str, body: bytes, headers: dict, timeout: int) -> tuple[int, bytes]:
-    """POST on the kept-alive connection, reconnecting once if it went stale."""
-    global _conn
-    with _conn_lock:
-        for attempt in (1, 2):
-            try:
-                if _conn is None:
-                    _conn = http.client.HTTPSConnection(_HOST, timeout=timeout)
-                _conn.request("POST", path, body=body, headers=headers)
-                resp = _conn.getresponse()
-                return resp.status, resp.read()
-            except (http.client.HTTPException, OSError) as e:
-                try:
-                    if _conn:
-                        _conn.close()
-                finally:
-                    _conn = None
-                if attempt == 2:
-                    raise GeminiError(f"network: {e}") from e
-
-
-def gemini(api_key: str, model: str, user_text: str, schema: dict,
-           system: str = SYSTEM_PROMPT, timeout: int = 60) -> dict:
-    """One structured-output round-trip over a kept-alive HTTPS connection."""
-    global _thinking
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-    path = _PATH.format(model=model)
-    status, raw = _post(path, _payload(system, user_text, schema, _thinking), headers, timeout)
-    if status == 400 and _thinking:
-        # The thinking knob is the only field whose spelling drifts between
-        # model generations, and running with default thinking beats not running
-        # at all — so a rejection costs one retry, not the whole app. The latch
-        # is only set if dropping it actually helped; otherwise the 400 was
-        # about something else and the original error stands.
-        retry = _post(path, _payload(system, user_text, schema, False), headers, timeout)
-        if retry[0] == 200:
-            _thinking = False
-            status, raw = retry
-    if status != 200:
-        raise GeminiError(_api_error(status, raw))
-    payload = json.loads(raw)
-    try:
-        text = payload["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError) as e:
-        fb = payload.get("promptFeedback") or payload.get("error") or payload
-        raise GeminiError(f"no candidate ({json.dumps(fb)[:200]})") from e
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        raise GeminiError(f"model returned non-JSON: {text[:200]}") from e
-
-
-def dream(api_key: str, model: str, concept: str, attempts: int = 3) -> dict:
-    """The opening spec, asked again while the model hands back a stub.
-
-    Roughly one first draft in four comes back as the display label alone and
-    nothing else — finishReason STOP, so the model believes it is finished; it
-    renders as a window with a 0 in the middle and nothing to press. Having no
-    interactive widget at all is that failure's signature, and a stub arrives in
-    well under a second, so asking again is cheap. Two or more widgets is taken
-    as a deliberately static app and left alone.
-    """
-    prompt = f"Create the initial app for this concept: {concept!r}"
-    for _ in range(attempts):
-        spec = gemini(api_key, model, prompt, RESPONSE_SCHEMA, SYSTEM_PROMPT)
-        widgets = spec.get("widgets") or []
-        if len(widgets) > 1 or any(w.get("type") in INTERACTIVE_TYPES for w in widgets):
-            break
-    return spec
-
-
-# --------------------------------------------------------------------------- #
-# GUI                                                                          #
-# --------------------------------------------------------------------------- #
-def _parse_font(w: dict) -> tuple:
-    """Turn a widget's font hints into a Tk font tuple (family, size, *styles).
-
-    The model may put everything in `font` ("Papyrus, 20, bold") or split it
-    across font/font_size/bold/italic. Both are accepted."""
-    family, size = "TkDefaultFont", int(w.get("font_size") or 14)
-    styles = []
-    raw = w.get("font")
-    if isinstance(raw, str) and raw.strip():
-        parts = [p.strip() for p in raw.replace(",", " ").split() if p.strip()]
-        fam_words = []
-        for p in parts:
-            if p.isdigit():
-                size = int(p)
-            elif p.lower() in ("bold", "italic", "roman", "normal", "underline"):
-                if p.lower() in ("bold", "italic", "underline"):
-                    styles.append(p.lower())
-            else:
-                fam_words.append(p)
-        if fam_words:
-            family = " ".join(fam_words)
-    if w.get("bold"):
-        styles.append("bold")
-    if w.get("italic"):
-        styles.append("italic")
-    return (family, size, *dict.fromkeys(styles))  # dedupe, keep order
-
-
-def _anchor(align: str) -> str:
-    return {"left": "w", "center": "center", "right": "e"}.get(align or "center", "center")
-
-
-class Hallucination:
-    THEME_BG = "#14141c"
-    THEME_FG = "#e6e6f0"
-    THEME_ACCENT = "#2a2a3a"
-
-    def __init__(self, concept: str, api_key: str, model: str):
-        import tkinter as tk  # imported here so --dry-run needs no display/tk
-        self.tk = tk
-        self.concept = concept
-        self.api_key = api_key
-        self.model = model
-        self.spec: dict = {}
-        self.memory = ""
-        self.widgets: dict[str, dict] = {}
-        self.busy = False
-
-        self.root = tk.Tk()
-        self.root.title("hallucinate · dreaming…")
-        self.root.configure(bg=self.THEME_BG)
-        self.root.geometry("360x520")
-        self.root.minsize(200, 160)
-        self.frame = tk.Frame(self.root, bg=self.THEME_BG)
-        self.frame.pack(fill="both", expand=True)
-
-        self._splash("Hallucinating your app…")
-        # Worker threads never touch Tk directly (Tk is single-threaded and
-        # calling into it off the main thread crashes). They drop results on a
-        # queue that a main-thread poller drains.
-        self._queue = queue.Queue()
-        self.root.after(60, self._drain)
-        # First dream happens off the UI thread so the window paints immediately.
-        self._run_async(lambda: dream(self.api_key, self.model, self.concept), self._apply)
-
-    # -- async plumbing ---------------------------------------------------- #
-    def _run_async(self, fetch, apply_fn) -> None:
-        self.busy = True
-        self._set_title_busy(True)
-
-        def work():
-            try:
-                self._queue.put(("ok", fetch(), apply_fn))
-            except GeminiError as e:
-                self._queue.put(("err", str(e), None))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _drain(self) -> None:
+    def work():
         try:
-            item = self._queue.get_nowait()
-        except queue.Empty:
-            pass
+            body = dreamer.app(window.chunk_arrived.emit)
+        except DreamError as e:
+            window.dream_failed.emit(str(e))
         else:
-            if item[0] == "ok":
-                item[2](item[1])
-            else:
-                self._error(item[1])
-        self.root.after(60, self._drain)
+            window.dream_done.emit(body)
 
-    def _set_title_busy(self, on: bool) -> None:
-        base = self.spec.get("title") or "hallucinate"
-        self.root.title(f"{base} · hallucinating…" if on else base)
-
-    # -- request building -------------------------------------------------- #
-    def _event(self, widget_id: str, kind: str) -> None:
-        if self.busy:
-            return
-        self._collect_values()
-        # Send a compact snapshot (ids + current values, no styling) and ask
-        # for a PATCH — the model changes only what should change, so the
-        # response is a few tokens instead of the whole regenerated UI.
-        req = {
-            "app_concept": self.concept,
-            "widgets": self._snapshot(),
-            "memory": self.memory,
-            "event": {"widget_id": widget_id, "type": kind},
-        }
-        self._run_async(
-            lambda: gemini(self.api_key, self.model, json.dumps(req), EVENT_SCHEMA,
-                           EVENT_SYSTEM_PROMPT),
-            self._apply_patch,
-        )
-
-    def _snapshot(self) -> list:
-        snap = []
-        for w in self.spec.get("widgets", []):
-            e = {"id": w["id"], "type": w["type"]}
-            if w.get("text"):
-                e["text"] = w["text"]
-            if "value" in w:
-                e["value"] = w["value"]
-            if "checked" in w:
-                e["checked"] = w["checked"]
-            snap.append(e)
-        return snap
-
-    def _apply_patch(self, patch: dict) -> None:
-        self.busy = False
-        if isinstance(patch.get("memory"), str):
-            self.memory = patch["memory"]
-        if patch.get("title"):
-            self.spec["title"] = patch["title"]
-        # A patch may occasionally carry a full new widget list to restructure
-        # the screen; otherwise it is just value updates applied in place.
-        if patch.get("widgets"):
-            self.spec = {**self.spec, **patch}
-            self._rebuild(self.spec)
-            self._set_title_busy(False)
-            return
-        for u in patch.get("updates", []):
-            wid, val = u.get("id"), u.get("value", "")
-            for w in self.spec.get("widgets", []):
-                if w["id"] == wid:
-                    if w["type"] in ("label", "button"):
-                        w["text"] = val
-                    else:
-                        w["value"] = val
-                    rec = self.widgets.get(wid)
-                    if rec:
-                        self._set_widget_value(rec, w["type"], val)
-                    break
-        self._set_title_busy(False)
-
-    def _set_widget_value(self, rec: dict, wtype: str, val) -> None:
-        w, var = rec["w"], rec.get("var")
-        try:
-            if wtype in ("label", "button"):
-                w.configure(text=str(val))
-            elif wtype == "entry" and var is not None:
-                var.set(str(val))
-            elif wtype == "text":
-                w.delete("1.0", "end")
-                w.insert("1.0", str(val))
-            elif wtype == "checkbox" and var is not None:
-                var.set(1 if str(val).lower() in ("1", "true", "yes", "on") else 0)
-            elif wtype == "slider" and var is not None:
-                try:
-                    var.set(float(val))
-                except (ValueError, TypeError):
-                    pass
-        except self.tk.TclError:
-            pass
-
-    def _collect_values(self) -> None:
-        """Read live widget values back into self.spec before sending to the model."""
-        for wspec in self.spec.get("widgets", []):
-            rec = self.widgets.get(wspec.get("id"))
-            if not rec:
-                continue
-            t, var, w = wspec["type"], rec.get("var"), rec["w"]
-            if t == "entry" and var is not None:
-                wspec["value"] = var.get()
-            elif t == "text":
-                wspec["value"] = w.get("1.0", "end-1c")
-            elif t == "checkbox" and var is not None:
-                wspec["checked"] = bool(var.get())
-            elif t == "slider" and var is not None:
-                wspec["value"] = str(var.get())
-
-    # -- rendering --------------------------------------------------------- #
-    def _splash(self, msg: str) -> None:
-        for c in self.frame.winfo_children():
-            c.destroy()
-        self.widgets.clear()
-        lbl = self.tk.Label(self.frame, text=msg, bg=self.THEME_BG, fg=self.THEME_FG,
-                            font=("TkDefaultFont", 13), wraplength=320, justify="center")
-        lbl.place(relx=0.5, rely=0.5, anchor="center")
-
-    def _error(self, msg: str) -> None:
-        self.busy = False
-        self._set_title_busy(False)
-        self._splash(f"⚠ hallucination failed\n\n{msg}\n\nClose and try again.")
-
-    def _apply(self, spec: dict) -> None:
-        self.busy = False
-        self.memory = spec.get("memory", self.memory)
-        same = self._same_shape(spec)
-        self.spec = spec
-        if same:
-            self._update_in_place(spec)
-        else:
-            self._rebuild(spec)
-        self._set_title_busy(False)
-        bg = self._color(spec.get("bg"), self.THEME_BG)
-        self.root.configure(bg=bg)
-        self.frame.configure(bg=bg)
-        w, h = spec.get("width"), spec.get("height")
-        if isinstance(w, int) and isinstance(h, int) and self._first_geometry:
-            self.root.geometry(f"{max(w,200)}x{max(h,160)}")
-            self._first_geometry = False
-
-    _first_geometry = True
-
-    def _same_shape(self, spec: dict) -> bool:
-        old = [(w.get("id"), w.get("type")) for w in self.spec.get("widgets", [])]
-        new = [(w.get("id"), w.get("type")) for w in spec.get("widgets", [])]
-        return bool(old) and old == new
-
-    def _rebuild(self, spec: dict) -> None:
-        for c in self.frame.winfo_children():
-            c.destroy()
-        self.widgets.clear()
-        rows, cols = set(), set()
-        for wspec in spec.get("widgets", []):
-            self._build_widget(wspec)
-            rows.add(wspec.get("row", 0))
-            cols.add(wspec.get("col", 0))
-        for r in rows:
-            self.frame.rowconfigure(r, weight=1)
-        for c in cols:
-            self.frame.columnconfigure(c, weight=1)
-
-    def _update_in_place(self, spec: dict) -> None:
-        for wspec in spec.get("widgets", []):
-            rec = self.widgets.get(wspec["id"])
-            if rec:
-                self._style_widget(rec["w"], rec["type"], wspec, rec.get("var"))
-
-    # -- widget factory ---------------------------------------------------- #
-    def _build_widget(self, wspec: dict) -> None:
-        tk = self.tk
-        t = wspec["type"]
-        var = None
-        if t == "label":
-            w = tk.Label(self.frame)
-        elif t == "button":
-            wid = wspec["id"]
-            w = tk.Button(self.frame, takefocus=0,
-                          command=lambda i=wid: self._event(i, "click"))
-        elif t == "entry":
-            var = tk.StringVar(value=str(wspec.get("value", "")))
-            w = tk.Entry(self.frame, textvariable=var)
-            w.bind("<Return>", lambda _e, i=wspec["id"]: self._event(i, "submit"))
-        elif t == "text":
-            w = tk.Text(self.frame, height=6, wrap="word")
-            w.insert("1.0", str(wspec.get("value", "")))
-        elif t == "checkbox":
-            var = tk.IntVar(value=1 if wspec.get("checked") else 0)
-            w = tk.Checkbutton(self.frame, variable=var, takefocus=0,
-                               command=lambda i=wspec["id"]: self._event(i, "toggle"))
-        elif t == "slider":
-            lo = float(wspec.get("min", 0)); hi = float(wspec.get("max", 100))
-            var = tk.DoubleVar(value=float(wspec.get("value") or lo))
-            w = tk.Scale(self.frame, from_=lo, to=hi, orient="horizontal",
-                         variable=var, takefocus=0, highlightthickness=0)
-            w.bind("<ButtonRelease-1>", lambda _e, i=wspec["id"]: self._event(i, "change"))
-        else:
-            return
-
-        self._style_widget(w, t, wspec, var)
-        w.grid(
-            row=int(wspec.get("row", 0)), column=int(wspec.get("col", 0)),
-            columnspan=int(wspec.get("colspan", 1)), rowspan=int(wspec.get("rowspan", 1)),
-            sticky="nsew", padx=3, pady=3,
-        )
-        self.widgets[wspec["id"]] = {"w": w, "type": t, "var": var}
-
-    def _style_widget(self, w, t: str, wspec: dict, var) -> None:
-        tk = self.tk
-        fg = self._color(wspec.get("fg"), self.THEME_FG)
-        bg = self._color(wspec.get("bg"), self.THEME_ACCENT if t == "button" else self.THEME_BG)
-        font = _parse_font(wspec)
-        text = str(wspec.get("text", ""))
-        try:
-            if t in ("label", "button", "checkbox"):
-                w.configure(text=text, font=font, fg=fg, bg=bg)
-                if t == "label":
-                    w.configure(anchor=_anchor(wspec.get("align")), justify="left")
-                if t == "button":
-                    w.configure(activebackground=fg, activeforeground=bg, relief="flat",
-                                highlightthickness=0, bd=0)
-                if t == "checkbox":
-                    w.configure(selectcolor=bg, activebackground=bg, indicatoron=True)
-            elif t == "entry":
-                w.configure(font=font, fg=fg, bg=bg, insertbackground=fg,
-                            justify=(wspec.get("align") or "left"), relief="flat")
-                if var is not None and var.get() != str(wspec.get("value", var.get())):
-                    var.set(str(wspec.get("value", "")))
-                elif var is not None and "value" in wspec:
-                    var.set(str(wspec["value"]))
-            elif t == "text":
-                w.configure(font=font, fg=fg, bg=bg, insertbackground=fg, relief="flat")
-                if "value" in wspec:
-                    w.delete("1.0", "end")
-                    w.insert("1.0", str(wspec["value"]))
-            elif t == "slider":
-                w.configure(font=font, fg=fg, bg=bg, troughcolor=self.THEME_ACCENT)
-        except tk.TclError:
-            # A bad colour/font name from the model must never crash the app.
-            try:
-                w.configure(fg=self.THEME_FG, bg=self.THEME_BG,
-                            font=("TkDefaultFont", 14),
-                            **({"text": text} if t in ("label", "button", "checkbox") else {}))
-            except tk.TclError:
-                pass
-
-    def _color(self, value, fallback: str) -> str:
-        if not isinstance(value, str) or not value.strip():
-            return fallback
-        v = value.strip()
-        probe = self.tk
-        try:
-            # Validate against Tk's colour parser without leaving a widget behind.
-            self.root.winfo_rgb(v)
-            return v
-        except probe.TclError:
-            return fallback
-
-    def run(self) -> None:
-        self.root.mainloop()
+    threading.Thread(target=work, daemon=True).start()
 
 
-# --------------------------------------------------------------------------- #
+def run_windowed(dreamer: Dreamer) -> int:
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from shell import Window
+    except ImportError:
+        print("hallucinate: PyQt6 WebEngine is missing — "
+              "sudo pacman -S --needed python-pyqt6-webengine", file=sys.stderr)
+        return 1
+
+    app = QApplication(sys.argv[:1])
+    app.setApplicationName("hallucinate")
+    # Wayland takes the app_id from the desktop file name, not the app name; without
+    # this every dreamed app shows up to the compositor as "python3".
+    app.setDesktopFileName("hallucinate")
+    window = Window(dreamer)
+    window.redream.connect(lambda: dream_into(window, dreamer))
+    window.show()
+    dream_into(window, dreamer)
+    return app.exec()
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="hallucinate",
-        description="Open a one-shot app whose UI and backend are hallucinated live by AI.",
-    )
-    ap.add_argument("concept", nargs="?", help='what to dream up, e.g. "basic calculator with weird font"')
-    ap.add_argument("--model", default=os.environ.get("HALLUCINATE_MODEL", DEFAULT_MODEL))
-    ap.add_argument("--api-key", default=None)
-    ap.add_argument("--dry-run", action="store_true", help="print the initial UI spec as JSON and exit (no window)")
-    args = ap.parse_args()
+        description="Open a one-shot app whose interface and imagination are dreamed live by AI.")
+    parser.add_argument("concept", nargs="?",
+                        help='what to dream up, e.g. "a web browser but every image is Garry Newman"')
+    parser.add_argument("--model", default=os.environ.get("HALLUCINATE_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--api-key")
+    parser.add_argument("--print", dest="print_only", action="store_true",
+                        help="print the dreamed HTML and exit, no window")
+    args = parser.parse_args()
 
     if not args.concept:
-        ap.print_help(sys.stderr)
+        parser.print_help(sys.stderr)
         return 1
-    api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or _read_key_file()
+    api_key = resolve_key(args.api_key)
     if not api_key:
         print(f"hallucinate: no API key. Set GEMINI_API_KEY, pass --api-key, "
               f"or write it to {KEY_FILE}", file=sys.stderr)
         return 1
 
-    if args.dry_run:
+    dreamer = Dreamer(api_key, args.model, args.concept)
+    if args.print_only:
         try:
-            spec = dream(api_key, args.model, args.concept)
-        except GeminiError as e:
+            print(dreamer.app(lambda _chunk: None))
+        except DreamError as e:
             print(f"hallucinate: {e}", file=sys.stderr)
             return 1
-        print(json.dumps(spec, indent=2))
         return 0
-
-    try:
-        app = Hallucination(args.concept, api_key, args.model)
-    except ImportError:
-        print("hallucinate: Tkinter is not available — install the 'tk' package "
-              "(pacman -S tk)", file=sys.stderr)
-        return 1
-    app.run()
-    return 0
+    return run_windowed(dreamer)
 
 
 if __name__ == "__main__":
