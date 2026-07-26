@@ -55,11 +55,11 @@ Item {
             readonly property Workspace start: root.workspaces.count > 0 ? root.workspaces.itemAt(getWsIdx(modelData.start)) ?? null : null // qmllint disable incompatible-type
             readonly property Workspace end: root.workspaces.count > 0 ? root.workspaces.itemAt(getWsIdx(modelData.end)) ?? null : null // qmllint disable incompatible-type
 
+            // Euclidean modulo; `shown` clamped so a configured 0 cannot spin
+            // the old `while (i < 0)` loop forever and hard-lock the shell.
             function getWsIdx(ws: int): int {
-                let i = ws - 1;
-                while (i < 0)
-                    i += Config.bar.workspaces.shown;
-                return i % Config.bar.workspaces.shown;
+                const shown = Math.max(1, Config.bar.workspaces.shown);
+                return ((ws - 1) % shown + shown) % shown;
             }
 
             anchors.verticalCenter: root.verticalCenter

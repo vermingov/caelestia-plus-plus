@@ -190,11 +190,19 @@ Singleton {
 
         activeProcesses.push(proc);
 
+        // One Process object per command, parented to this singleton — so it
+        // outlives the shell unless it is destroyed here. Dropping it from
+        // activeProcesses only untracks it; without the destroy() every nmcli
+        // call (and `nmcli monitor` drives a burst of them per network event)
+        // leaks the object plus the stdout/stderr text it collected.
         proc.processFinished.connect(() => {
             const index = activeProcesses.indexOf(proc);
             if (index >= 0) {
                 activeProcesses.splice(index, 1);
             }
+            // Deferred so any handler still running on this object (the stderr
+            // collector's password check) finishes against a live object first.
+            Qt.callLater(() => proc.destroy());
         });
 
         Qt.callLater(() => {

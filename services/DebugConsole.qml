@@ -34,7 +34,10 @@ Singleton {
     readonly property var buffer: []
 
     // Session-long dedup of warnings and errors, keyed by category+message.
-    // Survives buffer overflow and clear(), feeds copyDiagnostics().
+    // Survives buffer overflow and clear(), feeds copyDiagnostics(). Capped:
+    // plenty of messages embed a pid, path or value, so the number of distinct
+    // keys is effectively unbounded over a long session.
+    readonly property int maxIssues: 750
     readonly property var issues: []
     readonly property var _issueIndex: ({})
 
@@ -105,6 +108,7 @@ Singleton {
             return;
         }
         const issue = {
+            key: key,
             level: entry.level,
             category: entry.category,
             message: entry.message,
@@ -114,6 +118,13 @@ Singleton {
         };
         _issueIndex[key] = issue;
         issues.push(issue);
+
+        // Oldest distinct problems go first; the index has to shed the same
+        // keys or it keeps growing after the list stops.
+        if (issues.length > maxIssues) {
+            for (const dropped of issues.splice(0, issues.length - maxIssues))
+                delete _issueIndex[dropped.key];
+        }
     }
 
     function _append(raw: string): void {

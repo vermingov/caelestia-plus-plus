@@ -17,11 +17,12 @@ StyledRect {
 
     property real glowStrength: 0.4
 
+    // Euclidean modulo, so special workspaces (negative ids) wrap into range.
+    // `shown` is clamped because a configured 0 would otherwise make the old
+    // `while (i < 0) i += shown` loop spin forever and hard-lock the shell.
     readonly property int currentWsIdx: {
-        let i = activeWsId - 1;
-        while (i < 0)
-            i += Config.bar.workspaces.shown;
-        return i % Config.bar.workspaces.shown;
+        const shown = Math.max(1, Config.bar.workspaces.shown);
+        return ((activeWsId - 1) % shown + shown) % shown;
     }
 
     property real leading: workspaces.count > 0 ? workspaces.itemAt(currentWsIdx)?.x ?? 0 : 0

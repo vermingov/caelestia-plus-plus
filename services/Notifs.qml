@@ -128,6 +128,16 @@ Singleton {
 pid=$(busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetConnectionUnixProcessID s "$owner" 2>/dev/null | awk '{print $2}')
 [ -z "$pid" ] && exit 0
 [ "$pid" = "${Quickshell.processId}" ] && exit 0
+# Displacing a notification daemon (dunst/mako/swaync/…) is the whole point,
+# but some desktops hand this name to the session shell itself. Killing that
+# takes the entire desktop down, so a compositor/session process is never a
+# target — no matter what the cgroup below says.
+comm=$(cat "/proc/$pid/comm" 2>/dev/null)
+case "$comm" in
+    Hyprland|sway|river|niri|labwc|weston|plasmashell|kwin_wayland|kwin_x11|gnome-shell|xfce4-session|cinnamon-session|mate-session|lxqt-session|systemd|init)
+        echo "refusing to displace session process $comm (pid $pid)" >&2
+        exit 0 ;;
+esac
 # A daemon started from the compositor shares its cgroup unit; never stop
 # that (it would kill the desktop) — only a dedicated notification unit.
 unit=$(grep -oE '[a-zA-Z0-9@._-]+\\.service' "/proc/$pid/cgroup" 2>/dev/null | grep -viE 'user@|wayland-wm|graphical-session|hyprland|plasma|gnome-session|session\\.slice|init\\.scope' | head -1)
