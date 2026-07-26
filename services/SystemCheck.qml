@@ -95,11 +95,7 @@ Singleton {
             return;
         scanning = true;
         ShellUpdates.check();
-        // Idempotent desktop integration for Polycarbon runs
-        // first (fast, self-heals a wiped mimeapps.list); the probes it
-        // affects start when it exits
-        polycarbonRegister.command = ["bash", Quickshell.shellPath("system/polycarbon/register.sh"), Quickshell.shellDir];
-        polycarbonRegister.running = true;
+        _launchProbes();
     }
 
     function _launchProbes(): void {
@@ -366,43 +362,6 @@ Singleton {
             });
         }
 
-        // -- Polycarbon (Windows app runner)
-        const [wrVer, wrPrefix, wrComp, wrBind, wrLatest] = flags.polycarbon ?? [];
-        const polycarbonSetupFix = Object.assign({label: qsTr("Set up")}, _userFix(qsTr("Downloads the Polycarbon runtime (kept on the latest release automatically) plus the full compatibility stack (.NET, embedded HTML, and Direct3D 8-12 via DXVK/VKD3D-Proton on Vulkan machines) and the runtime libraries most programs expect (VC++ redistributables, core fonts, D3D shader compiler) — all checksum-verified, all unattended. Also points the Windows user folders at your real Linux ones. Everything lives under ~/.local/share/caelestia/polycarbon; nothing system-wide changes."), [`bash '${Quickshell.shellDir}/system/polycarbon/polycarbon' --setup`]));
-        const polycarbonUpdateFix = Object.assign({label: qsTr("Update now")}, _userFix(qsTr("Updates the Polycarbon runtime to the latest release (%1) and migrates the environment in place. Fixes apps that need current Windows APIs — e.g. gamepad-using programs crash on older builds where the controller ID call is unimplemented. Close running Windows apps first so the swap can apply.").arg(wrLatest ?? ""), [`bash '${Quickshell.shellDir}/system/polycarbon/polycarbon' --setup`]));
-        const wrOutdated = wrVer && wrVer !== "none" && wrLatest && wrLatest !== "unknown" && wrLatest !== wrVer;
-        if (wrOutdated)
-            push("polycarbon", qsTr("Polycarbon runtime is outdated"), qsTr("On %1, latest is %2 — older runtimes miss Windows APIs newer apps need (gamepad apps crash with an \"unimplemented\" error). It updates itself, or do it now.").arg(wrVer).arg(wrLatest), "warn", {
-                fix: polycarbonUpdateFix
-            });
-        else if (wrVer && wrVer !== "none" && wrComp !== "none" && wrBind !== "none")
-            push("polycarbon", qsTr("Polycarbon ready"), qsTr("Runtime %1 (auto-updating) — double-click any .exe and it runs (64/32-bit, .NET, HTML, Direct3D 8-12, VC++ runtimes); installers add themselves to your app menu").arg(wrVer), "ok");
-        else if (wrVer && wrVer !== "none")
-            push("polycarbon", qsTr("Polycarbon set up, extras still pending"), qsTr("The runner works; the next .exe launch finishes installing the runtime libraries and any missing components, or do it now"), "info", {
-                fix: polycarbonSetupFix
-            });
-        else
-            push("polycarbon", qsTr("Polycarbon (Windows apps) not downloaded yet"), qsTr("The first .exe double-click sets everything up by itself (~200 MB, one time) — or grab it now so that first launch is instant"), "info", {
-                fix: polycarbonSetupFix
-            });
-        // Direct execution of a Windows binary (file manager "Run executable",
-        // ./foo.exe) bypasses MIME handlers — only a kernel binfmt entry can
-        // route it. Registered system-wide, so it needs the one-time root fix.
-        const [bfState] = flags.polycarbonbinfmt ?? [];
-        const binfmtCmds = [`printf ':polycarbon:M::MZ::%s:\\n' '${Quickshell.shellDir}/system/polycarbon/polycarbon' > /etc/binfmt.d/zz-polycarbon.conf`, "systemctl restart systemd-binfmt"];
-        if (bfState === "ok")
-            push("polycarbon-binfmt", qsTr("Windows binaries execute directly"), qsTr("The kernel hands any launched .exe to Polycarbon — \"Run\" in file managers and ./program.exe both work"), "ok");
-        else if (wrVer && wrVer !== "none")
-            push("polycarbon-binfmt", bfState === "stale" ? qsTr("Direct .exe execution points at an old location") : qsTr("Direct .exe execution not wired up"), qsTr("A file manager's \"Run executable\" bypasses file associations — without the kernel-level handler it just fails. One-time root setup fixes it for good."), "warn", {
-                fix: Object.assign({label: qsTr("Wire up")}, _rootFix(qsTr("Registers Polycarbon as the kernel's handler for Windows executables (binfmt_misc): one config line in /etc/binfmt.d plus a systemd-binfmt restart. After this, running any .exe — from a file manager or a terminal — starts it through Polycarbon."), binfmtCmds))
-            });
-
-        const wrKept = parseInt(flags.polycarbonmime?.[0] ?? "0", 10);
-        if (wrKept > 0)
-            push("polycarbon-mime", qsTr("%n Windows file type(s) open elsewhere", "", wrKept), qsTr("%1— double-clicks go to that app instead of Polycarbon").arg(flags.polycarbonmime?.[1] ?? ""), "info", {
-                fix: Object.assign({label: qsTr("Take over")}, _userFix(qsTr("Makes Polycarbon the default for .exe/.msi double-clicks. Only file associations change (your other launcher keeps working when opened directly); rerunnable the other way from that app's settings."), [`bash '${Quickshell.shellDir}/system/polycarbon/register.sh' '${Quickshell.shellDir}' --force`]))
-            });
-
         // -- Notification daemon ownership
         // Only the process owning org.freedesktop.Notifications draws notifs.
         // If it isn't this quickshell, the shell's own notifications never
@@ -658,12 +617,6 @@ Singleton {
                 root._probeDone();
             }
         }
-    }
-
-    Process {
-        id: polycarbonRegister
-
-        onExited: root._launchProbes()
     }
 
     Process {

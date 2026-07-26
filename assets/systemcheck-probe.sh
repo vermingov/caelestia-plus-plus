@@ -64,32 +64,6 @@ for c in "$HOME/.config/caelestia/"*.json; do
     python3 -m json.tool "$c" >/dev/null 2>&1 && echo "cfgjson|$c|ok" || echo "cfgjson|$c|bad"
 done
 
-# --- Polycarbon (Windows app runner) -------------------------------------------
-wr_base="${XDG_DATA_HOME:-$HOME/.local/share}/caelestia/polycarbon"
-# Pre-rename state dir until the runner's first post-rename launch moves it
-[ -d "$wr_base" ] || wr_base="${XDG_DATA_HOME:-$HOME/.local/share}/caelestia/winrun"
-echo "polycarbon|$(cat "$wr_base/runner.version" 2>/dev/null || echo none)|$([ -f "$wr_base/prefix/system.reg" ] && echo 1 || echo 0)|$(cat "$wr_base/components.version" 2>/dev/null || echo none)|$(cat "$wr_base/bindings.version" 2>/dev/null || echo none)|$(cat "$wr_base/.latest-tag" 2>/dev/null || echo unknown)"
-wk=""
-for t in application/x-ms-dos-executable application/vnd.microsoft.portable-executable application/x-msdownload application/x-msi; do
-    d=$(xdg-mime query default "$t" 2>/dev/null) || true
-    [ -n "$d" ] && [ "$d" != "caelestia-polycarbon.desktop" ] && wk="$wk${t##*/}=$d "
-done
-echo "polycarbonmime|$(printf '%s' "$wk" | wc -w)|$(printf '%s' "$wk" | tr '|' '/')"
-
-# Executing a Windows binary directly (file manager "Run", ./foo.exe) goes
-# through binfmt_misc, not MIME handlers — report whether the kernel routes
-# MZ executables to Polycarbon and whether the interpreter path is current
-if [ -f /proc/sys/fs/binfmt_misc/polycarbon ]; then
-    bi=$(awk '/^interpreter/{print $2}' /proc/sys/fs/binfmt_misc/polycarbon)
-    if [ "$bi" = "$SHELLDIR/system/polycarbon/polycarbon" ]; then
-        echo "polycarbonbinfmt|ok|$bi"
-    else
-        echo "polycarbonbinfmt|stale|$bi"
-    fi
-else
-    echo "polycarbonbinfmt|missing|"
-fi
-
 # --- Notification daemon ownership ---------------------------------------------
 # Whoever owns org.freedesktop.Notifications on the session bus renders every
 # notification. If that is not this quickshell, the shell's own (much nicer)
