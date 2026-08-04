@@ -5,11 +5,26 @@ import Quickshell
 import Quickshell.Io
 
 // Debug console backend, window opened by 10 rapid clicks on the bar clock
-// or `qs -c caelestia ipc call debug toggle`. Tails this instance's own log
-// through `qs log -f --pid <self>` for the whole shell lifetime: quickshell
-// records every category to the log file regardless of stdout filtering, so
-// full debug output is available without relaunching the shell in verbose
-// mode, and warnings/errors are captured even while the window is closed.
+// or `qs -c caelestia ipc call debug toggle`. Reads this instance's own log
+// through two feeds, both emitting `qs`'s standard timestamped line format:
+//
+//   sparse  `tail -F <rundir>/log.log` — the plain-text mirror of what the
+//           shell would print on stdout (info and up). Runs for the whole
+//           shell lifetime, so warnings and errors are still counted while
+//           the window is closed.
+//   debug   `qs log -f --pid <self>` filtered to debug level only, i.e. the
+//           part the sparse log does not carry. Runs only while the window
+//           is open with verbose on. The two feeds never overlap, so nothing
+//           is counted twice.
+//
+// The debug feed is deliberately not resident. `qs log -f` aborts the whole
+// process when its reader wakes on a partially written record: it mistakes
+// the torn tail for corruption (logging.cpp continueReading), exits the event
+// loop, and ~LogFollower then destroys an FcntlWaitThread still blocked in
+// fcntl(F_SETLKW) on the writer's lock — QThread destroyed while running is
+// qFatal. Tailing the debug firehose all session hit that every few hours and
+// left a coredump each time. Keeping it to "while someone is watching" caps
+// the exposure, and the sparse feed that does run all session cannot hit it.
 Singleton {
     id: root
 
@@ -46,13 +61,17 @@ Singleton {
     signal lineAppended(entry: var)
     signal viewReset
 
-    // pipewire (loop iterations, link/node churn) and dbus property sync log
-    // constantly at debug level; they drown everything else AND the sheer
-    // read volume can crash `qs log`'s reader thread, so verbose mutes them
-    readonly property string verboseRules: "*.debug=true;quickshell.service.pipewire.debug=false;quickshell.service.pipewire.*.debug=false;quickshell.dbus.properties.debug=false"
-    readonly property string quietRules: "*.debug=false"
+    // Debug level only — info and up already arrive on the sparse feed. pipewire
+    // (loop iterations, link/node churn) and dbus property sync log constantly
+    // at debug level and drown everything else, so they stay muted.
+    readonly property string debugRules: "*.debug=true;*.info=false;*.warning=false;*.critical=false;quickshell.service.pipewire.debug=false;quickshell.service.pipewire.*.debug=false;quickshell.dbus.properties.debug=false"
 
-    onVerboseChanged: _restartTail(false)
+    // Plain-text mirror of this instance's log, written by quickshell next to
+    // the encoded log.qslog in its run directory
+    readonly property string sparseLogPath: `${Quickshell.env("XDG_RUNTIME_DIR")}/quickshell/by-pid/${Quickshell.processId}/log.log`
+
+    onVerboseChanged: _syncDebugFeed()
+    onOpenChanged: _syncDebugFeed()
     onLevelFilterChanged: _refill()
     onQueryChanged: _refill()
     onPausedChanged: {
@@ -127,16 +146,46 @@ Singleton {
         }
     }
 
-    function _append(raw: string): void {
-        // `qs log` line shape: " LEVEL category.name: message"; anything that
-        // doesn't match (e.g. multiline continuations) passes through as-is
-        const m = /^\s*(DEBUG|INFO|WARN|ERROR|CRITICAL|FATAL)\s+([\w.]+):\s?(.*)$/.exec(raw);
-        const level = m ? m[1].toLowerCase() : "info";
+    // Both feeds emit quickshell's timestamped line format:
+    //   "2026-08-05 01:19:13.438  WARN some.category: message"
+    // The category is omitted for the default one, and a message body with
+    // embedded newlines continues on unprefixed lines.
+    readonly property var _lineRe: /^(\d{4}-\d\d-\d\d (\d\d:\d\d:\d\d)\.\d{3})\s+(DEBUG|INFO|WARN|ERROR|CRITICAL|FATAL)(?: ([\w.]+))?: ?([\s\S]*)$/
+    // The `quickshell.bare` category prints its body straight after the
+    // timestamp with no level or separator
+    readonly property var _bareRe: /^\d{4}-\d\d-\d\d (\d\d:\d\d:\d\d)\.\d{3}([\s\S]*)$/
+
+    // Newest full timestamp taken off the debug feed, "yyyy-MM-dd hh:mm:ss.zzz"
+    // and so orderable as a plain string
+    property string _debugWatermark: ""
+
+    function _append(raw: string, fromDebugFeed: bool): void {
+        const m = _lineRe.exec(raw);
+        const level = m ? m[3].toLowerCase() : "info";
+
+        if (fromDebugFeed) {
+            // Every start of the feed replays history, and a revive replays
+            // what the buffer already holds — the watermark is what tells the
+            // two apart
+            if (m) {
+                if (m[1] <= _debugWatermark)
+                    return;
+                _debugWatermark = m[1];
+            }
+        } else if (level === "debug" && debugTail.running) {
+            // A shell launched with -v mirrors debug into the sparse log too,
+            // and the debug feed is already carrying those lines
+            return;
+        }
+
+        // Anything left is either a bare line or a continuation of a multiline
+        // body, which passes through as-is
+        const bare = m ? null : _bareRe.exec(raw);
         const entry = {
-            time: Qt.formatTime(new Date(), "hh:mm:ss"),
+            time: m ? m[2] : bare ? bare[1] : Qt.formatTime(new Date(), "hh:mm:ss"),
             level: level === "critical" || level === "fatal" ? "error" : level,
-            category: m ? m[2] : "",
-            message: m ? m[3] : raw
+            category: m ? m[4] || "" : "",
+            message: m ? m[5] : bare ? bare[2] : raw
         };
 
         if (entry.level === "warn") {
@@ -164,52 +213,85 @@ Singleton {
         }
     }
 
-    // Runs for the shell's lifetime; restarted only on rule changes. `qs log`
-    // rejects -t 0 (range is >= 1), so no-history restarts tail one line and
-    // drop it on arrival to keep the buffer duplicate-free
-    function _restartTail(withHistory: bool): void {
-        _tailStopping = tail.running;
-        _skipReplayed = withHistory ? 0 : 1;
-        tail.running = false;
-        tail.command = ["qs", "--no-color", "log", "-f", "-t", withHistory ? "200" : "1", "--pid", `${Quickshell.processId}`, "-r", verbose ? verboseRules : quietRules];
-        tail.running = true;
+    // Resident feed. Only a revive replays history, and there it must not, or
+    // the buffer gains a second copy of everything it already holds.
+    function _startSparseFeed(history: int): void {
+        sparseTail.command = ["tail", "-n", `${history}`, "-F", "--", sparseLogPath];
+        sparseTail.running = true;
     }
 
-    property bool _tailStopping: false
-    property int _skipReplayed: 0
+    // On-demand feed, alive only while the window is showing debug output — see
+    // the note at the top of this file for why it is not resident.
+    //
+    // -t is not just an opening history size: `qs log` re-applies it as a cap
+    // on every wake-up while following, so a small value throws away all but
+    // the last line of each batch. 500 is comfortably above any one batch, so
+    // it costs a replay on start (the watermark absorbs it) and loses nothing.
+    function _syncDebugFeed(): void {
+        const wanted = open && verbose;
+        if (wanted === debugTail.running)
+            return;
 
-    Component.onCompleted: _restartTail(true)
+        debugRevive.stop();
+        if (wanted) {
+            debugTail.command = ["qs", "--no-color", "--log-times", "log", "-f", "-t", "500", "--pid", `${Quickshell.processId}`, "-r", debugRules];
+            debugTail.running = true;
+        } else {
+            _debugStopping = true;
+            debugTail.running = false;
+        }
+    }
+
+    property bool _debugStopping: false
+
+    Component.onCompleted: _startSparseFeed(200)
 
     Process {
-        id: tail
+        id: sparseTail
 
         stdout: SplitParser {
-            onRead: data => {
-                if (root._skipReplayed > 0) {
-                    root._skipReplayed--;
-                    return;
-                }
-                root._append(data);
-            }
+            onRead: data => root._append(data, false)
         }
-        // `qs log`'s reader thread can crash on a live log under heavy write
-        // volume ("[READER] ERROR ... QThread: Destroyed"), which would end
-        // the feed silently for the rest of the session — revive it instead
+        // `tail -F` sits on the file across truncation and never exits on its
+        // own, but the session's warning and error counts hang off this feed,
+        // so a death still has to be recoverable
         onExited: {
-            if (root._tailStopping) {
-                root._tailStopping = false;
+            console.warn("caelestia.debugconsole: sparse log tail died, restarting in 2s");
+            sparseRevive.restart();
+        }
+    }
+
+    Process {
+        id: debugTail
+
+        stdout: SplitParser {
+            onRead: data => root._append(data, true)
+        }
+        // Upstream `qs log -f` aborts on a torn read of the live log; that is
+        // rare now that this only runs while the window is open, but a silent
+        // dead feed for the rest of the session would still be worse
+        onExited: {
+            if (root._debugStopping) {
+                root._debugStopping = false;
                 return;
             }
-            console.warn("caelestia.debugconsole: log tail died, restarting in 2s");
-            tailRevive.restart();
+            console.warn("caelestia.debugconsole: debug feed died, restarting in 2s");
+            debugRevive.restart();
         }
     }
 
     Timer {
-        id: tailRevive
+        id: sparseRevive
 
         interval: 2000
-        onTriggered: root._restartTail(false)
+        onTriggered: root._startSparseFeed(0)
+    }
+
+    Timer {
+        id: debugRevive
+
+        interval: 2000
+        onTriggered: root._syncDebugFeed()
     }
 
     Process {
