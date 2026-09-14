@@ -1,0 +1,36 @@
+[package]
+name = "caelestia-launcher"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "The Caelestia++ application launcher"
+
+[lib]
+name = "caelestia_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The window wants to be a layer surface, not a floating one: a launcher
+# needs the keyboard to itself, has to sit above everything, and must not be
+# tiled or alt-tabbed to. That needs the gtk-layer-shell C library, so it is
+# optional — without it the window is an always-on-top floating one, which
+# works everywhere and is what the build falls back to.
+gtk = { version = "0.18", optional = true }
+gtk-layer-shell = { version = "0.8", optional = true }
+
+[features]
+default = []
+layer-shell = ["dep:gtk", "dep:gtk-layer-shell"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

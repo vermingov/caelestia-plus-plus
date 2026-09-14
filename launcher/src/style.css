@@ -1,0 +1,318 @@
+/* The glass itself.
+ *
+ * The frost behind the window is the compositor's — Hyprland blurs whatever
+ * is under a layer surface, and nothing in a webview can see the desktop to
+ * blur it. What is drawn here is the pane: a smoky body, light gathering
+ * along the lit lip, a rim that is brighter where it faces the light and
+ * almost gone where it does not, and one specular streak.
+ *
+ * Dark glass is mostly dark. The failure mode is making the edges bright
+ * enough to read as a white outline, so every light value here is low and
+ * the body carries the weight.
+ */
+
+:root {
+    /* Where the light is: up and to the left. Every highlight follows it. */
+    --lit: rgba(255, 255, 255, 0.11);
+    --lit-soft: rgba(255, 255, 255, 0.05);
+    --unlit: rgba(255, 255, 255, 0.015);
+    --shade: rgba(0, 0, 0, 0.55);
+
+    --body: rgba(14, 14, 16, 0.55);
+    --body-top: rgba(30, 30, 34, 0.5);
+
+    --text: rgba(255, 255, 255, 0.94);
+    --text-dim: rgba(255, 255, 255, 0.55);
+    --text-faint: rgba(255, 255, 255, 0.34);
+
+    --radius: 22px;
+    --row-radius: 11px;
+    --pad: 16px;
+
+    --font: "Rubik", "Noto Sans", system-ui, sans-serif;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+    width: 100%;
+    height: 100%;
+    /* The window is transparent; only the pane paints. */
+    background: transparent;
+    overflow: hidden;
+    font-family: var(--font);
+    color: var(--text);
+    /* Nothing here is a document: no text selection, no drag, no callout. */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+}
+
+/* ---- the pane ---------------------------------------------------------- */
+
+.glass {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--radius);
+
+    /* The body: dark, slightly lighter at the top where the light falls. */
+    background: linear-gradient(160deg, var(--body-top) 0%, var(--body) 42%, var(--body) 100%);
+
+    /* Depth under it, and the faintest inner lift at the very top so the
+     * surface does not begin abruptly. */
+    box-shadow:
+        0 24px 60px -12px rgba(0, 0, 0, 0.7),
+        0 4px 14px -4px rgba(0, 0, 0, 0.5),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.055);
+}
+
+/* The rim, as a gradient border. A plain border is one flat colour all the
+ * way round, which is exactly what makes a pane look drawn rather than lit —
+ * this one is brightest where it faces the light and gone where it does not. */
+.glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+        150deg,
+        var(--lit) 0%,
+        var(--lit-soft) 26%,
+        var(--unlit) 55%,
+        rgba(255, 255, 255, 0.035) 100%
+    );
+    /* Keep only the 1px frame: fill minus content box. */
+    -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+}
+
+/* The specular: a short streak just inside the top edge, a third of the way
+ * across, fading out well before the corners. */
+.glass::after {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 12%;
+    width: 46%;
+    height: 1px;
+    border-radius: 1px;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.16) 42%,
+        transparent 100%
+    );
+    pointer-events: none;
+}
+
+/* ---- search ------------------------------------------------------------ */
+
+.search {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 var(--pad);
+    height: 58px;
+    flex: none;
+}
+
+.search .icon {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    opacity: 0.5;
+}
+
+.search input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 16px;
+    letter-spacing: 0.1px;
+    caret-color: var(--accent, #ff5449);
+}
+
+.search input::placeholder {
+    color: var(--text-faint);
+}
+
+/* A hairline, brighter in the middle where the light is, so it reads as an
+ * edge in the glass rather than a ruled line. */
+.rule {
+    flex: none;
+    height: 1px;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.07) 22%,
+        rgba(255, 255, 255, 0.07) 78%,
+        transparent 100%
+    );
+}
+
+/* ---- results ----------------------------------------------------------- */
+
+.section {
+    padding: 10px var(--pad) 4px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    flex: none;
+}
+
+.results {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 6px 6px;
+    /* The scrollbar is a gutter of dead pixels in a pane this size. */
+    scrollbar-width: none;
+}
+
+.results::-webkit-scrollbar {
+    display: none;
+}
+
+.row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 44px;
+    padding: 0 10px;
+    border-radius: var(--row-radius);
+    /* Kept out of the compositing fast path until it is actually the current
+     * row: a backdrop-filter on every row is a separate blur pass each. */
+    contain: layout paint;
+}
+
+.row .icon {
+    width: 22px;
+    height: 22px;
+    flex: none;
+    object-fit: contain;
+}
+
+.row .icon.missing {
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.row .name {
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    flex: none;
+    max-width: 44%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.row .comment {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.row .kind {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+.row.hovered:not(.current) {
+    background: rgba(255, 255, 255, 0.035);
+}
+
+/* The selection: a smaller pane of the same glass sitting on the first one.
+ * This is the one place backdrop-filter earns its cost — it lenses the panel
+ * behind it, which is what glass on glass actually does. */
+.row.current {
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.03));
+    backdrop-filter: blur(6px) saturate(1.15);
+    -webkit-backdrop-filter: blur(6px) saturate(1.15);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
+        0 2px 10px -4px rgba(0, 0, 0, 0.6);
+}
+
+/* ---- footer ------------------------------------------------------------ */
+
+.footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--pad);
+    height: 40px;
+    flex: none;
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+.footer .action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-dim);
+}
+
+.footer kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.07);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    font-family: inherit;
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    color: var(--text-faint);
+}
+
+.empty .headline {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+}
+
+.empty .hint {
+    font-size: 12px;
+}
