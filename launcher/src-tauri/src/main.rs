@@ -4,13 +4,16 @@
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // An optional starting query follows the verb, so a keybind can open
+    // straight into a mode: `--show '>wallpaper '`.
+    let query = argv.get(1).cloned().unwrap_or_default();
     let word = match argv.first().map(String::as_str) {
-        Some("--toggle") => Some("toggle"),
-        Some("--show") => Some("show"),
-        Some("--hide") => Some("hide"),
+        Some("--toggle") => Some(format!("toggle {query}")),
+        Some("--show") => Some(format!("show {query}")),
+        Some("--hide") => Some("hide".to_string()),
         Some(other) => {
             eprintln!("caelestia-launcher: unknown option {other}");
-            eprintln!("usage: caelestia-launcher [--toggle | --show | --hide]");
+            eprintln!("usage: caelestia-launcher [--toggle | --show | --hide] [QUERY]");
             std::process::exit(2);
         }
         None => None,
@@ -19,7 +22,7 @@ fn main() {
     // Asked to toggle and one is already running: hand it over and stop. Only
     // when nothing answers does this process become the launcher — and then
     // it shows itself, because someone asked for it.
-    if let Some(word) = word {
+    if let Some(word) = &word {
         if caelestia_launcher_lib::send_control(word) {
             return;
         }
