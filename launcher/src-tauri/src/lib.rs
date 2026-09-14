@@ -220,9 +220,20 @@ mod platform {
             return place_plain(window);
         };
 
-        // Must happen before the window is first shown: a realised window
-        // cannot become a layer surface.
+        if !gtk_layer_shell::is_supported() {
+            eprintln!("caelestia-launcher: the compositor has no layer-shell; using a plain window");
+            return place_plain(window);
+        }
+
+        // gtk-layer-shell has to get at the window before GTK realises it.
+        // The window is declared `visible: false`, so Tauri builds it without
+        // ever showing it and GTK leaves it unrealised until the first
+        // `show()` — which is after this runs.
         gtk_window.init_layer_shell();
+        if !gtk_window.is_layer_window() {
+            eprintln!("caelestia-launcher: could not make the window a layer surface");
+            return place_plain(window);
+        }
         gtk_window.set_layer(Layer::Overlay);
         // Exclusive, or what is typed goes to whatever had focus before.
         gtk_window.set_keyboard_mode(KeyboardMode::Exclusive);
@@ -232,10 +243,14 @@ mod platform {
         // Anchored to the top and centred, a fifth of the way down: where the
         // eye already is, and clear of what is being searched over.
         gtk_window.set_anchor(Edge::Top, true);
-        gtk_window.set_margin(Edge::Top, 220);
+        gtk_window.set_layer_shell_margin(Edge::Top, 220);
         for edge in [Edge::Left, Edge::Right, Edge::Bottom] {
             gtk_window.set_anchor(edge, false);
         }
+        eprintln!(
+            "caelestia-launcher: layer surface ready (protocol {})",
+            gtk_layer_shell::protocol_version()
+        );
     }
 
     #[cfg(not(feature = "layer-shell"))]
