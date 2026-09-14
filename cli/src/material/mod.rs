@@ -6,8 +6,11 @@
 //! out different. So this is a port of the library itself, checked against
 //! reference vectors taken from it.
 
+pub mod blend;
 pub mod cam16;
 pub mod colour;
+pub mod contrast;
+pub mod dislike;
 pub mod hct;
 pub mod math;
 pub mod solver;

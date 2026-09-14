@@ -2,7 +2,7 @@
 //!
 //! Ported from materialyoucolor's `hct/cam16.py`.
 
-use super::colour::{blue_from_argb, green_from_argb, linearized, red_from_argb};
+use super::colour::{argb_from_xyz, blue_from_argb, green_from_argb, linearized, red_from_argb};
 use super::math::{sanitize_degrees_double, signum};
 use super::viewing::{self, ViewingConditions};
 
@@ -87,6 +87,92 @@ impl Cam16 {
             astar: mstar * hue_radians.cos(),
             bstar: mstar * hue_radians.sin(),
         }
+    }
+
+    /// From lightness, chroma and hue rather than from a colour.
+    pub fn from_jch_in(j: f64, c: f64, h: f64, vc: &ViewingConditions) -> Cam16 {
+        let q = (4.0 / vc.c) * (j / 100.0).sqrt() * (vc.aw + 4.0) * vc.f_l_root;
+        let m = c * vc.f_l_root;
+        let alpha = c / (j / 100.0).sqrt();
+        let s = 50.0 * ((alpha * vc.c) / (vc.aw + 4.0)).sqrt();
+        let hue_radians = h.to_radians();
+        let jstar = ((1.0 + 100.0 * 0.007) * j) / (1.0 + 0.007 * j);
+        let mstar = (1.0 / 0.0228) * (1.0 + 0.0228 * m).ln();
+        Cam16 {
+            hue: h,
+            chroma: c,
+            j,
+            q,
+            m,
+            s,
+            jstar,
+            astar: mstar * hue_radians.cos(),
+            bstar: mstar * hue_radians.sin(),
+        }
+    }
+
+    /// From a point in CAM16-UCS, which is the space blending happens in.
+    pub fn from_ucs(jstar: f64, astar: f64, bstar: f64) -> Cam16 {
+        Cam16::from_ucs_in(jstar, astar, bstar, viewing::standard())
+    }
+
+    pub fn from_ucs_in(jstar: f64, astar: f64, bstar: f64, vc: &ViewingConditions) -> Cam16 {
+        let m = (astar * astar + bstar * bstar).sqrt();
+        let big_m = ((m * 0.0228).exp() - 1.0) / 0.0228;
+        let c = big_m / vc.f_l_root;
+        let mut h = bstar.atan2(astar).to_degrees();
+        if h < 0.0 {
+            h += 360.0;
+        }
+        let j = jstar / (1.0 - (jstar - 100.0) * 0.007);
+        Cam16::from_jch_in(j, c, h, vc)
+    }
+
+    pub fn to_int(&self) -> u32 {
+        self.viewed(viewing::standard())
+    }
+
+    pub fn viewed(&self, vc: &ViewingConditions) -> u32 {
+        let [x, y, z] = self.xyz_in(vc);
+        argb_from_xyz(x, y, z)
+    }
+
+    fn xyz_in(&self, vc: &ViewingConditions) -> [f64; 3] {
+        let alpha = if self.chroma == 0.0 || self.j == 0.0 {
+            0.0
+        } else {
+            self.chroma / (self.j / 100.0).sqrt()
+        };
+        let t = (alpha / (1.64 - 0.29f64.powf(vc.n)).powf(0.73)).powf(1.0 / 0.9);
+        let h_rad = self.hue.to_radians();
+
+        let e_hue = 0.25 * ((h_rad + 2.0).cos() + 3.8);
+        let ac = vc.aw * (self.j / 100.0).powf(1.0 / vc.c / vc.z);
+        let p1 = e_hue * (50000.0 / 13.0) * vc.nc * vc.ncb;
+        let p2 = ac / vc.nbb;
+
+        let h_sin = h_rad.sin();
+        let h_cos = h_rad.cos();
+        let gamma = 23.0 * (p2 + 0.305) * t / (23.0 * p1 + 11.0 * t * h_cos + 108.0 * t * h_sin);
+        let a = gamma * h_cos;
+        let b = gamma * h_sin;
+        let r_a = (460.0 * p2 + 451.0 * a + 288.0 * b) / 1403.0;
+        let g_a = (460.0 * p2 - 891.0 * a - 261.0 * b) / 1403.0;
+        let b_a = (460.0 * p2 - 220.0 * a - 6300.0 * b) / 1403.0;
+
+        let undo = |adapted: f64| {
+            let base = ((27.13 * adapted.abs()) / (400.0 - adapted.abs())).max(0.0);
+            signum(adapted) * (100.0 / vc.fl) * base.powf(1.0 / 0.42)
+        };
+        let r_f = undo(r_a) / vc.rgb_d[0];
+        let g_f = undo(g_a) / vc.rgb_d[1];
+        let b_f = undo(b_a) / vc.rgb_d[2];
+
+        [
+            1.86206786 * r_f - 1.01125463 * g_f + 0.14918677 * b_f,
+            0.38752654 * r_f + 0.62144744 * g_f - 0.00897398 * b_f,
+            -0.01584150 * r_f - 0.03412294 * g_f + 1.04996444 * b_f,
+        ]
     }
 
     /// CAM16-UCS distance, which is what blending interpolates along.
