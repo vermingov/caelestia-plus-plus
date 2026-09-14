@@ -10,6 +10,8 @@
 //! did.
 
 mod cmd;
+mod difflib;
+mod jsonval;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -26,6 +28,7 @@ fn main() {
         "startup" => cmd::startup::run(rest),
         "egg-watch" => cmd::egg::run(rest),
         "hyprmod" => cmd::hyprmod::run(rest),
+        "config-doctor" => cmd::doctor::run(rest),
         "-h" | "--help" | "help" => {
             usage();
             0

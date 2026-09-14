@@ -1,3 +1,4 @@
+pub mod doctor;
 pub mod egg;
 pub mod gpus;
 pub mod hyprmod;

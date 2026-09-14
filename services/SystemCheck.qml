@@ -98,7 +98,11 @@ Singleton {
         _launchProbes();
     }
 
+    // A scan asked for before the helper check has answered would launch the
+    // wrong command, so it waits here and is resumed by the Connections below.
     function _launchProbes(): void {
+        if (!Helpers.ready)
+            return;
         _probesLeft = 2;
         // All general probing lives in one shell script (assets/systemcheck-
         // probe.sh) printing machine-readable "key|field|field" lines;
@@ -108,7 +112,7 @@ Singleton {
         probe.running = true;
         _doctorSchema = ConfigDoctor.schemaJson();
         doctorProbe.environment = {CAELESTIA_SCHEMA: _doctorSchema};
-        doctorProbe.command = ["python3", Quickshell.shellPath("assets/config-doctor.py"), ConfigDoctor.configPath];
+        doctorProbe.command = Helpers.command("config-doctor", [ConfigDoctor.configPath]);
         doctorProbe.running = true;
     }
 
@@ -116,6 +120,15 @@ Singleton {
     property string _probeOut: ""
     property string _doctorOut: ""
     property string _doctorSchema: ""
+
+    Connections {
+        target: Helpers
+
+        function onReadyChanged(): void {
+            if (root.scanning)
+                root._launchProbes();
+        }
+    }
 
     function _probeDone(): void {
         if (--_probesLeft === 0)
@@ -348,7 +361,7 @@ Singleton {
                         label: qsTr("Repair"),
                         summary: qsTr("Applies exactly the repairs listed below, nothing else. The original file is copied aside first (.doctor-bak), every unrecognised setting close to a real one is treated as a typo and renamed rather than lost, and the shell picks the fixed config up immediately."),
                         commands: doctorIssues.map(i => i.action),
-                        exec: ["python3", Quickshell.shellPath("assets/config-doctor.py"), ConfigDoctor.configPath, "--repair"],
+                        exec: Helpers.command("config-doctor", [ConfigDoctor.configPath, "--repair"]),
                         env: _doctorSchema
                     }
                 });

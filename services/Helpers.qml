@@ -28,7 +28,8 @@ Singleton {
             gpus: "list-gpus.py",
             startup: "startup-ctl.py",
             "egg-watch": "penis-egg-watch.py",
-            hyprmod: "hyprmod-ctl.py"
+            hyprmod: "hyprmod-ctl.py",
+            "config-doctor": "config-doctor.py"
         })
 
     // The command to run `tool`, with `args` appended.
