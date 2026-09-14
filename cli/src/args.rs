@@ -15,6 +15,8 @@ pub enum Command {
     Emoji { picker: bool },
     Screenshot(cmd::screenshot::Args),
     Record(cmd::record::Args),
+    SchemeGet(cmd::scheme::GetArgs),
+    SchemeList(cmd::scheme::ListArgs),
 }
 
 pub fn parse(argv: &[String]) -> Option<Command> {
@@ -26,6 +28,7 @@ pub fn parse(argv: &[String]) -> Option<Command> {
         "emoji" => parse_emoji(rest),
         "screenshot" => parse_screenshot(rest),
         "record" => parse_record(rest),
+        "scheme" => parse_scheme(rest),
         _ => None,
     }
 }
@@ -63,9 +66,29 @@ fn parse_toggle(argv: &[String]) -> Option<Command> {
     }
 }
 
+/// argparse lets short flags bundle: `-nfv` is `-n -f -v`, and the launcher
+/// calls `scheme get -nfv`. Expanded here so each matcher only ever sees one
+/// flag at a time. Only used for commands whose short flags never take a
+/// value — where one does, a bundle is ambiguous and falls through instead.
+fn expand_short_bundles(argv: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for arg in argv {
+        let bundled = arg.len() > 2
+            && arg.starts_with('-')
+            && !arg.starts_with("--")
+            && arg[1..].chars().all(|c| c.is_ascii_alphabetic());
+        if bundled {
+            out.extend(arg[1..].chars().map(|c| format!("-{c}")));
+        } else {
+            out.push(arg.clone());
+        }
+    }
+    out
+}
+
 fn parse_clipboard(argv: &[String]) -> Option<Command> {
     let mut delete = false;
-    for arg in argv {
+    for arg in &expand_short_bundles(argv) {
         match arg.as_str() {
             "-d" | "--delete" => delete = true,
             _ => return None,
@@ -76,7 +99,7 @@ fn parse_clipboard(argv: &[String]) -> Option<Command> {
 
 fn parse_emoji(argv: &[String]) -> Option<Command> {
     let mut picker = false;
-    for arg in argv {
+    for arg in &expand_short_bundles(argv) {
         match arg.as_str() {
             "-p" | "--picker" => picker = true,
             // Fetching rewrites the data file from two remote sources; that
@@ -145,6 +168,54 @@ fn parse_record(argv: &[String]) -> Option<Command> {
     Some(Command::Record(args))
 }
 
+/// `scheme` has subcommands of its own. Only the two that read files are
+/// ours; `set` regenerates colours and belongs to the Python CLI.
+fn parse_scheme(argv: &[String]) -> Option<Command> {
+    let (which, flags) = argv.split_first()?;
+    let flags = &expand_short_bundles(flags);
+    match which.as_str() {
+        "get" => {
+            let mut args = cmd::scheme::GetArgs {
+                name: false,
+                flavour: false,
+                mode: false,
+                variant: false,
+            };
+            for flag in flags {
+                match flag.as_str() {
+                    "-n" | "--name" => args.name = true,
+                    "-f" | "--flavour" => args.flavour = true,
+                    "-m" | "--mode" => args.mode = true,
+                    "-v" | "--variant" => args.variant = true,
+                    _ => return None,
+                }
+            }
+            // Bare `scheme get` prints a formatted block; that is the other
+            // CLI's wording to own, and nothing calls it on a hot path.
+            args.any().then_some(Command::SchemeGet(args))
+        }
+        "list" => {
+            let mut args = cmd::scheme::ListArgs {
+                names: false,
+                flavours: false,
+                modes: false,
+                variants: false,
+            };
+            for flag in flags {
+                match flag.as_str() {
+                    "-n" | "--names" => args.names = true,
+                    "-f" | "--flavours" => args.flavours = true,
+                    "-m" | "--modes" => args.modes = true,
+                    "-v" | "--variants" => args.variants = true,
+                    _ => return None,
+                }
+            }
+            Some(Command::SchemeList(args))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +243,9 @@ mod tests {
             vec!["record", "-s"],
             vec!["record", "-p"],
             vec!["record", "-r"],
+            vec!["scheme", "get", "-nfv"],
+            vec!["scheme", "list"],
+            vec!["scheme", "list", "-n"],
         ] {
             assert!(is_ours(&words), "{words:?} should not need the Python CLI");
         }
@@ -180,7 +254,9 @@ mod tests {
     #[test]
     fn anything_unknown_goes_to_the_python_cli() {
         for words in [
+            vec!["scheme", "set", "-n", "catppuccin"],
             vec!["scheme", "get"],
+            vec!["scheme", "get", "--colours"],
             vec!["wallpaper", "-f", "/tmp/x.png"],
             vec!["install"],
             vec!["--version"],
@@ -196,6 +272,29 @@ mod tests {
             assert!(!is_ours(&words), "{words:?} should fall through");
         }
         assert!(parse(&[]).is_none(), "no subcommand at all");
+    }
+
+    #[test]
+    fn short_flags_may_be_bundled_the_way_argparse_allows() {
+        let Some(Command::SchemeGet(args)) = parse(&argv(&["scheme", "get", "-nfv"])) else {
+            panic!("the launcher's own call did not parse")
+        };
+        assert!(args.name && args.flavour && args.variant);
+        assert!(!args.mode, "only what was asked for");
+
+        let Some(Command::SchemeGet(spread)) = parse(&argv(&["scheme", "get", "-n", "-f", "-v"])) else {
+            panic!("not parsed")
+        };
+        assert_eq!(
+            (spread.name, spread.flavour, spread.mode, spread.variant),
+            (args.name, args.flavour, args.mode, args.variant),
+            "bundled and spread mean the same thing"
+        );
+
+        let Some(Command::Clipboard { delete }) = parse(&argv(&["clipboard", "-d"])) else {
+            panic!("not parsed")
+        };
+        assert!(delete);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 pub mod clipboard;
 pub mod emoji;
 pub mod record;
+pub mod scheme;
 pub mod screenshot;
 pub mod shell;
 pub mod toggle;

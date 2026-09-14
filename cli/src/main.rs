@@ -19,6 +19,8 @@ mod config;
 mod hypr;
 mod paths;
 mod proc;
+mod scheme;
+mod sha256;
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -42,6 +44,8 @@ fn main() {
         Some(args::Command::Emoji { picker }) => cmd::emoji::run(picker),
         Some(args::Command::Screenshot(a)) => cmd::screenshot::run(&a),
         Some(args::Command::Record(a)) => cmd::record::run(&a),
+        Some(args::Command::SchemeGet(a)) => cmd::scheme::get(&a),
+        Some(args::Command::SchemeList(a)) => cmd::scheme::list(&a),
         None => hand_over(&argv),
     };
     std::process::exit(code);
@@ -50,7 +54,7 @@ fn main() {
 /// Replace this process with the Python CLI. An exec rather than a spawn, so
 /// the caller sees its exit code and its signals directly and there is no
 /// second process in the tree for the 200 µs this took.
-fn hand_over(argv: &[String]) -> i32 {
+pub fn hand_over(argv: &[String]) -> i32 {
     let target = python_cli();
 
     // Installed over the top of the very CLI we defer to, every call would

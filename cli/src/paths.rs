@@ -61,25 +61,49 @@ pub fn screenshots_cache_dir() -> PathBuf {
     caelestia_cache_dir().join("screenshots")
 }
 
-/// The emoji and glyph list the picker reads. It ships inside the Python
-/// package, so the file lives wherever that package was installed — found by
-/// looking rather than by asking Python, which would cost more than the whole
-/// rest of this program.
-pub fn emoji_data_path() -> Option<PathBuf> {
-    let local = caelestia_state_dir().join("emojis.txt");
-    if local.is_file() {
-        return Some(local); // a user-refreshed copy wins
-    }
+/// The installed Python package's directory. Its `data/` subtree holds the
+/// emoji list and every built-in colour scheme, and those files belong to
+/// whichever copy of the CLI is installed — so they are found by looking,
+/// not by asking Python, which would cost more than the rest of this program.
+pub fn python_package_dir() -> Option<PathBuf> {
     for root in ["/usr/lib", "/usr/local/lib"] {
         let Ok(entries) = std::fs::read_dir(root) else { continue };
         for entry in entries.flatten() {
-            let candidate = entry
-                .path()
-                .join("site-packages/caelestia/data/emojis.txt");
-            if candidate.is_file() {
+            let candidate = entry.path().join("site-packages/caelestia");
+            if candidate.is_dir() {
                 return Some(candidate);
             }
         }
     }
     None
+}
+
+/// The emoji and glyph list the picker reads.
+pub fn emoji_data_path() -> Option<PathBuf> {
+    let local = caelestia_state_dir().join("emojis.txt");
+    if local.is_file() {
+        return Some(local); // a user-refreshed copy wins
+    }
+    let packaged = python_package_dir()?.join("data/emojis.txt");
+    packaged.is_file().then_some(packaged)
+}
+
+/// The built-in colour schemes: <package>/data/schemes/<name>/<flavour>/<mode>.txt
+pub fn scheme_data_dir() -> Option<PathBuf> {
+    let dir = python_package_dir()?.join("data/schemes");
+    dir.is_dir().then_some(dir)
+}
+
+/// Which scheme is in use, colours and all.
+pub fn scheme_state_path() -> PathBuf {
+    caelestia_state_dir().join("scheme.json")
+}
+
+/// Generated palettes, keyed by the hash of the wallpaper thumbnail.
+pub fn scheme_cache_dir() -> PathBuf {
+    caelestia_cache_dir().join("schemes")
+}
+
+pub fn wallpaper_thumbnail_path() -> PathBuf {
+    caelestia_state_dir().join("wallpaper/thumbnail.jpg")
 }
