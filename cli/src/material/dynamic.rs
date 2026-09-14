@@ -154,6 +154,14 @@ impl DynamicColor {
         }
     }
 
+    /// The same colour under another name. 2025 folds four roles into others
+    /// and keeps the old names pointing at them; the name is not decoration,
+    /// it is what the pair rules compare against.
+    pub fn renamed(mut self, name: &'static str) -> DynamicColor {
+        self.name = name;
+        self
+    }
+
     pub fn tone_prefers_light_foreground(tone: f64) -> bool {
         round_half_to_even(tone) < 60.0
     }

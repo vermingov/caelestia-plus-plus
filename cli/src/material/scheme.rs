@@ -58,6 +58,27 @@ impl DynamicScheme {
         }
     }
 
+    /// The same scheme in light mode at normal contrast, keeping the palettes
+    /// already computed. The `*Fixed` roles are defined as "whatever the
+    /// container would be there", which is how they stay the same colour in
+    /// both modes.
+    pub fn light_normal(&self) -> DynamicScheme {
+        DynamicScheme {
+            source_colour_hct: self.source_colour_hct,
+            variant: self.variant,
+            contrast_level: 0.0,
+            is_dark: false,
+            platform: self.platform,
+            spec_version: self.spec_version,
+            primary_palette: self.primary_palette,
+            secondary_palette: self.secondary_palette,
+            tertiary_palette: self.tertiary_palette,
+            neutral_palette: self.neutral_palette,
+            neutral_variant_palette: self.neutral_variant_palette,
+            error_palette: self.error_palette,
+        }
+    }
+
     /// The hue named for the band the source falls in, or the source's own hue
     /// when it falls in none.
     fn piecewise_hue(source: Hct, breakpoints: &[f64], hues: &[f64]) -> f64 {

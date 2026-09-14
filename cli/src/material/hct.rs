@@ -64,6 +64,10 @@ impl Hct {
     pub fn is_yellow(hue: f64) -> bool {
         (105.0..125.0).contains(&hue)
     }
+
+    pub fn is_cyan(hue: f64) -> bool {
+        (170.0..207.0).contains(&hue)
+    }
 }
 
 #[cfg(test)]
