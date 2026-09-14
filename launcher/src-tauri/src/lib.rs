@@ -119,6 +119,13 @@ fn toggle(app: &AppHandle) {
 }
 
 pub fn run() {
+    // Checked before anything is built: a second launcher would cost another
+    // webview, and the first one is the one the socket belongs to.
+    if control::already_running() {
+        eprintln!("caelestia-launcher: one is already running");
+        return;
+    }
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![search, launch, dismiss])
         .setup(|app| {
@@ -172,10 +179,16 @@ mod control {
         stream.write_all(word.as_bytes()).is_ok()
     }
 
+    /// True when a launcher is already listening. Only a socket nothing
+    /// answers on is safe to clear: deleting a live one leaves two launchers
+    /// running, each holding its own webview.
+    pub fn already_running() -> bool {
+        UnixStream::connect(socket_path()).is_ok()
+    }
+
     pub fn listen(app: AppHandle) {
         let path = socket_path();
-        // A socket left behind by a crashed launcher would keep every later
-        // one from binding, and nothing else owns this path.
+        // Stale, from a launcher that crashed without cleaning up.
         let _ = std::fs::remove_file(&path);
         let Ok(listener) = UnixListener::bind(&path) else {
             eprintln!("caelestia-launcher: cannot listen on {}", path.display());
@@ -201,7 +214,7 @@ mod control {
     }
 }
 
-pub use control::send as send_control;
+pub use control::{already_running, send as send_control};
 
 /// Everything that needs the window underneath Tauri.
 mod platform {

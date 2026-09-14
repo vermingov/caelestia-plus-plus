@@ -17,10 +17,14 @@ fn main() {
     };
 
     // Asked to toggle and one is already running: hand it over and stop. Only
-    // when nothing answers does this process become the launcher.
+    // when nothing answers does this process become the launcher — and then
+    // it shows itself, because someone asked for it.
     if let Some(word) = word {
         if caelestia_launcher_lib::send_control(word) {
             return;
+        }
+        if word == "hide" {
+            return; // nothing running, nothing to hide
         }
     }
 

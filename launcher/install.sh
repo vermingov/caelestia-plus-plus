@@ -13,9 +13,12 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 target="${XDG_BIN_HOME:-$HOME/.local/bin}/caelestia-launcher"
 
 if [[ ${1:-} == --uninstall ]]; then
-    "$target" --hide 2>/dev/null || true
-    pkill -x caelestia-launcher 2>/dev/null || true
-    rm -f "$target"
+    for pid in /proc/[0-9]*; do
+        pid=${pid#/proc/}
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+        case "$exe" in "$target"|"$target (deleted)") kill "$pid" 2>/dev/null ;; esac
+    done
+    rm -f "$target" "${XDG_RUNTIME_DIR:-/tmp}/caelestia-launcher.sock"
     echo "Removed $target"
     exit 0
 fi
@@ -42,11 +45,32 @@ fi
 echo ">> Building the launcher"
 cargo build --release --manifest-path "$here/src-tauri/Cargo.toml" "${features[@]}"
 
+# A launcher started from the old binary keeps running against a file that
+# no longer exists, holding its webview and the control socket. Stop it
+# first, or the new binary refuses to start and the keybind talks to the old
+# one for the rest of the session.
+stop_running() {
+    local pid exe
+    for pid in /proc/[0-9]*; do
+        pid=${pid#/proc/}
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+        case "$exe" in
+            "$target"|"$target (deleted)") kill "$pid" 2>/dev/null ;;
+        esac
+    done
+}
+stop_running
+sleep 0.5
+
 mkdir -p "$(dirname "$target")"
-# Replaced rather than written over: the old one may be running, and writing
-# into a mapped executable is how you get ETXTBSY.
+# Replaced rather than written over: writing into a mapped executable is how
+# you get ETXTBSY.
 install -m755 "$here/src-tauri/target/release/caelestia-launcher" "$target.new"
 mv -f "$target.new" "$target"
+rm -f "${XDG_RUNTIME_DIR:-/tmp}/caelestia-launcher.sock"
+
+# Back up resident, so the keybind works without waiting for a relogin.
+setsid "$target" >/dev/null 2>&1 < /dev/null &
 
 echo
 echo "Installed $target"
