@@ -122,13 +122,19 @@ StyledListView {
             }
         }
 
-        StyledRect {
+        // Glass on glass: a smaller pane sitting on the panel's, lit the same
+        // way, rather than a flat fill that reads as a highlighter mark.
+        GlassSurface {
             anchors.fill: parent
             anchors.leftMargin: Style.rowInset
             anchors.rightMargin: Style.rowInset
 
             radius: Style.rowRadius
-            color: Qt.alpha(Colours.palette.m3onSurface, 0.1)
+            lift: 0.045
+            rim: 0.5
+            lens: 0.5
+            band: 9
+            grain: 0
         }
     }
 
