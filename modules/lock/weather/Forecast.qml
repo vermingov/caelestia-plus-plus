@@ -73,7 +73,7 @@ StyledRect {
                         id: temp
 
                         anchors.centerIn: parent
-                        text: Weather.formatTemp(hour.cond.tempC).slice(0, -1) // Remove C/F
+                        text: hour.cond ? Weather.formatTemp(hour.cond.tempC).slice(0, -1) : "" // Remove C/F
                         color: hour.index === 0 ? Colours.palette.m3onPrimary : Colours.palette.m3onSurface
                         font: Tokens.font.title.medium
                     }
@@ -81,21 +81,21 @@ StyledRect {
 
                 MaterialIcon {
                     Layout.alignment: Qt.AlignHCenter
-                    text: hour.cond.icon
+                    text: hour.cond?.icon ?? ""
                     color: Colours.palette.m3secondary
                     fontStyle: Tokens.font.icon.large
                 }
 
                 StyledText {
                     Layout.alignment: Qt.AlignHCenter
-                    text: hour.cond.precipChance + "%"
+                    text: (hour.cond?.precipChance ?? 0) + "%"
                     color: Colours.palette.m3primary
                 }
 
                 StyledText {
                     Layout.topMargin: Tokens.spacing.extraSmall
                     Layout.alignment: Qt.AlignHCenter
-                    text: hour.index === 0 ? qsTr("Now") : Qt.formatDateTime(new Date(hour.cond.timestamp.replace("T", " ")), GlobalConfig.services.useTwelveHourClock ? "ha" : "hh:00")
+                    text: hour.index === 0 ? qsTr("Now") : !hour.cond ? "" : Qt.formatDateTime(new Date(hour.cond.timestamp.replace("T", " ")), GlobalConfig.services.useTwelveHourClock ? "ha" : "hh:00")
                     color: Colours.palette.m3onSurfaceVariant
                     font: Tokens.font.body.medium
                 }

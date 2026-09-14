@@ -164,7 +164,7 @@ exit 10`]
     Timer {
         running: true
         repeat: true
-        interval: 60000
+        interval: 300000
         onTriggered: grabber.running = true
     }
 
@@ -174,7 +174,13 @@ exit 10`]
         printErrors: false
         path: `${Paths.state}/notifs.json`
         onLoaded: {
-            const data = JSON.parse(text());
+            let data;
+            try {
+                data = JSON.parse(text());
+            } catch (e) {
+                console.warn(`Notifs: ${storage.path} is not valid JSON, starting with an empty history: ${e}`);
+                data = [];
+            }
             for (const notif of data) {
                 const properties = Object.assign({}, notif);
 

@@ -13,6 +13,7 @@ QtObject {
 
     property bool popup
     property bool closed
+    property bool imageGrabPending
     property var locks: new Set()
 
     property date time: new Date()
@@ -23,6 +24,16 @@ QtObject {
         repeat: true
         interval: 5000
         onTriggered: notif.updateTimeStr()
+    }
+
+    // A grab that never reports back (unrenderable window) must not pin the
+    // object forever
+    readonly property Timer imageGrabSafety: Timer {
+        interval: 10000
+        onTriggered: {
+            notif.imageGrabPending = false;
+            notif.destroyIfClosed();
+        }
     }
 
     property Notification notification
@@ -89,9 +100,13 @@ QtObject {
                     const hash = (h2 >>> 0).toString(16).padStart(8, 0) + (h1 >>> 0).toString(16).padStart(8, 0);
 
                     const cache = `${Paths.notifimagecache}/${hash}.png`;
+                    notif.imageGrabPending = true;
+                    notif.imageGrabSafety.restart();
                     CUtils.saveItem(this, Qt.resolvedUrl(cache), () => {
+                        notif.imageGrabPending = false;
                         notif.image = cache;
                         notif.dummyImageLoader.active = false;
+                        notif.destroyIfClosed();
                     });
                 }
 
@@ -212,8 +227,16 @@ QtObject {
         if (locks.size === 0 && Notifs.list.includes(this)) {
             Notifs.list = Notifs.list.filter(n => n !== this);
             notification?.dismiss();
-            destroy();
+            destroyIfClosed();
         }
+    }
+
+    // With the threaded render loop a grab result can arrive after its item
+    // is gone and crash in QQuickItemGrabResult::event; keep the object until
+    // the grab has reported back
+    function destroyIfClosed(): void {
+        if (closed && !imageGrabPending && !Notifs.list.includes(this))
+            destroy();
     }
 
     Component.onCompleted: {

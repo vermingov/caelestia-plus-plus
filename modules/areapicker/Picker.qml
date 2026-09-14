@@ -12,6 +12,10 @@ import qs.services
 MouseArea {
     id: root
 
+    // A grab is in flight: tearing the picker down mid-grab crashes the
+    // threaded render loop, so close requests wait until it reports back
+    property bool saving
+
     required property LazyLoader loader
     required property ShellScreen screen
     // Alias for the selection border rect; its id is shadowed inside sibling Rectangles
@@ -40,13 +44,17 @@ MouseArea {
         if (!mon)
             return [];
 
-        const special = mon.lastIpcObject.specialWorkspace;
-        const wsId = special.name ? special.id : mon.activeWorkspace.id;
+        const special = mon.lastIpcObject?.specialWorkspace;
+        const wsId = special?.name ? special.id : mon.activeWorkspace?.id;
+        if (wsId === undefined)
+            return [];
 
         return Hypr.toplevels.values.filter(c => c.workspace?.id === wsId).sort((a, b) => {
             // Pinned first, then fullscreen, then floating, then any other
-            const ac = a.lastIpcObject;
-            const bc = b.lastIpcObject;
+            const ac = a?.lastIpcObject;
+            const bc = b?.lastIpcObject;
+            if (!ac || !bc)
+                return !ac - !bc; // Missing IPC last
             return (bc.pinned - ac.pinned) || ((bc.fullscreen !== 0) - (ac.fullscreen !== 0)) || (bc.floating - ac.floating);
         });
     }
@@ -56,10 +64,14 @@ MouseArea {
             if (!client)
                 continue;
 
+            const ipc = client.lastIpcObject;
+            if (!ipc?.at || !ipc?.size)
+                continue;
+
             let {
                 at: [cx, cy],
                 size: [cw, ch]
-            } = client.lastIpcObject;
+            } = ipc;
             cx -= screen.x;
             cy -= screen.y;
             if (cx <= x && cy <= y && cx + cw >= x && cy + ch >= y) {
@@ -74,6 +86,10 @@ MouseArea {
     }
 
     function save(): void {
+        if (saving)
+            return;
+        saving = true;
+        saveSafety.restart();
         const tmpfile = Qt.resolvedUrl(`/tmp/caelestia-picker-${Quickshell.processId}-${Date.now()}.png`);
         CUtils.saveItem(screencopy, tmpfile, Qt.rect(Math.ceil(rsx), Math.ceil(rsy), Math.floor(sw), Math.floor(sh)), path => {
             if (root.loader.clipboardOnly) {
@@ -102,15 +118,15 @@ MouseArea {
 
         opacity = 1;
 
-        const c = clients[0];
-        if (c) {
-            const cx = c.lastIpcObject.at[0] - screen.x;
-            const cy = c.lastIpcObject.at[1] - screen.y;
+        const ipc = clients[0]?.lastIpcObject;
+        if (ipc?.at && ipc?.size) {
+            const cx = ipc.at[0] - screen.x;
+            const cy = ipc.at[1] - screen.y;
             onClient = true;
             sx = cx;
             sy = cy;
-            ex = cx + c.lastIpcObject.size[0];
-            ey = cy + c.lastIpcObject.size[1];
+            ex = cx + ipc.size[0];
+            ey = cy + ipc.size[1];
         } else {
             sx = screen.width / 2 - 100;
             sy = screen.height / 2 - 100;
@@ -153,7 +169,17 @@ MouseArea {
     }
 
     focus: true
-    Keys.onEscapePressed: closeAnim.start()
+    Keys.onEscapePressed: {
+        if (!root.saving)
+            closeAnim.start();
+    }
+
+    Timer {
+        id: saveSafety
+
+        interval: 10000
+        onTriggered: root.saving = false
+    }
 
     SequentialAnimation {
         id: closeAnim

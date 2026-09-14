@@ -14,8 +14,10 @@ StackView {
     required property PopoutState popouts
     required property QsMenuHandle trayItem
 
-    implicitWidth: currentItem?.implicitWidth ?? 0
-    implicitHeight: currentItem?.implicitHeight ?? 0
+    // A menu of nothing but separators collapses the popout entirely: the
+    // negative size cancels the padding Content.qml adds around the current popout
+    implicitWidth: (currentItem as SubMenu)?.hasChildren ? currentItem.implicitWidth : -Tokens.padding.extraLargeIncreased
+    implicitHeight: (currentItem as SubMenu)?.hasChildren ? currentItem.implicitHeight : -Tokens.padding.extraLargeIncreased
 
     initialItem: SubMenu {
         handle: root.trayItem
@@ -42,6 +44,7 @@ StackView {
         id: menu
 
         required property QsMenuHandle handle
+        readonly property bool hasChildren: menuOpener.children.values.some(e => !e.isSeparator)
         property bool isSubMenu
         property bool shown
 
@@ -118,7 +121,7 @@ StackView {
                             onClicked: {
                                 const entry = item.modelData;
                                 if (entry.hasChildren)
-                                    root.push(subMenuComp.createObject(null, {
+                                    root.push(subMenuComp.createObject(root, {
                                         handle: entry,
                                         isSubMenu: true
                                     }));

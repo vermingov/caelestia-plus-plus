@@ -28,7 +28,7 @@ Item {
         let h = -spacing;
         for (let i = 0; i < repeater.count; i++) {
             const item = repeater.itemAt(i) as ToastWrapper;
-            if (!item.modelData.closed && !item.previewHidden)
+            if (item?.modelData && !item.modelData.closed && !item.previewHidden)
                 h += item.implicitHeight + spacing;
         }
         return h;
