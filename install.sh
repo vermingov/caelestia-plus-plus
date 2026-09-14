@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Caelestia++ one-command installer for Arch.
-# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/basement-interactive/caelestia-plus-plus/main/install.sh)
+# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/vermingov/caelestia-plus-plus/main/install.sh)
 set -euo pipefail
 
-REPO=basement-interactive/caelestia-plus-plus
+REPO=vermingov/caelestia-plus-plus
+# First home of the repo; checkouts still pointing there get repointed
+OLD_REPO=basement-interactive/caelestia-plus-plus
 SHELL_DIR="$HOME/.config/quickshell/caelestia"
 
 [[ $EUID -eq 0 ]] && { echo "run as your normal user, not root"; exit 1; }
@@ -104,6 +106,10 @@ echo ":: fetching the shell"
 if [[ -d $SHELL_DIR/.git ]] && git -C "$SHELL_DIR" remote get-url origin 2>/dev/null | grep -q "$REPO"; then
     echo "   Caelestia++ checkout found, updating"
     git -C "$SHELL_DIR" pull --ff-only || echo "   pull failed (local changes?) — leaving checkout as is"
+elif [[ -d $SHELL_DIR/.git ]] && git -C "$SHELL_DIR" remote get-url origin 2>/dev/null | grep -q "$OLD_REPO"; then
+    echo "   Caelestia++ checkout from the previous home found, repointing to $REPO"
+    git -C "$SHELL_DIR" remote set-url origin "https://github.com/$REPO.git"
+    git -C "$SHELL_DIR" pull --ff-only || echo "   pull failed (local changes?) — leaving checkout as is"
 elif [[ -e $SHELL_DIR ]]; then
     # Clone to scratch first so a network failure displaces nothing
     git clone "https://github.com/$REPO.git" "$tmp/shell-clone"
@@ -114,6 +120,13 @@ elif [[ -e $SHELL_DIR ]]; then
 else
     git clone "https://github.com/$REPO.git" "$SHELL_DIR"
 fi
+
+# A prebuilt quickshell only starts against the Qt it was built with; Qt patch
+# releases move private symbols. The root half builds it here when the shipped
+# one does not load, and keeps the scheduler from filing the shell as a
+# background service either way.
+echo ":: checking that quickshell starts on this Qt"
+sudo bash "$SHELL_DIR/system/quickshell/install.sh"
 
 # sandrunner (fake-root simulation sandbox) is a user-level script: a PATH
 # symlink is the whole install, and it tracks the checkout across updates.

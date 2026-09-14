@@ -19,7 +19,7 @@ Singleton {
     // local attacker can't swap in a malicious repo. Drop an allowed-signers
     // file at ~/.config/caelestia/update-allowed-signers to additionally require
     // every pulled commit to be signed by a trusted key (see the README).
-    readonly property string expectedRemote: "https://github.com/basement-interactive/caelestia-plus-plus.git"
+    readonly property string expectedRemote: "https://github.com/vermingov/caelestia-plus-plus.git"
 
     property bool checking
     property bool updating
@@ -113,7 +113,9 @@ signers="$HOME/.config/caelestia/update-allowed-signers"
 if [ -f "$signers" ]; then
     git -c gpg.ssh.allowedSignersFile="$signers" verify-commit "$newtip" 2>/dev/null || { echo BAD_SIGNATURE; exit 6; }
 fi
-git merge --ff-only "$newtip" || exit 7`]
+git merge --ff-only "$newtip" || exit 7
+# Never restart into a quickshell that cannot start (Qt moved on under it)
+qs --version >/dev/null 2>&1 || { echo QS_BROKEN; exit 8; }`]
 
         onExited: code => {
             root.updating = false;
@@ -123,6 +125,7 @@ git merge --ff-only "$newtip" || exit 7`]
                     code === 5 ? qsTr("Update blocked: the update remote is not HTTPS") :
                     code === 6 ? qsTr("Update blocked: the new commit is not signed by a trusted key") :
                     code === 2 ? qsTr("Could not reach the update server") :
+                    code === 8 ? qsTr("Updated, but quickshell can no longer start against this Qt — rebuild it from System check before restarting") :
                     qsTr("Update failed — local changes may conflict");
                 return;
             }

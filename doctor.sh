@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Caelestia++ doctor: one-shot diagnosis of everything that has ever gone
 # wrong on a foreign install. Run it, paste the whole output.
-#   bash <(curl -fsSL https://raw.githubusercontent.com/basement-interactive/caelestia-plus-plus/main/doctor.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/vermingov/caelestia-plus-plus/main/doctor.sh)
 set -u
 
 pass() { printf 'PASS  %s\n' "$1"; }
@@ -32,6 +32,13 @@ echo "--- stack"
 pass "$(hyprctl version 2>/dev/null | head -1 || echo 'hyprctl unavailable')"
 pass "quickshell binary: $(pacman -Qo /usr/bin/qs 2>/dev/null || echo 'unknown owner')"
 pass "qt: $(pacman -Q qt6-base qt6-declarative qt6-wayland 2>/dev/null | tr '\n' ' ')"
+# A prebuilt quickshell stops loading after a Qt patch release moves private
+# symbols; the running shell survives on the old libraries, the next login does not
+if timeout 20 qs --version >/dev/null 2>&1; then
+    pass "qs binary starts: $(timeout 20 qs --version 2>/dev/null | head -1)"
+else
+    fail "qs binary does not start ($(timeout 20 qs --version 2>&1 | head -1 | cut -c1-120)) — fix: sudo bash $sd/system/quickshell/install.sh"
+fi
 
 echo "--- environment"
 command -v powerprofilesctl >/dev/null 2>&1 && pass "power-profiles-daemon installed" \

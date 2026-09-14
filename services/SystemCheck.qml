@@ -273,6 +273,22 @@ Singleton {
         if (pmConflicts)
             push("pm-conflict", qsTr("Conflicting power manager installed"), qsTr("%1 fights power-profiles-daemon over the same hardware knobs — the daemon often gets masked or fails to start (dbus NoReply). Keep one: either remove %1, or remove power-profiles-daemon. Your call, so no automatic fix.").arg(pmConflicts.trim()), "warn");
 
+        // -- quickshell itself: does the binary on disk still start (a Qt
+        // update can break it while this process keeps running on the old
+        // libraries), and is the shell scheduled as a foreground process
+        const [qsBin, qsBinReason] = flags.qsbin ?? [];
+        push("qs-binary", qsBin === "ok" ? qsTr("quickshell starts") : qsTr("quickshell cannot start"), qsBin === "ok" ? qsTr("The installed qs binary loads against the current Qt") : qsTr("This shell keeps running on the old libraries, but the next login or restart comes up without a shell: a Qt update moved private symbols the prebuilt quickshell links against (%1). Rebuilding it against the installed Qt fixes it for good.").arg(qsBinReason || "undefined symbol"), qsBin === "ok" ? "ok" : "fail", qsBin === "ok" ? null : {
+            prompt: true,
+            fix: Object.assign({label: qsTr("Rebuild")}, _rootFix(qsTr("Runs system/quickshell/install.sh as root: installs the build dependencies with pacman, builds quickshell from source as your user (a few minutes — output streams here), installs it as caelestia++-quickshell pinned via IgnorePkg, and files the shell as a foreground process for ananicy. Restart the shell afterwards."), [`bash '${Quickshell.shellDir}/system/quickshell/install.sh' --force`]))
+        });
+
+        const [qsNice, ananicy] = flags.qsnice ?? [];
+        const niceValue = parseInt(qsNice, 10);
+        if (!isNaN(niceValue) && niceValue > 0)
+            push("qs-nice", qsTr("Shell runs at background priority (nice %1)").arg(niceValue), ananicy === "active" ? qsTr("ananicy-cpp files qs under its Service class, so the bar and panels get starved whenever something heavy runs. A rule override puts the shell back at foreground priority.") : qsTr("Something started the shell with a lowered priority, so the bar and panels get starved whenever something heavy runs."), "warn", ananicy === "active" ? {
+                fix: Object.assign({label: qsTr("Fix")}, _rootFix(qsTr("Installs /etc/ananicy.d/zz-caelestia/quickshell.rules (qs at foreground priority) and reloads ananicy-cpp. The rule applies to the shell from its next start."), [`bash '${Quickshell.shellDir}/system/quickshell/install.sh'`]))
+            } : null);
+
         // -- Caelestia: updates, privileged halves, config, checkout
         push("shell-updates", ShellUpdates.updateAvailable ? qsTr("Shell %1 commits behind").arg(ShellUpdates.commitsBehind) : qsTr("Shell up to date"), ShellUpdates.updateAvailable ? qsTr("Newer Caelestia++ is on origin/main") : qsTr("Checked against origin/main"), ShellUpdates.updateAvailable ? "warn" : "ok", ShellUpdates.updateAvailable ? {
             fix: {label: qsTr("Update"), kind: "update", summary: qsTr("Pulls origin/main into the shell checkout and reloads the shell. Local files are not touched beyond git's fast-forward."), commands: ["git pull --ff-only origin main"]}

@@ -1,0 +1,44 @@
+# Quickshell for Caelestia++, built on the machine that runs it.
+#
+# Every prebuilt quickshell links against Qt private API, so a Qt patch
+# release can leave the binary unable to start ("undefined symbol ...
+# version Qt_6_PRIVATE_API"). Building here binds it to the Qt that is
+# actually installed. system/quickshell/install.sh drives this file.
+
+pkgname=caelestia++-quickshell
+_pkgname=quickshell
+pkgver=0.3.1
+pkgrel=1
+pkgdesc='Quickshell built against the installed Qt, for Caelestia++'
+arch=(x86_64 aarch64)
+url="https://git.outfoxxed.me/$_pkgname/$_pkgname"
+license=(LGPL-3.0-only)
+depends=(cpptrace glibc hicolor-icon-theme jemalloc libdrm libgcc libglvnd libpipewire
+         libstdc++ libxcb mesa pam polkit qt6-base qt6-declarative qt6-svg qt6-wayland wayland)
+makedepends=(cli11 cmake ninja qt6-shadertools spirv-tools vulkan-headers wayland-protocols)
+provides=("quickshell=$pkgver" quickshell-git)
+conflicts=(quickshell quickshell-git)
+options=(!debug)
+source=("$_pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
+        caelestia-quickshell-qt.hook)
+sha256sums=('d60592622f1aa1cbb853d4814f605dfde827bc692befbfecffaccf4c90e352d8'
+            'SKIP')
+
+build() {
+	cd "$_pkgname"
+	cmake -G Ninja -B build -W no-dev \
+		-D CMAKE_BUILD_TYPE=RelWithDebInfo \
+		-D DISTRIBUTOR='Caelestia++' \
+		-D DISTRIBUTOR_DEBUGINFO_AVAILABLE=No \
+		-D CRASH_REPORTER=Off \
+		-D CMAKE_INSTALL_PREFIX=/usr \
+		-D INSTALL_QML_PREFIX=lib/qt6/qml
+	cmake --build build
+}
+
+package() {
+	cd "$_pkgname"
+	DESTDIR="$pkgdir" cmake --install build
+	install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" LICENSE
+	install -Dm0644 "$srcdir/caelestia-quickshell-qt.hook" "$pkgdir/usr/share/libalpm/hooks/caelestia-quickshell-qt.hook"
+}

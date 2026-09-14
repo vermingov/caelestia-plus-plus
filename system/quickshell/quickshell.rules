@@ -1,0 +1,3 @@
+# cachyos-ananicy-rules files qs under Service (nice 10). It is the desktop
+# shell: keep it at foreground priority like other UI processes.
+{ "name": "qs", "type": "Chat" }

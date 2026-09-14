@@ -1,0 +1,12 @@
+# Qt patch releases move private-API symbols; a quickshell built against the
+# previous Qt then fails to start. Say so while the terminal is still open.
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = qt6-base
+Target = qt6-declarative
+
+[Action]
+Description = Caelestia++: Qt changed, quickshell may need a rebuild
+When = PostTransaction
+Exec = /usr/bin/sh -c 'echo ">> Qt was upgraded. If \"qs --version\" fails afterwards, rebuild quickshell: Caelestia++ System check > Rebuild, or: sudo bash ~/.config/quickshell/caelestia/system/quickshell/install.sh"'

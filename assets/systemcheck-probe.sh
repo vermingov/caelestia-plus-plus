@@ -24,6 +24,13 @@ echo "ppdunit|$(systemctl is-enabled power-profiles-daemon 2>&1 | head -1 | cut 
 [ -f "$HOME/.face" ] && echo "face|ok" || echo "face|missing"
 grep -qs 'IgnorePkg.*caelestia' /etc/pacman.conf && echo "ignpkg|ok" || echo "ignpkg|missing"
 timeout 5 caelestia --version >/dev/null 2>&1 && echo "cli|ok" || echo "cli|broken"
+# The quickshell binary links Qt private API: after a Qt patch release it can
+# stop loading while the running shell (this process) still works on the old,
+# now-deleted libraries. Probe the binary on disk, not ourselves.
+timeout 20 qs --version >/dev/null 2>&1 && echo "qsbin|ok" || echo "qsbin|broken|$(timeout 20 qs --version 2>&1 | grep -o 'undefined symbol.*' | head -1 | cut -c1-120 | tr '|' '/')"
+# Scheduler class of the shell process (this probe's parent): ananicy rules
+# can renice it into the background
+echo "qsnice|$(ps -o ni= -p "$PPID" 2>/dev/null | tr -d ' ')|$(systemctl is-active ananicy-cpp 2>/dev/null)"
 [ -n "$WALLSDIR" ] && { [ -d "$WALLSDIR" ] && echo "walldir|ok|$WALLSDIR" || echo "walldir|missing|$WALLSDIR"; }
 
 for f in max-perf anti-heat dynamic bed-mode; do
