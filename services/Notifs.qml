@@ -208,6 +208,9 @@ exit 10`]
             });
             root.list = root.list.concat(restored).sort((a, b) => b.time - a.time);
             root.loaded = true;
+            // Shrink the file now rather than at the next notification
+            if (data.length > root.maxHistory)
+                saveTimer.restart();
         }
         onLoadFailed: err => {
             if (err === FileViewError.FileNotFound) {
