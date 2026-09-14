@@ -19,6 +19,7 @@ pub mod math;
 pub mod palette;
 pub mod quantize;
 pub mod scheme;
+pub mod score;
 pub mod solver;
 pub mod spec2021;
 pub mod spec2025;
