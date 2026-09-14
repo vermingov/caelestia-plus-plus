@@ -13,6 +13,7 @@ pub mod contrast;
 pub mod dislike;
 pub mod hct;
 pub mod math;
+pub mod palette;
 pub mod solver;
 pub mod tables;
 pub mod viewing;
