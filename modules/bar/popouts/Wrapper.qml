@@ -8,7 +8,6 @@ import Quickshell.Wayland
 import Caelestia.Config
 import qs.components
 import qs.services
-import qs.modules.nexus
 
 Item {
     id: root
@@ -145,22 +144,43 @@ Item {
     Comp {
         id: nexus
 
+        readonly property int queuedPageIdx: ["appearance", "network", "bluetooth", "audio"].indexOf(root.queuedMode)
+
         shouldBeActive: root.detachedMode === "any"
         anchors.centerIn: parent
 
-        sourceComponent: StyledClippingRect {
-            radius: Tokens.rounding.extraLarge
-            implicitWidth: nexusInner.implicitWidth
-            implicitHeight: nexusInner.implicitHeight
+        // Loaded by URL so the settings module stays out of the startup
+        // compile (shell.qml precompiles it off the GUI thread after the
+        // first frame). setSource hands over the initial values; the source
+        // is cleared on close so the next open goes through here again.
+        onActiveChanged: {
+            if (active)
+                setSource("NexusHost.qml", {
+                    screen: root.screen,
+                    animating: nexus.opacity < 1,
+                    pageIdx: nexus.queuedPageIdx
+                });
+            else
+                source = "";
+        }
 
-            Nexus {
-                id: nexusInner
+        Binding {
+            target: nexus.item
+            property: "animating"
+            value: nexus.opacity < 1
+        }
 
-                anchors.fill: parent
-                nState.screen: root.screen
-                nState.animatingContainer: nexus.opacity < 1
-                nState.currentPageIdx: ["appearance", "network", "bluetooth", "audio"].indexOf(root.queuedMode)
-                onClose: root.close()
+        Binding {
+            target: nexus.item
+            property: "pageIdx"
+            value: nexus.queuedPageIdx
+        }
+
+        Connections {
+            target: nexus.item
+
+            function onClose(): void {
+                root.close();
             }
         }
     }

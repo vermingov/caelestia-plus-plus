@@ -2,59 +2,27 @@ pragma Singleton
 
 import QtQuick
 import Quickshell
-import Caelestia.Config
-import qs.components
-import qs.services
-import qs.modules.nexus
 
+// Shortcuts and the utilities toggles reference this singleton at startup;
+// the window itself sits in NexusWindow.qml and is compiled on first use
+// (or by shell.qml's warm-up), so the nexus module stays out of the
+// startup compile.
 Singleton {
     id: root
 
+    property Component windowComp
+
     function create(parent: Item, props: var): void {
-        nexusComp.createObject(parent ?? dummy, props);
+        if (!windowComp)
+            windowComp = Qt.createComponent(Qt.resolvedUrl("NexusWindow.qml"));
+        if (windowComp.status === Component.Error) {
+            console.error("WindowFactory:", windowComp.errorString());
+            return;
+        }
+        windowComp.createObject(parent ?? dummy, props);
     }
 
     QtObject {
         id: dummy
-    }
-
-    Component {
-        id: nexusComp
-
-        FloatingWindow {
-            id: win
-
-            color: Colours.tPalette.m3surface
-            surfaceFormat.opaque: false
-
-            onVisibleChanged: {
-                if (!visible)
-                    destroy();
-            }
-
-            implicitWidth: nexus.implicitWidth
-            implicitHeight: nexus.implicitHeight
-
-            minimumSize.width: contentItem.Tokens.sizes.nexus.minWidth
-            minimumSize.height: contentItem.Tokens.sizes.nexus.minHeight
-
-            contentItem.Config.screen: screen.name
-            contentItem.Tokens.screen: screen.name
-
-            title: qsTr("Nexus — %1").arg(PageRegistry.pages[nexus.nState.currentPageIdx].label)
-
-            Nexus {
-                id: nexus
-
-                anchors.fill: parent
-                nState.screen: win.screen
-                nState.isWindow: true
-                onClose: win.destroy()
-            }
-
-            Behavior on color {
-                CAnim {}
-            }
-        }
     }
 }

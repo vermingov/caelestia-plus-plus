@@ -1,5 +1,3 @@
-pragma Singleton
-
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
@@ -17,6 +15,9 @@ import qs.modules.nexus.pages.services
 import qs.modules.nexus.pages.wallandstyle
 import qs.modules.nexus.pages.panels.taskbar
 
+// Not a singleton on purpose: importing a module compiles every singleton
+// in it, and this one references every settings page. Pages.qml owns an
+// instance, so the pages compile only when the settings actually open.
 QtObject {
     id: root
 

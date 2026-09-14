@@ -9,7 +9,6 @@ import "modules/drawers"
 import "modules/background"
 import "modules/areapicker"
 import "modules/easteregg"
-import "modules/lock"
 import "modules/firewall"
 import "modules/protection"
 import "modules/features"
@@ -35,9 +34,6 @@ ShellRoot {
     Background {}
     Drawers {}
     AreaPicker {}
-    Lock {
-        id: lock
-    }
     FirewallPrompt {}
     ProtectionPrompt {}
     SecurityCenter {}
@@ -50,7 +46,42 @@ ShellRoot {
     EasterEgg {}
     IsraelEgg {}
     BatteryMonitor {}
-    IdleMonitors {
-        lock: lock
+
+    // Nothing below is needed for the first frame. Once the bar is up, the
+    // lock screen and idle monitors load, then the settings module (the
+    // largest tree in the shell) is compiled so its first open is instant.
+    // Each step is a short synchronous compile a couple of seconds after
+    // startup: the asynchronous type loader takes many times longer over
+    // quickshell's qs: scheme and stalls any synchronous load that needs
+    // the same files meanwhile.
+    property list<var> warmed
+
+    function warm(path: string): void {
+        const comp = Qt.createComponent(Qt.resolvedUrl(path));
+        if (comp.status === Component.Error)
+            console.warn(`warm: ${path}: ${comp.errorString()}`);
+        warmed.push(comp);
+    }
+
+    Loader {
+        id: lockAndIdle
+
+        source: "modules/LockAndIdle.qml"
+        active: false
+    }
+
+    Timer {
+        running: true
+        interval: 1500
+        onTriggered: lockAndIdle.active = true
+    }
+
+    Timer {
+        running: true
+        interval: 2500
+        onTriggered: {
+            root.warm("modules/bar/popouts/NexusHost.qml");
+            root.warm("modules/nexus/NexusWindow.qml");
+        }
     }
 }
