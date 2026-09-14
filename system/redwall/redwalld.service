@@ -13,7 +13,7 @@ StateDirectory=redwall
 # Load the kernel ruleset before the daemon binds the queue, and always tear it
 # down afterwards so a stopped service means normal, unfiltered networking.
 ExecStartPre=/usr/bin/nft -f /etc/redwall/redwall.nft
-ExecStart=/opt/redwall/venv/bin/python /opt/redwall/redwalld.py --ui-gid __UIGID__
+ExecStart=__EXEC__ --ui-gid __UIGID__
 ExecStopPost=-/usr/bin/nft delete table inet redwall
 Restart=on-failure
 RestartSec=2
