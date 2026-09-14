@@ -41,7 +41,7 @@ Item {
     // with NativeRendering, which blurs under a fractional scale
     // (see Bible qml-nativerendering-blurs-under-scale).
     transform: Translate {
-        y: root.offsetScale * 10
+        y: root.offsetScale * 16
     }
 
     Component.onCompleted: Qt.callLater(() => Apps) // Load apps on init

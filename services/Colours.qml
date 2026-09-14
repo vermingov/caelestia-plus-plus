@@ -97,7 +97,14 @@ Singleton {
             rule = "keyword layerrule %1 %2, match:namespace caelestia-drawers";
             trEnabled = transparency.enabled ? 1 : 0;
         }
-        Hypr.extras.batchMessage([rule.arg("blur").arg(trEnabled), rule.arg("ignore_alpha").arg(Math.max(0, transparency.base - 0.03))]);
+        // ignore_alpha is a hard cutoff: Hyprland blurs a pixel only once its
+        // alpha clears it. Tying it to transparency.base meant a panel fading
+        // in stayed unblurred until the last few percent of the animation and
+        // then snapped to frosted — panels looked like they popped into
+        // existence rather than fading. Keep it just high enough to skip
+        // pixels that are effectively invisible; the fully transparent parts
+        // of the fullscreen drawers surface are still excluded.
+        Hypr.extras.batchMessage([rule.arg("blur").arg(trEnabled), rule.arg("ignore_alpha").arg(0.1)]);
     }
 
     function requestReloadHyprRules(): void {
