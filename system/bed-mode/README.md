@@ -1,11 +1,31 @@
 # bed-mode
 
+A fan curve, and nothing else. Bed mode does not touch the power profile,
+CPU boost, clocks or voltages — run Performance or Maximum performance
+alongside it if you want to; the fans simply work harder to clear a
+restricted intake.
+
 Toggle in the battery popout (hover the battery in the topbar) for using the
-laptop somewhere airflow is restricted, e.g. in bed. Keeps the power profile
-at Balanced but swaps in an aggressive fan curve (up to EC-unregulated
-"disengaged" full speed) and disables CPU boost — bursty light load boosting
-single cores to ~4.75GHz is what overheats a blocked intake even at low
-overall usage. Base clocks are untouched.
+laptop somewhere airflow is restricted, e.g. in bed. It swaps the firmware's
+fan curve for an aggressive one that starts the fans almost at idle, reaches
+the EC's top regulated level by ~56C, and drops the rpm cap entirely above
+~64C ("disengaged", ~4500-5000rpm). Loud, deliberately: the heat has nowhere
+else to go.
+
+Up to v4 it also clamped the power profile to Balanced and held CPU boost
+off. Both are gone. Holding the global CPU boost switch off made the kernel
+reject every per-policy boost write, which blocked power-profiles-daemon
+from switching profiles at all, and clamping the profile made the machine
+slow exactly when you were using it. Fans are enough.
+
+## Interaction with the other modes
+
+| | |
+|---|---|
+| Power profile (Eco/Balanced/Performance) | independent; pick any |
+| Dynamic | independent; no ceiling from bed mode |
+| Maximum performance | may be on together — its curve is louder at every temperature, so it takes the fans while it runs and `max-perf-sync` hands them back afterwards |
+| Anti-Heat | independent (undervolt, gentler curve; yields to this one) |
 
 ## How it's wired
 
@@ -23,8 +43,7 @@ Battery popout switch
 ```
 
 Stopping `thinkfan-bed.service` hands the fan back to the EC's own automatic
-curve (i.e. whatever `power-profiles-daemon` has it set to), so bed-mode off
-== today's default behaviour.
+curve, so bed-mode off == stock behaviour.
 
 ## One-time setup (requires root)
 

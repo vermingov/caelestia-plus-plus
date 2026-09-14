@@ -265,7 +265,7 @@ Column {
         width: root.width
         visible: SysInfo.isLaptop
 
-        text: qsTr("Much more sensitive fan curve for restricted airflow, e.g. on a bed")
+        text: qsTr("Much more sensitive fan curve for restricted airflow, e.g. on a bed. Fans only — your power profile is untouched")
         color: Colours.palette.m3onSurfaceVariant
         font: Tokens.font.body.small
         wrapMode: Text.WordWrap
@@ -299,10 +299,6 @@ Column {
                     Dynamic.setEnabled(true);
                 } else {
                     Dynamic.setEnabled(false);
-                    // Bed mode owns the plan at balanced and holds CPU boost
-                    // off; asking for performance means leaving it
-                    if (parent.profile === "performance")
-                        BedMode.setEnabled(false);
                     PowerDaemon.setProfile(parent.profile);
                 }
             }

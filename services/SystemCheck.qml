@@ -80,7 +80,7 @@ Singleton {
         {bin: "nmcli", pkg: "networkmanager", why: qsTr("Network status and wifi connections in the bar"), severity: "fail"},
         {bin: "python3", pkg: "python", why: qsTr("Shell helper scripts"), severity: "fail"},
         {bin: "notify-send", pkg: "libnotify", why: qsTr("Desktop notifications from shell actions"), severity: "warn"},
-        {bin: "powerprofilesctl", pkg: "power-profiles-daemon", why: qsTr("Power profile switching (battery popout, bed mode)"), severity: "warn"},
+        {bin: "powerprofilesctl", pkg: "power-profiles-daemon", why: qsTr("Power profile switching (battery popout, Dynamic, Maximum performance)"), severity: "warn"},
         {bin: "ddcutil", pkg: "ddcutil", why: qsTr("Brightness control for external monitors"), severity: "warn"},
         {bin: "brightnessctl", pkg: "brightnessctl", why: qsTr("Brightness control for the internal display"), severity: "warn", laptopOnly: true},
         {bin: "gpu-screen-recorder", pkg: "gpu-screen-recorder", why: qsTr("Screen recording from the utilities drawer"), severity: "warn"},

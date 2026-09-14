@@ -48,7 +48,6 @@ fi
 
 STATE_DIR=/home/john/.local/state/caelestia
 MAXPERF_STATE="$STATE_DIR/max-perf"
-BEDMODE_STATE="$STATE_DIR/bed-mode"
 TIER_FILE="$STATE_DIR/dynamic-tier"   # published for the UI to read
 
 TIER_NAMES=(power-saver balanced performance)
@@ -125,10 +124,6 @@ pick_tier() {
         else desired=1; fi
     fi
 
-    # Bed mode (restricted airflow) clamps the ceiling to balanced.
-    if state_on "$BEDMODE_STATE"; then
-        (( desired > 1 )) && desired=1
-    fi
     echo "$desired"
 }
 

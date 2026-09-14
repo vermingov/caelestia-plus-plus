@@ -25,7 +25,9 @@ state file → max-perf-sync.path (inotify) → max-perf-sync
 
 Bed-mode's fan service is stopped when this engages (`Conflicts=` +
 sync-script stop): two thinkfan instances would fight over
-`/proc/acpi/ibm/fan`. The shell side also flips the bed-mode toggle off.
+`/proc/acpi/ibm/fan`. Bed mode may stay on underneath: this curve is louder
+at every temperature, and `max-perf-sync` restarts bed mode's curve when this
+mode turns off.
 
 ## Install (one-time, root)
 

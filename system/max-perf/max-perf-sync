@@ -20,4 +20,8 @@ if [[ "$state" == "1" ]]; then
 else
     systemctl stop thinkfan-max.service 2>/dev/null || true
     systemctl stop max-perf.service 2>/dev/null || true
+    # Our louder curve was covering bed mode while it ran; give the fans back
+    if [[ "$(cat /home/john/.local/state/caelestia/bed-mode 2>/dev/null || true)" == "1" ]]; then
+        systemctl start thinkfan-bed.service 2>/dev/null || true
+    fi
 fi

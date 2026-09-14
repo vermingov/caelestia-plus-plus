@@ -32,7 +32,6 @@ Every `TICK` (4s):
 | Battery + busy | balanced (ceiling — protects battery/wear) |
 | Battery + deep idle | power-saver |
 | Battery ≤15% | power-saver (forced) |
-| Bed mode on | ceiling clamped to balanced |
 | Max-perf on | daemon stands down entirely |
 
 **Hysteresis:** escalates UP immediately (snappy under sudden load); steps DOWN

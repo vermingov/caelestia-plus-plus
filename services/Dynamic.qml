@@ -17,7 +17,7 @@ import qs.utils
 //
 // Mutually exclusive with Max-perf (which pins its own 50W plan and, when
 // engaged, disables this). Coexists with Anti-Heat (orthogonal thermal caps)
-// and Bed mode (which the daemon honours as a balanced ceiling).
+// Bed mode is fans only and does not constrain it.
 Singleton {
     id: root
 

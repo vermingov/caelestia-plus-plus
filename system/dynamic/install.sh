@@ -14,7 +14,7 @@ set -euo pipefail
 # Bump whenever ANY root-side file of this feature changes; the shell's
 # system scan compares it against /etc/caelestia/dynamic.version and offers the
 # upgrade automatically.
-root_half_version=2
+root_half_version=3
 
 if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo $0" >&2

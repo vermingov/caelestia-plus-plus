@@ -11,7 +11,7 @@ set -euo pipefail
 # Bump whenever ANY root-side file of this feature changes; the shell's
 # system scan compares it against /etc/caelestia/bed-mode.version and offers the
 # upgrade automatically.
-root_half_version=4
+root_half_version=5
 
 if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo $0" >&2
@@ -53,6 +53,17 @@ install -d -o "$target_user" -g "$target_user" "$state_dir"
 chown "$target_user:$target_user" "$state_file"
 
 install -d /etc/caelestia
+# Bed mode used to hold CPU boost off (through the global cpufreq switch
+# before v4, per-policy in v4). It is fans-only from v5 on, so give the CPU
+# back whatever an older version left switched off. The global switch has to
+# go first: while it is off the kernel refuses every per-policy boost write.
+if [[ -w /sys/devices/system/cpu/cpufreq/boost ]]; then
+    echo 1 > /sys/devices/system/cpu/cpufreq/boost || true
+fi
+for p in /sys/devices/system/cpu/cpufreq/policy*/boost; do
+    [[ -w "$p" ]] && { echo 1 > "$p" || true; }
+done
+
 echo "$root_half_version" > /etc/caelestia/bed-mode.version
 
 systemctl daemon-reload

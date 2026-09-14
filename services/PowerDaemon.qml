@@ -84,8 +84,8 @@ Singleton {
                 applyTries++;
                 console.info(`caelestia.powerdaemon: re-applying ${wanted} (daemon has ${parsed.active})`);
                 // Spaced, not immediate: a rejected switch is usually waiting
-                // on a root-side knob (bed mode restoring CPU boost through
-                // its systemd path unit), which lands about a second later
+                // on a root-side knob that a systemd path unit is still
+                // applying, which lands about a second later
                 retryTimer.restart();
             } else {
                 if (wanted && parsed.active === wanted && wasDown)

@@ -4,12 +4,13 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Caelestia
-import qs.services
 import qs.utils
 
 // Toggle for using the laptop somewhere airflow is restricted (e.g. in bed),
-// where the fans can't dispose of heat as fast as usual. Keeps the power
-// profile at Balanced but swaps in a far more sensitive fan curve.
+// where the fans can't dispose of heat as fast as usual. It swaps in a far
+// more sensitive fan curve and changes nothing else: power profile, CPU
+// boost and clocks are left alone, so the machine still performs normally —
+// pick whatever profile you like alongside it, Performance included.
 //
 // The curve itself is applied outside the shell's privilege boundary: this
 // singleton only flips a plain state file that a root-owned systemd path
@@ -28,12 +29,7 @@ Singleton {
         stateFile.checked = value;
         stateFile.setText(value ? "1\n" : "0\n");
 
-        if (value) {
-            MaxPerf.setEnabled(false); // opposite fan curves; never both
-            PowerDaemon.setProfile("balanced");
-        }
-
-        Toaster.toast(value ? qsTr("Bed mode enabled") : qsTr("Bed mode disabled"), value ? qsTr("Aggressive fan curve on, CPU boost off") : qsTr("Fan curve and CPU boost restored"), "bed");
+        Toaster.toast(value ? qsTr("Bed mode enabled") : qsTr("Bed mode disabled"), value ? qsTr("Aggressive fan curve on — performance untouched") : qsTr("Firmware fan curve restored"), "bed");
     }
 
     Process {

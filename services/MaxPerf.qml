@@ -15,7 +15,7 @@ import qs.utils
 // because without it this toggle is power-profile-and-eye-candy only and
 // the fans never change.
 //
-// Mutually exclusive with BedMode (opposite fan curves), and drags GameMode
+// Drags GameMode
 // along so the compositor sheds its eye candy too.
 Singleton {
     id: root
@@ -33,10 +33,10 @@ Singleton {
         stateFile.checked = value;
         stateFile.setText(value ? "1\n" : "0\n");
 
-        if (value) {
-            BedMode.setEnabled(false);
+        // Bed mode may stay on: its fan curve is a subset of max-perf's, and
+        // the root halves hand the fans back and forth
+        if (value)
             Dynamic.setEnabled(false); // Dynamic and Max-perf both drive the profile; never both
-        }
         PowerDaemon.setProfile(value ? "performance" : "balanced");
         GameMode.enabled = value;
 

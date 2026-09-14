@@ -4,41 +4,30 @@
 # triggered by bed-mode-sync.path on every write to the state file, and once
 # at boot to catch a state left over from before shutdown.
 #
-# ON:  balanced profile, sensitive fan curve (thinkfan), CPU boost off.
-#      Boost-off is what actually curbs the heat: bursty light load boosts
-#      single cores to ~4.75GHz at high voltage, which overwhelms a blocked
-#      intake even at low overall utilization. Base clocks stay untouched.
-# OFF: firmware auto fan, boost back on.
+# Bed mode is a fan curve and nothing else. It does not touch the power
+# profile, CPU boost, clocks or voltages: the machine should still perform
+# like itself in bed, just with the fans working harder to get the heat out
+# of a restricted intake. Earlier versions clamped the profile to balanced
+# and held CPU boost off, which also blocked every power-profile switch
+# (see the git history for the kernel EINVAL behind that).
+#
+# ON:  sensitive fan curve (thinkfan-bed).
+# OFF: firmware automatic fan.
 set -euo pipefail
 
 state_file=/home/john/.local/state/caelestia/bed-mode
-global_boost=/sys/devices/system/cpu/cpufreq/boost
+maxperf_state=/home/john/.local/state/caelestia/max-perf
 state=$(cat "$state_file" 2>/dev/null || true)
 
-# Drive the per-policy boost files and leave the global switch alone. With
-# the global switch off the kernel rejects EVERY per-policy boost write with
-# EINVAL (Documentation/cpu-freq/boost: "disabling global boost makes
-# enabling local boost illegal"), and power-profiles-daemon writes per-policy
-# boost whenever it activates a profile — so while bed mode held the global
-# switch, no profile change succeeded at all, not just performance.
-# Kernels without per-policy boost (pre-6.6) have no such conflict, so the
-# global switch stays the fallback there.
-set_boost() {
-    local value=$1 path wrote=0
-    for path in /sys/devices/system/cpu/cpufreq/policy*/boost; do
-        [[ -w "$path" ]] || continue
-        echo "$value" > "$path" && wrote=1
-    done
-    if (( ! wrote )) && [[ -w "$global_boost" ]]; then
-        echo "$value" > "$global_boost"
-    fi
-}
-
 if [[ "$state" == "1" ]]; then
-    powerprofilesctl set balanced || true
-    set_boost 0
-    systemctl start thinkfan-bed.service
+    # Max-perf's curve is strictly louder than this one at every temperature,
+    # so while it runs it already covers bed mode. Its unit declares
+    # Conflicts= on ours; starting ours here would just stop it.
+    if [[ "$(cat "$maxperf_state" 2>/dev/null || true)" == "1" ]]; then
+        echo "max-perf is on; its louder curve covers bed mode"
+    else
+        systemctl start thinkfan-bed.service
+    fi
 else
     systemctl stop thinkfan-bed.service
-    set_boost 1
 fi
