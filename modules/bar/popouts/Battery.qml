@@ -299,6 +299,10 @@ Column {
                     Dynamic.setEnabled(true);
                 } else {
                     Dynamic.setEnabled(false);
+                    // Bed mode owns the plan at balanced and holds CPU boost
+                    // off; asking for performance means leaving it
+                    if (parent.profile === "performance")
+                        BedMode.setEnabled(false);
                     PowerDaemon.setProfile(parent.profile);
                 }
             }

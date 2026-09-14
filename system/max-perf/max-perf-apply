@@ -100,6 +100,11 @@ apply() {
         echo performance > "$p" 2>/dev/null || true
     done
     echo 1 > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || true
+    # Per-policy too: bed mode may have left these off, and ppd refuses to
+    # activate a profile if it cannot write them
+    for p in /sys/devices/system/cpu/cpufreq/policy*/boost; do
+        echo 1 > "$p" 2>/dev/null || true
+    done
     echo 0 > /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true
     echo performance > /sys/firmware/acpi/platform_profile 2>/dev/null || true
     command -v powerprofilesctl >/dev/null && powerprofilesctl set performance 2>/dev/null || true

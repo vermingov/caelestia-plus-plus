@@ -83,7 +83,10 @@ Singleton {
             if (wanted && parsed.active !== wanted && applyTries < 3) {
                 applyTries++;
                 console.info(`caelestia.powerdaemon: re-applying ${wanted} (daemon has ${parsed.active})`);
-                apply(wanted);
+                // Spaced, not immediate: a rejected switch is usually waiting
+                // on a root-side knob (bed mode restoring CPU boost through
+                // its systemd path unit), which lands about a second later
+                retryTimer.restart();
             } else {
                 if (wanted && parsed.active === wanted && wasDown)
                     Toaster.toast(qsTr("Power daemon reconnected"), qsTr("%1 profile re-applied").arg(root.label(wanted)), "bolt");
@@ -128,6 +131,16 @@ Singleton {
         id: setProc
 
         onExited: probe.running = true
+    }
+
+    Timer {
+        id: retryTimer
+
+        interval: 1200
+        onTriggered: {
+            if (internal.wanted)
+                internal.apply(internal.wanted);
+        }
     }
 
     Timer {

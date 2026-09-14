@@ -12,18 +12,33 @@
 set -euo pipefail
 
 state_file=/home/john/.local/state/caelestia/bed-mode
-boost=/sys/devices/system/cpu/cpufreq/boost
+global_boost=/sys/devices/system/cpu/cpufreq/boost
 state=$(cat "$state_file" 2>/dev/null || true)
+
+# Drive the per-policy boost files and leave the global switch alone. With
+# the global switch off the kernel rejects EVERY per-policy boost write with
+# EINVAL (Documentation/cpu-freq/boost: "disabling global boost makes
+# enabling local boost illegal"), and power-profiles-daemon writes per-policy
+# boost whenever it activates a profile — so while bed mode held the global
+# switch, no profile change succeeded at all, not just performance.
+# Kernels without per-policy boost (pre-6.6) have no such conflict, so the
+# global switch stays the fallback there.
+set_boost() {
+    local value=$1 path wrote=0
+    for path in /sys/devices/system/cpu/cpufreq/policy*/boost; do
+        [[ -w "$path" ]] || continue
+        echo "$value" > "$path" && wrote=1
+    done
+    if (( ! wrote )) && [[ -w "$global_boost" ]]; then
+        echo "$value" > "$global_boost"
+    fi
+}
 
 if [[ "$state" == "1" ]]; then
     powerprofilesctl set balanced || true
-    if [[ -w "$boost" ]]; then
-        echo 0 > "$boost"
-    fi
+    set_boost 0
     systemctl start thinkfan-bed.service
 else
     systemctl stop thinkfan-bed.service
-    if [[ -w "$boost" ]]; then
-        echo 1 > "$boost"
-    fi
+    set_boost 1
 fi
