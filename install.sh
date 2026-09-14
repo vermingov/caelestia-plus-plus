@@ -140,6 +140,16 @@ if [[ -f $SHELL_DIR/system/sandrunner/sandrunner ]]; then
     fi
 fi
 
+# `cae` is the update command: one invocation pulls the shell, installs newer
+# release packages and privileged halves, and restarts. A PATH symlink into
+# the checkout is the whole install, so it updates itself with the repo.
+mkdir -p "$HOME/.local/bin"
+ln -sf "$SHELL_DIR/cae" "$HOME/.local/bin/cae"
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) echo "WARN: $HOME/.local/bin is not on your PATH — 'cae' will not be found until it is" ;;
+esac
+
 # hallucinate (AI-dreamed one-shot apps) is a user-level script too; Tkinter
 # (the tk package) is its only extra dependency.
 if [[ -f $SHELL_DIR/system/hallucinate/hallucinate ]]; then

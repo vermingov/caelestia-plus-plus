@@ -14,7 +14,21 @@ Start with `caelestia shell -d` (Hyprland: `exec-once = caelestia shell -d`).
 
 ## Updating
 
-The shell checks this repo periodically; pending commits appear under Settings → Updates with a one-click "Update & restart". Manual equivalent: `git -C ~/.config/quickshell/caelestia pull`.
+```sh
+cae
+```
+
+One command, one password prompt, no reboot: it fast-forwards the checkout, installs any release package newer than what you have, upgrades the privileged halves you already use, and restarts the shell — verifying it comes back up and rolling the checkout back if it does not.
+
+| | |
+|---|---|
+| `cae` | full update and restart |
+| `cae status` | what is installed, what is behind |
+| `cae restart` | restart the shell only |
+| `cae doctor` | full diagnosis |
+| `cae log` | follow the running shell's log |
+
+The shell also checks this repo on its own; pending commits appear under Settings → Updates with a one-click "Update & restart".
 
 ## If the shell is gone after a system update
 

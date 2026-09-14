@@ -1,0 +1,330 @@
+#!/usr/bin/env bash
+# One command to bring Caelestia++ fully up to date without rebooting.
+#
+#   cae              pull the shell, update packages and privileged halves, restart
+#   cae restart      restart the shell only
+#   cae status       what is installed and what is behind
+#   cae doctor       full diagnosis (doctor.sh)
+#   cae log          follow the running shell's log
+#
+# Everything that needs root is collected first and applied in a single sudo
+# call, so you are asked for your password once or not at all. The shell is
+# only restarted at the end, and a checkout that fails to come up is rolled
+# back to the commit it was on.
+set -euo pipefail
+
+REPO=vermingov/caelestia-plus-plus
+SHELL_DIR=${CAELESTIA_SHELL_DIR:-$HOME/.config/quickshell/caelestia}
+PKG_CACHE=$HOME/.cache/caelestia/packages
+PACKAGES=(caelestia++-quickshell caelestia++-shell caelestia++-cli)
+
+bold=$(tput bold 2>/dev/null || true)
+dim=$(tput dim 2>/dev/null || true)
+red=$(tput setaf 1 2>/dev/null || true)
+green=$(tput setaf 2 2>/dev/null || true)
+yellow=$(tput setaf 3 2>/dev/null || true)
+reset=$(tput sgr0 2>/dev/null || true)
+
+say()  { printf '%s::%s %s\n' "$bold" "$reset" "$*"; }
+step() { printf '%s  ->%s %s\n' "$dim" "$reset" "$*"; }
+warn() { printf '%s!!%s %s\n' "$yellow" "$reset" "$*" >&2; }
+die()  { printf '%s!!%s %s\n' "$red" "$reset" "$*" >&2; exit 1; }
+ok()   { printf '%s  ok%s %s\n' "$green" "$reset" "$*"; }
+
+[[ $EUID -eq 0 ]] && die "run as your normal user; the parts that need root ask for themselves"
+[[ -d $SHELL_DIR/.git ]] || die "no Caelestia++ checkout at $SHELL_DIR"
+
+# Root actions are queued as shell lines and run together at the end
+root_actions=()
+queue_root() { root_actions+=("$1"); }
+
+run_root_actions() {
+    ((${#root_actions[@]})) || return 0
+
+    local script
+    script=$(mktemp) || die "could not create a temp file"
+    trap 'rm -f "$script"' RETURN
+    {
+        # Fail fast: a half-applied update must stop and say so rather than
+        # carry on and get restarted into
+        echo "set -euo pipefail"
+        printf '%s\n' "${root_actions[@]}"
+    } > "$script"
+
+    say "applying ${#root_actions[@]} privileged step(s) — this is the only password prompt"
+    sudo bash "$script" || die "a privileged step failed; nothing was restarted"
+}
+
+# --- the shell process ------------------------------------------------------
+
+shell_pid() { pgrep -xf 'qs -c caelestia -n -d' | head -1; }
+
+stop_shell() {
+    shell_pid >/dev/null || return 0
+    caelestia shell -k >/dev/null 2>&1 || true
+    for _ in {1..20}; do
+        shell_pid >/dev/null || return 0
+        sleep 0.25
+    done
+    warn "the shell ignored the kill request, terminating it"
+    pkill -xf 'qs -c caelestia -n -d' || true
+    sleep 1
+}
+
+# Starts the shell and waits until its own log says the config loaded, so a
+# QML error is reported here instead of leaving a blank desktop behind
+start_shell() {
+    local before after logdir
+    before=$(ls -d /run/user/"$(id -u)"/quickshell/by-id/*/ 2>/dev/null | sort || true)
+    setsid -f caelestia shell -d >/dev/null 2>&1 || true
+
+    for _ in {1..40}; do
+        sleep 0.25
+        after=$(ls -d /run/user/"$(id -u)"/quickshell/by-id/*/ 2>/dev/null | sort || true)
+        logdir=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tail -1)
+        [[ -n $logdir && -f $logdir/log.log ]] || continue
+        if grep -q 'Configuration Loaded' "$logdir/log.log" 2>/dev/null; then
+            SHELL_LOGDIR=$logdir
+            return 0
+        fi
+    done
+
+    SHELL_LOGDIR=${logdir:-}
+    return 1
+}
+
+restart_shell() {
+    stop_shell
+    if start_shell; then
+        ok "shell restarted (pid $(shell_pid))"
+        return 0
+    fi
+    warn "the shell did not report a loaded config"
+    [[ -n ${SHELL_LOGDIR:-} && -f $SHELL_LOGDIR/log.log ]] && {
+        echo "--- last lines of $SHELL_LOGDIR/log.log"
+        tail -15 "$SHELL_LOGDIR/log.log" | sed 's/\x1b\[[0-9;]*m//g'
+    }
+    return 1
+}
+
+# --- pieces of an update ----------------------------------------------------
+
+# Fast-forward the checkout, leaving the commit it was on in PREVIOUS_HEAD
+pull_checkout() {
+    local behind
+    PREVIOUS_HEAD=$(git -C "$SHELL_DIR" rev-parse HEAD)
+
+    if ! git -C "$SHELL_DIR" fetch --quiet origin main 2>/dev/null; then
+        warn "could not reach GitHub; keeping the current checkout"
+        return 0
+    fi
+
+    behind=$(git -C "$SHELL_DIR" rev-list --count HEAD..origin/main)
+    if [[ $behind == 0 ]]; then
+        step "shell checkout already current"
+    elif git -C "$SHELL_DIR" merge --ff-only origin/main >/dev/null 2>&1; then
+        step "pulled $behind new commit(s):"
+        git -C "$SHELL_DIR" log --format="       %h %s" "$PREVIOUS_HEAD"..HEAD | head -10
+    else
+        warn "cannot fast-forward the checkout (local changes?); leaving it alone"
+    fi
+}
+
+# Downloads any release package newer than what is installed, into PKG_CACHE,
+# and leaves their paths in NEW_PACKAGES
+fetch_newer_packages() {
+    local json urls url name version installed
+    NEW_PACKAGES=()
+    json=$(curl -fsSL --max-time 25 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null) || {
+        warn "could not reach the release API; skipping package updates"
+        return 0
+    }
+    mapfile -t urls < <(grep -o 'https://[^"]*\.pkg\.tar\.zst' <<<"$json" | sort -u)
+    ((${#urls[@]})) || return 0
+
+    mkdir -p "$PKG_CACHE"
+    for url in "${urls[@]}"; do
+        # GitHub percent-encodes '+' in asset URLs
+        name=$(basename "$url" | sed 's/%2[Bb]/+/g')
+        local pkgname=${name%-*-*-*}
+        version=${name#"$pkgname"-}
+        version=${version%-*.pkg.tar.zst}
+
+        installed=$(pacman -Q "$pkgname" 2>/dev/null | awk '{print $2}' || true)
+        if [[ -n $installed ]]; then
+            # Already installed: only take it if the release is newer
+            (( $(vercmp "$version" "$installed") > 0 )) || continue
+        else
+            # Not installed at all. This is an updater, not the installer —
+            # the one exception is quickshell when the one on disk is broken
+            [[ $pkgname == caelestia++-quickshell && -n ${NEED_QS_REBUILD:-} ]] || continue
+        fi
+
+        if [[ ! -f $PKG_CACHE/$name ]]; then
+            step "downloading $name"
+            curl -fL --progress-bar -o "$PKG_CACHE/$name" "$url" || { warn "download failed: $name"; continue; }
+        fi
+        NEW_PACKAGES+=("$PKG_CACHE/$name")
+    done
+}
+
+# quickshell links Qt private API, so a Qt update can leave it unable to start
+# while the running shell carries on against the deleted libraries
+quickshell_broken() { ! timeout 20 qs --version >/dev/null 2>&1; }
+
+# Root halves stamp their version in /etc/caelestia; only ones already
+# installed are upgraded, never silently enabled
+queue_root_half_upgrades() {
+    local dir name repo_ver inst_ver
+    for dir in "$SHELL_DIR"/system/*/; do
+        [[ -f $dir/install.sh ]] || continue
+        name=$(basename "$dir")
+        # Not every system/ dir is a versioned root half; pipefail would
+        # otherwise abort the loop on the first one without the line
+        repo_ver=$(grep -m1 '^root_half_version=' "$dir/install.sh" | cut -d= -f2 || true)
+        [[ -n $repo_ver ]] || continue
+        inst_ver=$(cat "/etc/caelestia/$name.version" 2>/dev/null || true)
+        [[ -n $inst_ver ]] || continue
+        if (( repo_ver > inst_ver )); then
+            step "$name privileged half: v$inst_ver -> v$repo_ver"
+            queue_root "bash '${dir%/}/install.sh'"
+        fi
+    done
+}
+
+# --- commands ---------------------------------------------------------------
+
+cmd_update() {
+    PREVIOUS_HEAD=""
+    NEW_PACKAGES=()
+
+    say "updating the shell checkout"
+    pull_checkout
+
+    say "checking packages"
+    if quickshell_broken; then
+        warn "the installed quickshell cannot start against this Qt — it will be reinstalled or rebuilt"
+        NEED_QS_REBUILD=1
+    fi
+    fetch_newer_packages
+    if ((${#NEW_PACKAGES[@]})); then
+        printf '%s\n' "${NEW_PACKAGES[@]}" | sed 's|.*/|       |'
+    else
+        step "packages already current"
+    fi
+
+    # quickshell goes in through its own root half rather than straight to
+    # pacman: that is what also writes the scheduler override and the version
+    # stamp, and verifies the binary starts before we restart anything
+    local pkg qs_pkg="" plain_pkgs=()
+    for pkg in ${NEW_PACKAGES[@]+"${NEW_PACKAGES[@]}"}; do
+        case $(basename "$pkg") in
+            caelestia++-quickshell-*) qs_pkg=$pkg ;;
+            *) plain_pkgs+=("$pkg") ;;
+        esac
+    done
+    ((${#plain_pkgs[@]})) && queue_root "pacman -U --noconfirm --ask=22 $(printf "'%s' " "${plain_pkgs[@]}")"
+    if [[ -n $qs_pkg ]]; then
+        queue_root "bash '$SHELL_DIR/system/quickshell/install.sh' --pkg '$qs_pkg'"
+    elif [[ -n ${NEED_QS_REBUILD:-} ]]; then
+        # Broken and nothing newer to install: rebuild against the Qt that is here
+        queue_root "bash '$SHELL_DIR/system/quickshell/install.sh' --force"
+    fi
+
+    say "checking privileged halves"
+    queue_root_half_upgrades
+    ((${#root_actions[@]})) || step "privileged halves already current"
+
+    run_root_actions
+
+    if quickshell_broken; then
+        die "quickshell still cannot start; run 'qs --version' to see why. The shell was not restarted."
+    fi
+
+    say "restarting the shell"
+    if restart_shell; then
+        say "up to date: $(git -C "$SHELL_DIR" log -1 --format='%h %s' | cut -c1-60)"
+        return 0
+    fi
+
+    local now
+    now=$(git -C "$SHELL_DIR" rev-parse HEAD)
+    if [[ -n $PREVIOUS_HEAD && $now != "$PREVIOUS_HEAD" ]]; then
+        warn "rolling the checkout back to $(git -C "$SHELL_DIR" log -1 --format=%h "$PREVIOUS_HEAD")"
+        git -C "$SHELL_DIR" reset --hard "$PREVIOUS_HEAD" >/dev/null
+        restart_shell && die "the new commits broke the shell; rolled back and restarted. Report the log above."
+    fi
+    die "the shell is not running. Start it by hand with: caelestia shell -d"
+}
+
+cmd_restart() {
+    say "restarting the shell"
+    restart_shell
+}
+
+cmd_status() {
+    local name installed
+    say "checkout"
+    printf '     %s\n' "$(git -C "$SHELL_DIR" log -1 --format='%h %ad %s' --date=short | cut -c1-72)"
+    if git -C "$SHELL_DIR" fetch --quiet origin main 2>/dev/null; then
+        local behind
+        behind=$(git -C "$SHELL_DIR" rev-list --count HEAD..origin/main)
+        [[ $behind == 0 ]] && ok "current with origin/main" || warn "$behind commit(s) behind origin/main"
+    fi
+
+    say "packages"
+    for name in "${PACKAGES[@]}"; do
+        installed=$(pacman -Q "$name" 2>/dev/null | awk '{print $2}' || true)
+        printf '     %-26s %s\n' "$name" "${installed:-not installed}"
+    done
+    quickshell_broken && warn "qs cannot start: $(timeout 20 qs --version 2>&1 | head -1 | cut -c1-90)" || ok "qs starts"
+
+    say "privileged halves"
+    local dir repo_ver inst_ver
+    for dir in "$SHELL_DIR"/system/*/; do
+        [[ -f $dir/install.sh ]] || continue
+        name=$(basename "$dir")
+        # Not every system/ dir is a versioned root half; pipefail would
+        # otherwise abort the loop on the first one without the line
+        repo_ver=$(grep -m1 '^root_half_version=' "$dir/install.sh" | cut -d= -f2 || true)
+        [[ -n $repo_ver ]] || continue
+        inst_ver=$(cat "/etc/caelestia/$name.version" 2>/dev/null || echo "-")
+        if [[ $inst_ver == "-" ]]; then
+            printf '     %-26s %s\n' "$name" "not installed"
+        elif (( repo_ver > inst_ver )); then
+            printf '     %-26s %s\n' "$name" "v$inst_ver ${yellow}(v$repo_ver available)${reset}"
+        else
+            printf '     %-26s %s\n' "$name" "v$inst_ver"
+        fi
+    done
+
+    say "process"
+    local pid
+    pid=$(shell_pid || true)
+    if [[ -n $pid ]]; then
+        ok "running (pid $pid, up $(ps -o etime= -p "$pid" | tr -d ' '), nice $(ps -o ni= -p "$pid" | tr -d ' '))"
+    else
+        warn "not running"
+    fi
+}
+
+cmd_doctor() { bash "$SHELL_DIR/doctor.sh" "$@"; }
+
+cmd_log() {
+    local logdir
+    logdir=$(ls -td /run/user/"$(id -u)"/quickshell/by-id/*/ 2>/dev/null | head -1)
+    [[ -n $logdir ]] || die "no running shell to read a log from"
+    tail -n 200 -F "$logdir/log.log"
+}
+
+case ${1:-update} in
+    update|"")  shift || true; cmd_update ;;
+    restart)    cmd_restart ;;
+    status)     cmd_status ;;
+    doctor)     shift; cmd_doctor "$@" ;;
+    log)        cmd_log ;;
+    -h|--help|help)
+        sed -n '2,10p' "$0" | sed 's/^# \?//'
+        ;;
+    *) die "unknown command: $1 (try: cae --help)" ;;
+esac
