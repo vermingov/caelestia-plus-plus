@@ -268,13 +268,16 @@ cmd_update() {
     # The fast CLI is a user-level binary built from this checkout, so a pull
     # that changes it leaves the installed one stale. Cargo is incremental:
     # with nothing to do this costs a tenth of a second.
-    if [[ -x $SHELL_DIR/cli/install.sh ]] && command -v cargo >/dev/null; then
-        say "checking the fast CLI"
-        if "$SHELL_DIR/cli/install.sh" >/dev/null 2>&1; then
-            step "caelestia CLI current"
-        else
-            warn "the fast CLI did not build; the packaged Python one stays in charge"
-        fi
+    if command -v cargo >/dev/null; then
+        say "checking the Rust binaries"
+        for rust_dir in cli tools; do
+            [[ -x $SHELL_DIR/$rust_dir/install.sh ]] || continue
+            if "$SHELL_DIR/$rust_dir/install.sh" >/dev/null 2>&1; then
+                step "$rust_dir current"
+            else
+                warn "$rust_dir did not build; its Python fallback stays in charge"
+            fi
+        done
     fi
 
     if quickshell_broken; then

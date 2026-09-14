@@ -17,7 +17,8 @@ Singleton {
     property var entries: []
     property bool scanning: false
 
-    readonly property string helper: Quickshell.shellPath("assets/startup-ctl.py")
+    // Either the Rust binary or the script it replaced; see Helpers
+    readonly property var helper: Helpers.command("startup")
 
     // Parsed as scans complete; merged so a stale half never blanks the list.
     property var _autostart: []
@@ -40,7 +41,7 @@ Singleton {
         if (entry.source === "systemd") {
             systemctl.exec(["systemctl", "--user", entry.enabled ? "disable" : "enable", entry.key]);
         } else {
-            Quickshell.execDetached(["python3", root.helper, "set-enabled", entry.path, entry.enabled ? "0" : "1"]);
+            Quickshell.execDetached([...root.helper, "set-enabled", entry.path, entry.enabled ? "0" : "1"]);
         }
         _bumpLater();
     }
@@ -49,14 +50,14 @@ Singleton {
         if (entry.source === "systemd")
             systemctl.exec(["systemctl", "--user", "disable", entry.key]);
         else
-            Quickshell.execDetached(["python3", root.helper, "remove", entry.path]);
+            Quickshell.execDetached([...root.helper, "remove", entry.path]);
         _bumpLater();
     }
 
     function add(name: string, exe: string): void {
         if (!name || !exe)
             return;
-        Quickshell.execDetached(["python3", root.helper, "add", name, exe]);
+        Quickshell.execDetached([...root.helper, "add", name, exe]);
         _bumpLater();
     }
 
@@ -75,7 +76,7 @@ Singleton {
     Process {
         id: autostartScan
 
-        command: ["python3", root.helper, "scan"]
+        command: [...root.helper, "scan"]
         stdout: StdioCollector {
             onStreamFinished: {
                 const rows = [];

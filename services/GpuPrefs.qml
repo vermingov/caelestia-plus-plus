@@ -55,8 +55,8 @@ Singleton {
     }
 
     Process {
-        running: true
-        command: ["python3", Quickshell.shellPath("assets/list-gpus.py")]
+        running: Helpers.ready
+        command: Helpers.command("gpus")
 
         stdout: StdioCollector {
             onStreamFinished: {

@@ -196,6 +196,12 @@ if [[ -x $SHELL_DIR/cli/install.sh ]] && command -v cargo >/dev/null; then
     "$SHELL_DIR/cli/install.sh" || echo "WARN: the fast CLI did not build — the Python one stays in charge"
 fi
 
+# The shell's own helpers (GPU list, autostart entries) are a Rust binary too;
+# without it the shell runs the Python scripts under assets/ instead.
+if [[ -x $SHELL_DIR/tools/install.sh ]] && command -v cargo >/dev/null; then
+    "$SHELL_DIR/tools/install.sh" || echo "WARN: the shell helpers did not build — the scripts stay in charge"
+fi
+
 # hallucinate (AI-dreamed one-shot apps) is a user-level script too; Tkinter
 # (the tk package) is its only extra dependency.
 if [[ -f $SHELL_DIR/system/hallucinate/hallucinate ]]; then

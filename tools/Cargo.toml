@@ -1,0 +1,22 @@
+[package]
+name = "caelestia-tools"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "The helpers the Caelestia++ shell shells out to"
+
+# One binary, one subcommand per helper the shell used to run as a Python
+# script. The shell calls it directly and falls back to the scripts when it
+# is not built, so nothing here can leave a machine without its shell.
+[[bin]]
+name = "caelestia-tools"
+path = "src/main.rs"
+
+[dependencies]
+redcommon = { path = "../system/rust/redcommon" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
