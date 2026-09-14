@@ -22,6 +22,7 @@ mod paths;
 mod proc;
 mod scheme;
 mod sha256;
+mod theme;
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -47,6 +48,7 @@ fn main() {
         Some(args::Command::Record(a)) => cmd::record::run(&a),
         Some(args::Command::SchemeGet(a)) => cmd::scheme::get(&a),
         Some(args::Command::SchemeList(a)) => cmd::scheme::list(&a),
+        Some(args::Command::SchemeSet(a)) => cmd::scheme::set(&a),
         None => hand_over(&argv),
     };
     std::process::exit(code);

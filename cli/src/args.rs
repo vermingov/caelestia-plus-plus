@@ -17,6 +17,7 @@ pub enum Command {
     Record(cmd::record::Args),
     SchemeGet(cmd::scheme::GetArgs),
     SchemeList(cmd::scheme::ListArgs),
+    SchemeSet(cmd::scheme::SetArgs),
 }
 
 pub fn parse(argv: &[String]) -> Option<Command> {
@@ -168,8 +169,8 @@ fn parse_record(argv: &[String]) -> Option<Command> {
     Some(Command::Record(args))
 }
 
-/// `scheme` has subcommands of its own. Only the two that read files are
-/// ours; `set` regenerates colours and belongs to the Python CLI.
+/// `scheme` has subcommands of its own: `get` and `list` read files, `set`
+/// regenerates the palette and pushes it out to every themed application.
 fn parse_scheme(argv: &[String]) -> Option<Command> {
     let (which, flags) = argv.split_first()?;
     let flags = &expand_short_bundles(flags);
@@ -211,6 +212,29 @@ fn parse_scheme(argv: &[String]) -> Option<Command> {
                 }
             }
             Some(Command::SchemeList(args))
+        }
+        "set" => {
+            let mut args = cmd::scheme::SetArgs {
+                name: None,
+                flavour: None,
+                mode: None,
+                variant: None,
+                random: false,
+                notify: false,
+            };
+            let mut rest = flags.iter();
+            while let Some(flag) = rest.next() {
+                match flag.as_str() {
+                    "-n" | "--name" => args.name = Some(rest.next()?.clone()),
+                    "-f" | "--flavour" => args.flavour = Some(rest.next()?.clone()),
+                    "-m" | "--mode" => args.mode = Some(rest.next()?.clone()),
+                    "-v" | "--variant" => args.variant = Some(rest.next()?.clone()),
+                    "-r" | "--random" => args.random = true,
+                    "--notify" => args.notify = true,
+                    _ => return None,
+                }
+            }
+            Some(Command::SchemeSet(args))
         }
         _ => None,
     }

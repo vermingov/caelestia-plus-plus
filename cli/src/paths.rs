@@ -107,3 +107,48 @@ pub fn scheme_cache_dir() -> PathBuf {
 pub fn wallpaper_thumbnail_path() -> PathBuf {
     caelestia_state_dir().join("wallpaper/thumbnail.jpg")
 }
+
+pub fn data_dir() -> PathBuf {
+    env_dir("XDG_DATA_HOME", ".local/share")
+}
+
+/// The templates the theme layer fills in: one per application it themes.
+/// They belong to the installed CLI package, so a template fix reaches us the
+/// moment the package updates.
+pub fn templates_dir() -> Option<PathBuf> {
+    let dir = python_package_dir()?.join("data/templates");
+    dir.is_dir().then_some(dir)
+}
+
+/// Templates the user dropped in themselves, rendered alongside ours.
+pub fn user_templates_dir() -> PathBuf {
+    caelestia_config_dir().join("templates")
+}
+
+/// Where rendered user templates land.
+pub fn theme_dir() -> PathBuf {
+    caelestia_state_dir().join("theme")
+}
+
+/// Write-then-rename, so a reader never sees half a theme file.
+pub fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("theme"),
+        std::process::id()
+    ));
+    let result = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}

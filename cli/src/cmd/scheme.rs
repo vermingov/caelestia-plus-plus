@@ -125,3 +125,70 @@ fn current_modes() -> Vec<String> {
         None => Vec::new(),
     }
 }
+
+pub struct SetArgs {
+    pub name: Option<String>,
+    pub flavour: Option<String>,
+    pub mode: Option<String>,
+    pub variant: Option<String>,
+    pub random: bool,
+    pub notify: bool,
+}
+
+impl SetArgs {
+    pub fn any(&self) -> bool {
+        self.random
+            || self.name.is_some()
+            || self.flavour.is_some()
+            || self.mode.is_some()
+            || self.variant.is_some()
+    }
+}
+
+/// Changes the scheme and pushes the new colours out to everything themed.
+pub fn set(args: &SetArgs) -> i32 {
+    if !args.any() {
+        println!("No args given. Use --name, --flavour, --mode, --variant or --random to set a scheme");
+        return 0;
+    }
+
+    let mut scheme = match scheme::Scheme::load() {
+        Ok(scheme) => scheme,
+        Err(e) => return fail(&e, args.notify, "Unable to set scheme"),
+    };
+
+    let outcome = if args.random {
+        scheme.set_random()
+    } else {
+        // Name first: it decides which flavours and modes are even valid.
+        [
+            (args.name.as_deref(), 0),
+            (args.flavour.as_deref(), 1),
+            (args.mode.as_deref(), 2),
+            (args.variant.as_deref(), 3),
+        ]
+        .into_iter()
+        .filter_map(|(value, which)| value.map(|v| (v, which)))
+        .try_for_each(|(value, which)| match which {
+            0 => scheme.set_name(value),
+            1 => scheme.set_flavour(value),
+            2 => scheme.set_mode(value),
+            _ => scheme.set_variant(value),
+        })
+    };
+
+    if let Err(e) = outcome {
+        return fail(&e, args.notify, "Unable to set scheme");
+    }
+
+    crate::theme::apply_colours(&scheme.colours, &scheme.mode);
+    0
+}
+
+fn fail(message: &str, notify: bool, title: &str) -> i32 {
+    eprintln!("caelestia: {message}");
+    if notify {
+        crate::proc::notify(&["-u", "critical", title, message]);
+    }
+    1
+}
