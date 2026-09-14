@@ -6,30 +6,36 @@ import qs.services
 
 // The shell's glass material.
 //
-// The thing that makes Apple's Liquid Glass read as glass is that it *adds*
-// light. A dark scrim over a blur reads as a smoked panel; real glass lifts
-// what is behind it and catches a highlight along its rim. So this paints,
-// in order: a thin scrim that guarantees text contrast over a bright
-// backdrop, an illumination gradient that lifts the whole pane, a hairline
-// rim, and a specular streak where the light meets the top edge.
+// Apple's Liquid Glass reads as glass because it *adds* light and gathers it
+// at the edges. A dark scrim over a blur is a smoked panel, not glass — so
+// the scrim here defaults to nothing and the work is done by an illumination
+// layer that lifts the blurred backdrop, a lensing band where light collects
+// along the top and bottom edges, a bright rim, and a specular streak.
 //
-// Total fill alpha must stay above the compositor's ignore_alpha cutoff (see
-// Colours.reloadHyprRules) or Hyprland stops blurring behind it and the
-// frost vanishes entirely.
+// The trade this makes: the brighter and clearer the pane, the harder light
+// text is to read over a busy backdrop. All three amounts come from
+// ShellPrefs and hot-reload, so the balance can be dialled per wallpaper
+// without touching this file.
 StyledClippingRect {
     id: root
 
-    // Defaults come from ShellPrefs so the mix can be dialled live, without
-    // a restart, in ~/.local/state/caelestia/prefs.json
+    // Brightness of the rim and the specular streak.
     property real rim: ShellPrefs.glassRim
+
+    // Lifts the blurred backdrop. This is what makes the pane read as glass
+    // rather than as a darker rectangle.
     property real lift: ShellPrefs.glassLift
+
+    // Optional darkening under the lift, for legibility over bright
+    // backdrops. Zero by default: it is the thing that makes glass look
+    // like smoked plastic.
     property real scrim: ShellPrefs.glassScrim
 
     property bool shadow: true
 
-    // Only enough scrim to keep light text legible over a bright backdrop;
-    // the illumination below does the visual work
-    color: Qt.alpha(Colours.palette.m3surfaceContainerLowest, root.scrim)
+    readonly property color light: Colours.palette.m3onSurface
+
+    color: root.scrim > 0 ? Qt.alpha(Colours.palette.m3surfaceContainerLowest, root.scrim) : "transparent"
     radius: Tokens.rounding.extraLarge
 
     Elevation {
@@ -40,8 +46,8 @@ StyledClippingRect {
         visible: root.shadow
     }
 
-    // Illumination: brightest where the light lands, falling off down the
-    // pane so the surface has direction instead of reading as flat film
+    // Illumination: an even lift across the pane, strongest where the light
+    // lands so the surface has a direction
     Rectangle {
         anchors.fill: parent
         radius: root.radius
@@ -51,15 +57,43 @@ StyledClippingRect {
 
             GradientStop {
                 position: 0
-                color: Qt.alpha(Colours.palette.m3onSurface, root.lift * 1.35)
+                color: Qt.alpha(root.light, root.lift * 1.2)
             }
             GradientStop {
-                position: 0.55
-                color: Qt.alpha(Colours.palette.m3onSurface, root.lift * 0.7)
+                position: 0.5
+                color: Qt.alpha(root.light, root.lift * 0.75)
             }
             GradientStop {
                 position: 1
-                color: Qt.alpha(Colours.palette.m3onSurface, root.lift * 0.5)
+                color: Qt.alpha(root.light, root.lift)
+            }
+        }
+    }
+
+    // Lensing: light collecting along the top and bottom edges and falling
+    // away through the middle, which is the cue that the pane has thickness
+    Rectangle {
+        anchors.fill: parent
+        radius: root.radius
+
+        gradient: Gradient {
+            orientation: Gradient.Vertical
+
+            GradientStop {
+                position: 0
+                color: Qt.alpha(root.light, 0.22 * root.rim)
+            }
+            GradientStop {
+                position: 0.12
+                color: "transparent"
+            }
+            GradientStop {
+                position: 0.88
+                color: "transparent"
+            }
+            GradientStop {
+                position: 1
+                color: Qt.alpha(root.light, 0.16 * root.rim)
             }
         }
     }
@@ -71,7 +105,7 @@ StyledClippingRect {
         radius: root.radius
         color: "transparent"
         border.width: 1
-        border.color: Qt.alpha(Colours.palette.m3onSurface, 0.22 * root.rim)
+        border.color: Qt.alpha(root.light, 0.35 * root.rim)
     }
 
     // Specular streak just inside the top edge, fading before the corners so
@@ -95,7 +129,7 @@ StyledClippingRect {
             }
             GradientStop {
                 position: 0.5
-                color: Qt.alpha(Colours.palette.m3onSurface, 0.5 * root.rim)
+                color: Qt.alpha(root.light, 0.6 * root.rim)
             }
             GradientStop {
                 position: 1
