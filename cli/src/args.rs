@@ -270,6 +270,10 @@ mod tests {
             vec!["scheme", "get", "-nfv"],
             vec!["scheme", "list"],
             vec!["scheme", "list", "-n"],
+            vec!["scheme", "set", "-n", "catppuccin"],
+            vec!["scheme", "set", "-n", "dynamic", "-f", "hard", "-m", "dark", "-v", "vibrant"],
+            vec!["scheme", "set", "-r"],
+            vec!["scheme", "set", "--notify", "--mode", "light"],
         ] {
             assert!(is_ours(&words), "{words:?} should not need the Python CLI");
         }
@@ -278,7 +282,8 @@ mod tests {
     #[test]
     fn anything_unknown_goes_to_the_python_cli() {
         for words in [
-            vec!["scheme", "set", "-n", "catppuccin"],
+            vec!["scheme", "set", "--what"],
+            vec!["scheme", "set", "-n"],  // the name is missing
             vec!["scheme", "get"],
             vec!["scheme", "get", "--colours"],
             vec!["wallpaper", "-f", "/tmp/x.png"],
