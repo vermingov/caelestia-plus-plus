@@ -52,23 +52,60 @@ else
     $aur -S --needed --asdeps --noconfirm $missing
 fi
 
-# Old caelestia packages our replacements don't declare conflicts against
-# (plain caelestia-shell/meta) must go first; the window between removal and
-# install is guarded so an abort tells the user how to recover. quickshell's
-# swap needs no removal — the ++ package declares the conflict and --ask
-# resolves it inside one atomic, rollback-safe transaction.
-old_pkgs=$(pacman -Qq 2>/dev/null | grep -E '^caelestia-(shell|shell-git|cli|meta)$' || true)
-if [[ -n $old_pkgs ]]; then
-    echo ":: replacing regular caelestia packages:" $old_pkgs
+# A regular caelestia install owns the same paths we do — upstream's shell
+# puts its QML plugins in /usr/lib/qt6/qml/Caelestia and its config in
+# /etc/xdg/quickshell/caelestia — so it comes out first, whatever flavour it
+# is. The ++ packages only declare conflicts against the -git names, and a
+# file conflict mid-transaction is an abort, not a question.
+#
+# Only the shell and the CLI are swept up. Add-ons that merely sit alongside
+# (the SDDM themes, caelestia-gif, caelestia-rgb-sync) share no files with us
+# and are none of our business.
+old_pkgs=$(pacman -Qq 2>/dev/null \
+    | grep -E '^caelestia-(shell|cli)(-[a-z0-9.]+)*$|^caelestia-meta$' || true)
+# Ours provides quickshell and conflicts with quickshell/quickshell-git, but a
+# third-party build under any other name would surface as a file conflict.
+old_qs=$(pacman -Qq 2>/dev/null | grep -E '^quickshell' || true)
+doomed=$(printf '%s\n%s\n' "$old_pkgs" "$old_qs" | { grep -v '^$' || true; } | sort -u)
+
+if [[ -n $doomed ]]; then
+    echo ":: replacing the existing caelestia install:" $doomed
     trap 'echo "!! aborted mid-swap: caelestia packages were removed but not yet replaced."
           echo "!! rerun this installer to finish (dependencies are fine; skip orphan cleanup until then)."' ERR
+    # -Rdd: their dependents are the very packages we are about to install
     # shellcheck disable=SC2086
-    sudo pacman -Rdd --noconfirm $old_pkgs
+    sudo pacman -Rdd --noconfirm $doomed
+fi
+
+# An upstream shell installed by hand (cmake --install, no package) leaves
+# files pacman never hears about. They would shadow nothing — our checkout in
+# ~/.config wins the search order — but they are stale the moment we land, so
+# they go aside rather than linger as a second, older shell on the system.
+if [[ -d /etc/xdg/quickshell/caelestia ]] && ! pacman -Qo /etc/xdg/quickshell/caelestia >/dev/null 2>&1; then
+    stray_backup=/etc/xdg/quickshell/caelestia.pre-caelestia++-$(date +%Y%m%d-%H%M%S)
+    echo ":: unpackaged caelestia shell found in /etc/xdg — moving it to $stray_backup"
+    sudo mv /etc/xdg/quickshell/caelestia "$stray_backup"
 fi
 
 echo ":: installing Caelestia++ packages"
 # --ask=22 auto-answers conflict/replace removals inside the -U transaction
-sudo pacman -U --noconfirm --ask=22 "$tmp"/*.pkg.tar.zst
+install_log=$tmp/pacman-install.log
+if ! sudo pacman -U --noconfirm --ask=22 "$tmp"/*.pkg.tar.zst 2>&1 | tee "$install_log"; then
+    if grep -q 'exists in filesystem' "$install_log"; then
+        # Files nobody owns are left over from an install that bypassed
+        # pacman. Overwrite exactly the paths a caelestia owns and nothing
+        # else — never a blanket --overwrite '*'.
+        echo ":: leftover caelestia files own some of our paths — replacing just those"
+        sudo pacman -U --noconfirm --ask=22 --overwrite \
+            '/usr/bin/caelestia*,/usr/bin/quickshell,/usr/lib/caelestia/*,/usr/lib/quickshell/*,/usr/lib/qt6/qml/Caelestia/*,/usr/lib/python*/site-packages/caelestia/*,/usr/share/fish/vendor_completions.d/caelestia.fish,/etc/xdg/quickshell/caelestia/*' \
+            "$tmp"/*.pkg.tar.zst
+    else
+        die_msg=$(tail -3 "$install_log")
+        echo "!! installing the packages failed:" >&2
+        echo "$die_msg" >&2
+        exit 1
+    fi
+fi
 trap 'rm -rf "$tmp"' EXIT ERR
 
 if ! grep -q '^IgnorePkg.*caelestia++' /etc/pacman.conf; then
@@ -149,6 +186,15 @@ case ":$PATH:" in
     *":$HOME/.local/bin:"*) ;;
     *) echo "WARN: $HOME/.local/bin is not on your PATH — 'cae' will not be found until it is" ;;
 esac
+
+# The CLI behind every keybind is Rust in front of the packaged Python one:
+# it answers the hot subcommands itself in about 2 ms instead of 110 ms and
+# hands everything else over untouched. ~/.local/bin precedes /usr/bin, so
+# installing there shadows the packaged CLI without touching it, and
+# cli/install.sh --uninstall puts it back.
+if [[ -x $SHELL_DIR/cli/install.sh ]] && command -v cargo >/dev/null; then
+    "$SHELL_DIR/cli/install.sh" || echo "WARN: the fast CLI did not build — the Python one stays in charge"
+fi
 
 # hallucinate (AI-dreamed one-shot apps) is a user-level script too; Tkinter
 # (the tk package) is its only extra dependency.

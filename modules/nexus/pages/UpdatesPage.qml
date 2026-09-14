@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import Quickshell
 import Caelestia
 import Caelestia.Config
 import qs.components
@@ -56,7 +57,7 @@ PageBase {
                         if (ShellUpdates.lastError)
                             return ShellUpdates.lastError;
                         if (ShellUpdates.updateAvailable)
-                            return qsTr("%n update(s) available", "", ShellUpdates.commitsBehind);
+                            return qsTr("%1 is available").arg(ShellUpdates.latestRelease || qsTr("A new release"));
                         return qsTr("Caelestia++ is up to date");
                     }
                     font: Tokens.font.title.large
@@ -101,10 +102,10 @@ PageBase {
             }
         }
 
-        // Incoming commits
+        // What the pending release contains
         SectionHeader {
             visible: ShellUpdates.updateAvailable
-            text: qsTr("What's new")
+            text: ShellUpdates.latestRelease ? qsTr("What's new in %1").arg(ShellUpdates.latestRelease) : qsTr("What's new")
         }
 
         Repeater {
@@ -159,9 +160,68 @@ PageBase {
         }
 
         InfoRow {
+            label: qsTr("Release")
+            value: ShellUpdates.latestRelease && !ShellUpdates.updateAvailable ? ShellUpdates.latestRelease : qsTr("between releases")
+        }
+
+        InfoRow {
             last: true
             label: qsTr("Revision")
             value: ShellUpdates.headCommit || "…"
+        }
+
+        // Back to upstream
+        SectionHeader {
+            text: qsTr("Switch back")
+        }
+
+        ConnectedRect {
+            Layout.fillWidth: true
+            first: true
+            last: true
+            implicitHeight: revertRow.implicitHeight + Tokens.padding.medium * 2
+
+            RowLayout {
+                id: revertRow
+
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: Tokens.padding.largeIncreased
+                anchors.rightMargin: Tokens.padding.largeIncreased
+                spacing: Tokens.spacing.medium
+
+                Column {
+                    Layout.fillWidth: true
+                    spacing: 0
+
+                    StyledText {
+                        text: qsTr("Back to regular caelestia")
+                        font: Tokens.font.body.large
+                    }
+
+                    StyledText {
+                        width: parent.width
+                        text: qsTr("Swaps the packages for upstream's and removes the privileged halves. Settings, schemes, wallpapers and saved rules stay; this checkout is moved aside, not deleted.")
+                        color: Colours.palette.m3onSurfaceVariant
+                        font: Tokens.font.body.small
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                IconTextButton {
+                    icon: "undo"
+                    text: qsTr("Revert")
+                    font: Tokens.font.body.large
+                    isRound: true
+                    shapeMorph: true
+                    type: IconTextButton.Tonal
+                    // In a terminal on purpose: it prints what it is about to
+                    // do, asks you to type `revert`, and the AUR helper wants
+                    // a password. All three need somewhere to be typed.
+                    onClicked: Quickshell.execDetached([...GlobalConfig.general.apps.terminal, "fish", "-C", "exec cae revert"])
+                }
+            }
         }
     }
 }

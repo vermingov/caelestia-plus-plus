@@ -6,6 +6,7 @@
 #   cae status       what is installed and what is behind
 #   cae doctor       full diagnosis (doctor.sh)
 #   cae log          follow the running shell's log
+#   cae revert       put the machine back on upstream caelestia
 #
 # Everything that needs root is collected first and applied in a single sudo
 # call, so you are asked for your password once or not at all. The shell is
@@ -113,23 +114,47 @@ restart_shell() {
 # --- pieces of an update ----------------------------------------------------
 
 # Fast-forward the checkout, leaving the commit it was on in PREVIOUS_HEAD
+# The newest published release, by version order. Tags rather than the
+# releases API: no rate limit, no token, and a private repo still answers
+# through the user's own git credentials.
+latest_release_tag() {
+    git -C "$SHELL_DIR" tag --list 'v*' --sort=-v:refname | head -1
+}
+
+# The release the checkout is sitting on, or empty when it is between releases.
+current_release_tag() {
+    git -C "$SHELL_DIR" describe --tags --exact-match HEAD 2>/dev/null || true
+}
+
 pull_checkout() {
-    local behind
+    local behind tag target
     PREVIOUS_HEAD=$(git -C "$SHELL_DIR" rev-parse HEAD)
 
-    if ! git -C "$SHELL_DIR" fetch --quiet origin main 2>/dev/null; then
+    if ! git -C "$SHELL_DIR" fetch --quiet --tags --prune --prune-tags origin main 2>/dev/null; then
         warn "could not reach GitHub; keeping the current checkout"
         return 0
     fi
 
-    behind=$(git -C "$SHELL_DIR" rev-list --count HEAD..origin/main)
+    # Releases, not commits: the checkout only ever moves to a tag someone
+    # published on purpose, never to whatever happens to be on main.
+    tag=$(latest_release_tag)
+    if [[ -z $tag ]]; then
+        step "no published release yet; leaving the checkout where it is"
+        return 0
+    fi
+    target=$(git -C "$SHELL_DIR" rev-parse --verify "$tag^{commit}" 2>/dev/null) || {
+        warn "release $tag does not resolve to a commit; leaving the checkout alone"
+        return 0
+    }
+
+    behind=$(git -C "$SHELL_DIR" rev-list --count "HEAD..$target")
     if [[ $behind == 0 ]]; then
-        step "shell checkout already current"
-    elif git -C "$SHELL_DIR" merge --ff-only origin/main >/dev/null 2>&1; then
-        step "pulled $behind new commit(s):"
+        step "shell checkout already on the latest release${tag:+ ($tag)}"
+    elif git -C "$SHELL_DIR" merge --ff-only "$target" >/dev/null 2>&1; then
+        step "updated to $tag ($behind new commit(s)):"
         git -C "$SHELL_DIR" log --format="       %h %s" "$PREVIOUS_HEAD"..HEAD | head -10
     else
-        warn "cannot fast-forward the checkout (local changes?); leaving it alone"
+        warn "cannot fast-forward to $tag (local changes?); leaving the checkout alone"
     fi
 }
 
@@ -240,6 +265,18 @@ cmd_update() {
 
     run_root_actions
 
+    # The fast CLI is a user-level binary built from this checkout, so a pull
+    # that changes it leaves the installed one stale. Cargo is incremental:
+    # with nothing to do this costs a tenth of a second.
+    if [[ -x $SHELL_DIR/cli/install.sh ]] && command -v cargo >/dev/null; then
+        say "checking the fast CLI"
+        if "$SHELL_DIR/cli/install.sh" >/dev/null 2>&1; then
+            step "caelestia CLI current"
+        else
+            warn "the fast CLI did not build; the packaged Python one stays in charge"
+        fi
+    fi
+
     if quickshell_broken; then
         die "quickshell still cannot start; run 'qs --version' to see why. The shell was not restarted."
     fi
@@ -260,6 +297,95 @@ cmd_update() {
     die "the shell is not running. Start it by hand with: caelestia shell -d"
 }
 
+# Upstream's own packages. caelestia-shell pulls quickshell in itself.
+UPSTREAM_PKGS=(caelestia-shell caelestia-cli)
+
+# Put the machine back on regular caelestia. Everything the fork added goes;
+# everything the user made — schemes, wallpapers, saved rules, settings —
+# stays exactly where it is.
+cmd_revert() {
+    local yes=0 answer aur="" helper name dir file backup
+    [[ ${1:-} == --yes || ${1:-} == -y ]] && yes=1
+
+    say "reverting to upstream caelestia"
+    cat <<EOF
+     packages   ${PACKAGES[*]}
+                -> ${UPSTREAM_PKGS[*]} from the AUR
+     privileged halves (firewall, protection) are uninstalled
+     this checkout is moved aside, not deleted
+     the cae / sandrunner / hallucinate links and the fast CLI are removed
+
+     Settings, schemes, wallpapers and saved firewall rules are left alone.
+EOF
+
+    # The way back in has to exist before anything is taken out.
+    for helper in paru yay; do
+        command -v "$helper" >/dev/null && { aur=$helper; break; }
+    done
+    [[ -n $aur ]] || die "no AUR helper (paru or yay) found, and upstream caelestia lives in the AUR"
+
+    if (( ! yes )); then
+        [[ -t 0 ]] || die "not a terminal; run 'cae revert --yes' to skip the confirmation"
+        read -rp "     type 'revert' to go ahead: " answer
+        [[ $answer == revert ]] || die "nothing was changed"
+    fi
+
+    # Cached ++ packages are what makes the rollback below real.
+    local rollback=()
+    for name in "${PACKAGES[@]}"; do
+        file=$(ls -1t "$PKG_CACHE/$name"-*.pkg.tar.zst 2>/dev/null | head -1 || true)
+        [[ -n $file ]] && rollback+=("$file")
+    done
+    (( ${#rollback[@]} == ${#PACKAGES[@]} )) || warn "not every ++ package is cached; a failed revert may need the installer to put things back"
+
+    say "removing the Caelestia++ half"
+    for dir in "$SHELL_DIR"/system/*/; do
+        [[ -f ${dir}uninstall.sh ]] || continue
+        name=$(basename "$dir")
+        [[ -f /etc/caelestia/$name.version ]] || continue
+        step "uninstalling the $name privileged half"
+        queue_root "bash '${dir}uninstall.sh' || true"
+    done
+    queue_root "sed -i '/^IgnorePkg.*caelestia++/d' /etc/pacman.conf"
+    queue_root "pacman -Rdd --noconfirm ${PACKAGES[*]} || true"
+    run_root_actions
+
+    say "installing upstream caelestia"
+    if ! "$aur" -S --needed --noconfirm "${UPSTREAM_PKGS[@]}"; then
+        warn "the upstream install failed — putting Caelestia++ back"
+        if (( ${#rollback[@]} )); then
+            sudo pacman -U --noconfirm --ask=22 "${rollback[@]}" \
+                && die "restored Caelestia++; nothing else was changed" \
+                || die "could not restore the packages either — rerun the Caelestia++ installer"
+        fi
+        die "nothing to restore from; rerun the Caelestia++ installer"
+    fi
+
+    say "removing the user-level bits"
+    if [[ -x $SHELL_DIR/cli/install.sh ]]; then
+        "$SHELL_DIR/cli/install.sh" --uninstall >/dev/null 2>&1 || true
+        step "fast CLI removed"
+    fi
+    for name in cae sandrunner hallucinate; do
+        if [[ -L $HOME/.local/bin/$name ]]; then
+            rm -f "$HOME/.local/bin/$name"
+            step "removed ~/.local/bin/$name"
+        fi
+    done
+
+    # Last, because upstream ships its shell inside the package and a config
+    # directory of the same name here would shadow it.
+    backup="$SHELL_DIR.caelestia++-backup-$(date +%Y%m%d-%H%M%S)"
+    mv "$SHELL_DIR" "$backup"
+    step "checkout moved to $backup"
+
+    say "restarting the shell"
+    pkill -x qs 2>/dev/null || true
+    sleep 1
+    setsid -f caelestia shell -d >/dev/null 2>&1 || warn "start it yourself with: caelestia shell -d"
+    ok "back on upstream caelestia — Caelestia++ is kept at $backup"
+}
+
 cmd_restart() {
     say "restarting the shell"
     restart_shell
@@ -269,10 +395,21 @@ cmd_status() {
     local name installed
     say "checkout"
     printf '     %s\n' "$(git -C "$SHELL_DIR" log -1 --format='%h %ad %s' --date=short | cut -c1-72)"
-    if git -C "$SHELL_DIR" fetch --quiet origin main 2>/dev/null; then
-        local behind
-        behind=$(git -C "$SHELL_DIR" rev-list --count HEAD..origin/main)
-        [[ $behind == 0 ]] && ok "current with origin/main" || warn "$behind commit(s) behind origin/main"
+    if git -C "$SHELL_DIR" fetch --quiet --tags --prune --prune-tags origin main 2>/dev/null; then
+        local tag target behind here
+        tag=$(latest_release_tag)
+        here=$(current_release_tag)
+        if [[ -z $tag ]]; then
+            warn "no published release yet"
+        else
+            target=$(git -C "$SHELL_DIR" rev-parse --verify "$tag^{commit}")
+            behind=$(git -C "$SHELL_DIR" rev-list --count "HEAD..$target")
+            if [[ $behind == 0 ]]; then
+                ok "on the latest release${here:+ ($here)}"
+            else
+                warn "release $tag is out, $behind commit(s) ahead of this checkout"
+            fi
+        fi
     fi
 
     say "packages"
@@ -329,6 +466,7 @@ case ${1:-update} in
     status)     cmd_status ;;
     doctor)     shift; cmd_doctor "$@" ;;
     log)        cmd_log ;;
+    revert)     shift; cmd_revert "$@" ;;
     -h|--help|help)
         sed -n '2,10p' "$0" | sed 's/^# \?//'
         ;;

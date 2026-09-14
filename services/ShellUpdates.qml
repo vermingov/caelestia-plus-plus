@@ -6,14 +6,22 @@ import Quickshell.Io
 import qs.services
 
 // Update channel for the Caelestia++ fork: compares the running shell's
-// checkout against origin/main on GitHub and can fast-forward + restart.
-// The shell dir is a plain git clone, so "update" is just a pull — package
+// checkout against the latest *release* and can fast-forward + restart.
+//
+// Releases, not commits. Tracking origin/main meant every push landed on
+// every machine the moment it was made, including the half-finished ones;
+// now the checkout only ever moves to a tag someone published on purpose.
+// Tags are read with git rather than the releases API: no rate limit, no
+// token, and a private repo still works through the user's own credentials.
+//
+// The shell dir is a plain git clone, so "update" is a fast-forward — package
 // files (plugin, CLI) are versioned separately and unaffected.
 Singleton {
     id: root
 
     readonly property string repoDir: Quickshell.shellDir
-    readonly property string remoteBranch: "origin/main"
+    // Release tags look like v2.1.0; the newest by version order wins.
+    readonly property string releaseTagGlob: "v*"
     // The only remote we will ever fast-forward from, and it must be HTTPS.
     // update() refuses to pull if origin has been repointed or downgraded, so a
     // local attacker can't swap in a malicious repo. Drop an allowed-signers
@@ -25,6 +33,8 @@ Singleton {
     property bool updating
     property int commitsBehind
     property string headCommit
+    // Tag of the newest published release, empty when the repo has none yet
+    property string latestRelease
     property list<string> changelog
     property string lastChecked
     property string lastError
@@ -65,17 +75,23 @@ Singleton {
         id: checkProc
 
         command: ["sh", "-c", `cd '${root.repoDir}' || exit 1
-            git fetch --quiet origin main || exit 2
+            git fetch --quiet --tags --prune --prune-tags origin || exit 2
+            tag=$(git tag --list '${root.releaseTagGlob}' --sort=-v:refname | head -1)
             echo "@head $(git rev-parse --short HEAD)"
-            echo "@behind $(git rev-list --count HEAD..${root.remoteBranch})"
-            git log --format=%s "HEAD..${root.remoteBranch}"`]
+            [ -n "$tag" ] || { echo "@behind 0"; exit 0; }
+            target=$(git rev-parse --verify "$tag^{commit}") || exit 2
+            echo "@tag $tag"
+            echo "@behind $(git rev-list --count HEAD.."$target")"
+            git log --format=%s "HEAD..$target"`]
 
         stdout: StdioCollector {
             onStreamFinished: {
                 const lines = text.trim().split("\n").filter(l => l);
                 const head = lines.find(l => l.startsWith("@head "));
+                const tag = lines.find(l => l.startsWith("@tag "));
                 const behind = lines.find(l => l.startsWith("@behind "));
                 root.headCommit = head ? head.slice(6) : "";
+                root.latestRelease = tag ? tag.slice(5) : "";
                 root.commitsBehind = behind ? parseInt(behind.slice(8)) || 0 : 0;
                 root.changelog = lines.filter(l => !l.startsWith("@"));
             }
@@ -93,7 +109,7 @@ Singleton {
             else if (wasStartup && root.autoUpdate && root.updateAvailable) {
                 // Apply on startup so users are always current without lifting
                 // a finger; the shell restarts once into the new version.
-                Toaster.toast(qsTr("Updating Caelestia++"), qsTr("%1 new change(s) — applying and restarting").arg(root.commitsBehind), "update");
+                Toaster.toast(qsTr("Updating Caelestia++"), qsTr("%1 released — applying and restarting").arg(root.latestRelease || qsTr("A new version")), "update");
                 root.update();
             }
         }
@@ -107,8 +123,10 @@ cd '${root.repoDir}'
 url=$(git remote get-url origin) || exit 3
 [ "$url" = '${root.expectedRemote}' ] || { echo "REMOTE_MISMATCH:$url"; exit 4; }
 case "$url" in https://*) ;; *) echo INSECURE_REMOTE; exit 5 ;; esac
-git fetch --quiet origin main || exit 2
-newtip=$(git rev-parse --verify origin/main) || exit 2
+git fetch --quiet --tags --prune --prune-tags origin || exit 2
+tag=$(git tag --list '${root.releaseTagGlob}' --sort=-v:refname | head -1)
+[ -n "$tag" ] || { echo NO_RELEASE; exit 9; }
+newtip=$(git rev-parse --verify "$tag^{commit}") || exit 2
 signers="$HOME/.config/caelestia/update-allowed-signers"
 if [ -f "$signers" ]; then
     git -c gpg.ssh.allowedSignersFile="$signers" verify-commit "$newtip" 2>/dev/null || { echo BAD_SIGNATURE; exit 6; }
@@ -126,6 +144,7 @@ qs --version >/dev/null 2>&1 || { echo QS_BROKEN; exit 8; }`]
                     code === 6 ? qsTr("Update blocked: the new commit is not signed by a trusted key") :
                     code === 2 ? qsTr("Could not reach the update server") :
                     code === 8 ? qsTr("Updated, but quickshell can no longer start against this Qt — rebuild it from System check before restarting") :
+                    code === 9 ? qsTr("No published release to update to") :
                     qsTr("Update failed — local changes may conflict");
                 return;
             }
