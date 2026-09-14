@@ -26,7 +26,8 @@ Singleton {
     // tool -> the script that does the same job
     readonly property var scripts: ({
             gpus: "list-gpus.py",
-            startup: "startup-ctl.py"
+            startup: "startup-ctl.py",
+            "egg-watch": "penis-egg-watch.py"
         })
 
     // The command to run `tool`, with `args` appended.

@@ -58,13 +58,6 @@ sr_link=missing
 case ":$PATH:" in *":$HOME/.local/bin:"*) sr_path=ok ;; *) sr_path=missing ;; esac
 echo "sandrunner|$sr_link|$sr_path"
 
-# hallucinate: same user-level symlink model. Tk (python-tkinter native lib)
-# is its only extra dependency; probe it by importing tkinter.
-hl_link=missing
-[ "$(readlink -f "$HOME/.local/bin/hallucinate" 2>/dev/null)" = "$(readlink -f "$SHELLDIR/system/hallucinate/hallucinate")" ] && hl_link=ok
-python3 -c "import tkinter" >/dev/null 2>&1 && hl_tk=ok || hl_tk=missing
-echo "hallucinate|$hl_link|$hl_tk"
-
 # Bar entry ids from the user config, for typo detection shell-side
 for c in "$HOME/.config/caelestia/"*.json; do
     [ -e "$c" ] || continue

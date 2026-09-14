@@ -24,6 +24,7 @@ fn main() {
     let code = match command {
         "gpus" => cmd::gpus::run(),
         "startup" => cmd::startup::run(rest),
+        "egg-watch" => cmd::egg::run(rest),
         "-h" | "--help" | "help" => {
             usage();
             0

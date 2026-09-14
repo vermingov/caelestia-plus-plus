@@ -316,7 +316,7 @@ cmd_revert() {
                 -> ${UPSTREAM_PKGS[*]} from the AUR
      privileged halves (firewall, protection) are uninstalled
      this checkout is moved aside, not deleted
-     the cae / sandrunner / hallucinate links and the fast CLI are removed
+     the cae and sandrunner links and the Rust binaries are removed
 
      Settings, schemes, wallpapers and saved firewall rules are left alone.
 EOF
@@ -369,7 +369,7 @@ EOF
         "$SHELL_DIR/cli/install.sh" --uninstall >/dev/null 2>&1 || true
         step "fast CLI removed"
     fi
-    for name in cae sandrunner hallucinate; do
+    for name in cae sandrunner; do
         if [[ -L $HOME/.local/bin/$name ]]; then
             rm -f "$HOME/.local/bin/$name"
             step "removed ~/.local/bin/$name"

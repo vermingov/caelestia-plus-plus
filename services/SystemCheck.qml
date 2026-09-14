@@ -330,19 +330,6 @@ Singleton {
             push("sandrunner", qsTr("sandrunner on PATH after next login"), qsTr("~/.local/bin was added to your login shell's profile automatically — open a new terminal (or re-login) and `sandrunner` works"), "info");
         else
             push("sandrunner", qsTr("sandrunner installed"), qsTr("Full-simulation sandbox available as `sandrunner FILE`"), "ok");
-        // hallucinate: same user-level symlink model. Its one extra dep (tk)
-        // rides a prompt row so a missing Tk raises the startup SetupPrompt.
-        const [hlLink, hlTk] = flags.hallucinate ?? [];
-        if (hlLink !== "ok")
-            Quickshell.execDetached(["sh", "-c", `mkdir -p "$HOME/.local/bin" && ln -sf '${Quickshell.shellDir}/system/hallucinate/hallucinate' "$HOME/.local/bin/hallucinate"`]);
-        if (hlTk === "missing")
-            push("hallucinate", qsTr("hallucinate needs Tkinter"), qsTr("The AI-hallucinated app command needs the tk package to draw its window"), "warn", {
-                prompt: true,
-                fix: Object.assign({label: qsTr("Install"), pkg: "tk"}, _pacmanFix(qsTr("Installs the tk package (Tkinter's native library). Nothing is removed."), ["pacman -S --needed --noconfirm tk"]))
-            });
-        else
-            push("hallucinate", qsTr("hallucinate installed"), qsTr("AI-hallucinated one-shot apps via `hallucinate \"…\"`"), "ok");
-
         // shell.json has a dedicated doctor (assets/config-doctor.py): it
         // diagnoses against the runtime schema and its fix repairs the file
         // surgically — typos renamed, wrong types coerced or defaulted,

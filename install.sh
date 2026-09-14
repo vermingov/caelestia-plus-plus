@@ -202,14 +202,6 @@ if [[ -x $SHELL_DIR/tools/install.sh ]] && command -v cargo >/dev/null; then
     "$SHELL_DIR/tools/install.sh" || echo "WARN: the shell helpers did not build — the scripts stay in charge"
 fi
 
-# hallucinate (AI-dreamed one-shot apps) is a user-level script too; Tkinter
-# (the tk package) is its only extra dependency.
-if [[ -f $SHELL_DIR/system/hallucinate/hallucinate ]]; then
-    mkdir -p "$HOME/.local/bin"
-    ln -sf "$SHELL_DIR/system/hallucinate/hallucinate" "$HOME/.local/bin/hallucinate"
-    python3 -c "import tkinter" >/dev/null 2>&1 || sudo pacman -S --needed --noconfirm tk
-fi
-
 # Caelestia++ ships a full-info fastfetch config (DE row says Caelestia++).
 # Verify the source exists (stale checkout) and copy — never move — the
 # user's config aside so an abort can't lose it.

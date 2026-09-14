@@ -29,8 +29,8 @@ Scope {
     // this a no-op when another copy (e.g. a compositor autostart) already
     // runs. Needs /dev/input read access (input group) to do anything.
     Process {
-        running: true
-        command: ["python3", Quickshell.shellPath("assets/penis-egg-watch.py")]
+        running: Helpers.ready
+        command: Helpers.command("egg-watch")
     }
 
     SequentialAnimation {
