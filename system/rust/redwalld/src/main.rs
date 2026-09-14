@@ -20,20 +20,20 @@
 //! The failure mode on the other side is a machine with no working network.
 
 mod firewall;
-mod json;
 mod netlink;
 mod packet;
 mod proc;
-mod rules;
 mod ui;
 
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use redcommon::rules::{Rules, State};
+use redcommon::{info, ui_sock, warn};
+
 use firewall::Firewall;
 use netlink::Nfqueue;
-use rules::{Rules, State};
 
 const QUEUE_NUM: u16 = 0;
 const DEFAULT_SOCK: &str = "/run/redwall/ui.sock";
@@ -49,6 +49,10 @@ struct Args {
     rules: String,
     ui_gid: u32,
     simulate: bool,
+    /// Which NFQUEUE to bind. Only ever changed to try the netlink setup
+    /// against a queue number no ruleset feeds, which is how this is verified
+    /// without putting the machine's networking behind an untested daemon.
+    queue: u16,
 }
 
 fn parse_args() -> Args {
@@ -57,6 +61,7 @@ fn parse_args() -> Args {
         rules: DEFAULT_RULES.to_string(),
         ui_gid: 1000,
         simulate: false,
+        queue: QUEUE_NUM,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -75,6 +80,12 @@ fn parse_args() -> Args {
                     args.rules = v.clone();
                 }
             }
+            "--queue" => {
+                i += 1;
+                if let Some(v) = argv.get(i).and_then(|v| v.parse().ok()) {
+                    args.queue = v;
+                }
+            }
             "--ui-gid" => {
                 i += 1;
                 if let Some(v) = argv.get(i).and_then(|v| v.parse().ok()) {
@@ -89,7 +100,7 @@ fn parse_args() -> Args {
                 );
                 std::process::exit(0);
             }
-            other => eprintln!("[redwall] ignoring unknown argument {other}"),
+            other => warn!("ignoring unknown argument {other}"),
         }
         i += 1;
     }
@@ -97,6 +108,7 @@ fn parse_args() -> Args {
 }
 
 fn main() {
+    redcommon::log::set_tag("redwall");
     let args = parse_args();
 
     let state_path = std::path::Path::new(&args.rules)
@@ -107,11 +119,11 @@ fn main() {
     let queue = if args.simulate {
         None
     } else {
-        match Nfqueue::bind(QUEUE_NUM, QUEUE_MAX_LEN) {
+        match Nfqueue::bind(args.queue, QUEUE_MAX_LEN) {
             Ok(q) => Some(q),
             Err(e) => {
-                eprintln!("[redwall] cannot bind NFQUEUE {QUEUE_NUM}: {e}");
-                eprintln!("[redwall] needs CAP_NET_ADMIN; run under the systemd unit, or --simulate");
+                warn!("cannot bind NFQUEUE {}: {e}", args.queue);
+                warn!("needs CAP_NET_ADMIN; run under the systemd unit, or --simulate");
                 std::process::exit(1);
             }
         }
@@ -121,6 +133,7 @@ fn main() {
         queue,
         Rules::load(&args.rules),
         State::load(state_path),
+        args.simulate,
     ));
 
     if !args.simulate {
@@ -129,6 +142,14 @@ fn main() {
             .name("nfqueue".into())
             .spawn(move || packet_loop(fw_packets))
             .expect("cannot start the packet thread");
+    }
+
+    if args.simulate {
+        let fw_sim = Arc::clone(&fw);
+        thread::Builder::new()
+            .name("simulate".into())
+            .spawn(move || seed_simulated_connections(fw_sim))
+            .expect("cannot start the simulation");
     }
 
     let fw_reaper = Arc::clone(&fw);
@@ -140,16 +161,58 @@ fn main() {
         })
         .expect("cannot start the timeout reaper");
 
-    println!(
-        "[redwall] listening on {} (rules {}){}",
+    info!(
+        "queue {} bound, listening on {} (rules {}){}",
+        args.queue,
         args.sock,
         args.rules,
         if args.simulate { ", simulate mode" } else { "" }
     );
 
-    if let Err(e) = ui::serve(fw, &args.sock, args.ui_gid) {
-        eprintln!("[redwall] UI socket failed: {e}");
+    let clients = Arc::clone(&fw.clients);
+    if let Err(e) = ui_sock::serve(Arc::new(ui::Ui::new(fw)), clients, &args.sock, args.ui_gid) {
+        warn!("UI socket failed: {e}");
         std::process::exit(1);
+    }
+}
+
+/// A few connections for --simulate, once a UI is there to be prompted.
+fn seed_simulated_connections(fw: Arc<Firewall>) {
+    use redcommon::json;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !fw.clients.any_connected() {
+        if std::time::Instant::now() > deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    let samples = [
+        json::obj([
+            ("exe", json::s("/usr/lib/firefox/firefox")),
+            ("name", json::s("firefox")),
+            ("dst", json::s("34.117.65.55")),
+            ("port", json::n(443u32)),
+        ]),
+        json::obj([
+            ("exe", json::s("/usr/bin/Discord")),
+            ("name", json::s("Discord")),
+            ("dst", json::s("162.159.130.234")),
+            ("port", json::n(443u32)),
+        ]),
+        json::obj([
+            ("exe", json::s("/opt/some-telemetry/tracker")),
+            ("name", json::s("tracker")),
+            ("dst", json::s("8.8.8.8")),
+            ("port", json::n(4444u32)),
+            ("proto", json::s("udp")),
+        ]),
+    ];
+
+    for sample in samples {
+        fw.inject(&sample);
+        thread::sleep(Duration::from_millis(300));
     }
 }
 
@@ -162,7 +225,7 @@ fn packet_loop(fw: Arc<Firewall>) -> ! {
         let queued = match fw.recv_packets(&mut buf) {
             Ok(q) => q,
             Err(e) => {
-                eprintln!("[redwall] netlink receive failed: {e}");
+                warn!("netlink receive failed: {e}");
                 thread::sleep(Duration::from_millis(100));
                 continue;
             }

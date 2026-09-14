@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::time::{Duration, Instant};
 
+use redcommon::procfs;
+
 /// How long a socket table scan stays usable. Long enough to cover a burst of
 /// connections from one app, short enough that a pid reusing an inode number
 /// cannot be misattributed for any meaningful time.
@@ -43,32 +45,25 @@ impl Attributor {
     pub fn attribute(&mut self, proto: &str, sport: u16) -> Option<Attribution> {
         let inode = inode_for_local_port(proto, sport)?;
         let pid = self.pid_for_inode(inode)?;
-        let exe = fs::read_link(format!("/proc/{pid}/exe"))
-            .ok()?
-            .to_string_lossy()
-            .into_owned();
-        if exe.is_empty() {
-            return None;
-        }
-        let name = fs::read_to_string(format!("/proc/{pid}/comm"))
-            .map(|s| s.trim().to_string())
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                exe.rsplit('/').next().unwrap_or(&exe).to_string()
-            });
-        Some(Attribution { exe, name, pid })
+        let exe = procfs::exe(pid)?;
+        // comm is what the user recognises; the basename is the fallback for a
+        // process whose comm went away between the two reads.
+        let name = procfs::comm(pid)
+            .unwrap_or_else(|| procfs::file_name(&exe.path).to_string());
+        Some(Attribution {
+            exe: exe.path,
+            name,
+            pid,
+        })
     }
 
     fn pid_for_inode(&mut self, inode: u64) -> Option<u32> {
-        let fresh = self
-            .scanned_at
-            .is_some_and(|t| t.elapsed() < CACHE_TTL);
+        let fresh = self.scanned_at.is_some_and(|t| t.elapsed() < CACHE_TTL);
 
         if fresh {
             if let Some(&pid) = self.inode_to_pid.get(&inode) {
                 // Confirm the process is still there before trusting the cache
-                if fs::metadata(format!("/proc/{pid}")).is_ok() {
+                if procfs::is_alive(pid) {
                     return Some(pid);
                 }
             }
@@ -94,7 +89,7 @@ impl Attributor {
                     let Ok(target) = fs::read_link(fd.path()) else {
                         continue;
                     };
-                    if let Some(inode) = socket_inode(&target.to_string_lossy()) {
+                    if let Some(inode) = procfs::socket_inode(&target.to_string_lossy()) {
                         // First writer wins: a socket has one owning process,
                         // and a dup'd fd in a child resolves to the same inode
                         map.entry(inode).or_insert(pid);
@@ -110,15 +105,12 @@ impl Attributor {
     /// connections when an app is denied.
     pub fn ports_for_exe(&mut self, exe: &str) -> Vec<(String, u16)> {
         self.rescan();
-        let mut inodes = Vec::new();
-        for (&inode, &pid) in &self.inode_to_pid {
-            let Ok(link) = fs::read_link(format!("/proc/{pid}/exe")) else {
-                continue;
-            };
-            if link.to_string_lossy() == exe {
-                inodes.push(inode);
-            }
-        }
+        let inodes: Vec<u64> = self
+            .inode_to_pid
+            .iter()
+            .filter(|(_, &pid)| procfs::exe(pid).is_some_and(|e| e.path == exe))
+            .map(|(&inode, _)| inode)
+            .collect();
         if inodes.is_empty() {
             return Vec::new();
         }
@@ -126,13 +118,7 @@ impl Attributor {
         let mut out = Vec::new();
         for proto in ["tcp", "udp"] {
             for fam in [proto.to_string(), format!("{proto}6")] {
-                let Ok(text) = fs::read_to_string(format!("/proc/net/{fam}")) else {
-                    continue;
-                };
-                for line in text.lines().skip(1) {
-                    let Some((port, inode)) = parse_net_line(line) else {
-                        continue;
-                    };
+                for (port, inode) in procfs::net_sockets(&fam) {
                     if inodes.contains(&inode) {
                         out.push((proto.to_string(), port));
                     }
@@ -143,32 +129,13 @@ impl Attributor {
     }
 }
 
-fn socket_inode(link: &str) -> Option<u64> {
-    let rest = link.strip_prefix("socket:[")?;
-    rest.strip_suffix(']')?.parse().ok()
-}
-
-/// `/proc/net/*` rows are fixed-column; field 1 is `HEXADDR:HEXPORT` and
-/// field 9 is the socket inode.
-fn parse_net_line(line: &str) -> Option<(u16, u64)> {
-    let mut fields = line.split_ascii_whitespace();
-    let local = fields.nth(1)?;
-    let port = u16::from_str_radix(local.rsplit(':').next()?, 16).ok()?;
-    let inode = fields.nth(7)?.parse().ok()?;
-    Some((port, inode))
-}
-
 fn inode_for_local_port(proto: &str, sport: u16) -> Option<u64> {
     for fam in [proto.to_string(), format!("{proto}6")] {
-        let Ok(text) = fs::read_to_string(format!("/proc/net/{fam}")) else {
-            continue;
-        };
-        for line in text.lines().skip(1) {
-            if let Some((port, inode)) = parse_net_line(line) {
-                if port == sport {
-                    return Some(inode);
-                }
-            }
+        if let Some((_, inode)) = procfs::net_sockets(&fam)
+            .into_iter()
+            .find(|&(port, _)| port == sport)
+        {
+            return Some(inode);
         }
     }
     None
@@ -177,28 +144,6 @@ fn inode_for_local_port(proto: &str, sport: u16) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reads_a_socket_inode_link() {
-        assert_eq!(socket_inode("socket:[123456]"), Some(123456));
-        assert_eq!(socket_inode("/dev/null"), None);
-        assert_eq!(socket_inode("socket:[abc]"), None);
-    }
-
-    #[test]
-    fn parses_a_proc_net_row() {
-        let line = "   1: 0100007F:1F90 00000000:0000 0A 00000000:00000000 \
-                    00:00000000 00000000  1000        0 45678 1 0000000000000000 100 0 0 10 0";
-        let (port, inode) = parse_net_line(line).unwrap();
-        assert_eq!(port, 0x1F90); // 8080
-        assert_eq!(inode, 45678);
-    }
-
-    #[test]
-    fn survives_a_malformed_row() {
-        assert!(parse_net_line("").is_none());
-        assert!(parse_net_line("  1: garbage").is_none());
-    }
 
     /// Not a correctness test — run with
     ///   cargo test --release -- --ignored --nocapture bench
@@ -212,7 +157,10 @@ mod tests {
         let listeners: Vec<TcpListener> = (0..20)
             .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
             .collect();
-        let ports: Vec<u16> = listeners.iter().map(|l| l.local_addr().unwrap().port()).collect();
+        let ports: Vec<u16> = listeners
+            .iter()
+            .map(|l| l.local_addr().unwrap().port())
+            .collect();
 
         let mut att = Attributor::new();
         att.attribute("tcp", ports[0]); // warm the scan, as a live daemon would be
@@ -237,16 +185,36 @@ mod tests {
     }
 
     #[test]
-    fn finds_a_real_listening_socket_on_this_machine() {
+    fn attributes_a_socket_we_opened_to_ourselves() {
         // Attribution has to work against the live /proc, not just fixtures:
         // bind a port, then look it up the way the packet path does.
         use std::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let inode = inode_for_local_port("tcp", port).expect("socket missing from /proc/net");
         let mut att = Attributor::new();
-        let pid = att.pid_for_inode(inode).expect("no pid owns our own socket");
-        assert_eq!(pid, std::process::id());
+        let who = att.attribute("tcp", port).expect("no owner for our own socket");
+        assert_eq!(who.pid, std::process::id());
+        assert!(who.exe.contains("redwalld"), "our test binary: {}", who.exe);
+        assert!(!who.name.is_empty());
+    }
+
+    #[test]
+    fn an_unused_port_attributes_to_nobody() {
+        let mut att = Attributor::new();
+        // Bind and drop, so the port is real but the socket is gone.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        assert!(att.attribute("tcp", port).is_none());
+    }
+
+    #[test]
+    fn the_cache_survives_a_process_going_away() {
+        let mut att = Attributor::new();
+        att.rescan();
+        att.inode_to_pid.insert(u64::MAX, u32::MAX); // a pid that cannot exist
+        assert!(att.pid_for_inode(u64::MAX).is_none(), "rescan drops it");
     }
 }

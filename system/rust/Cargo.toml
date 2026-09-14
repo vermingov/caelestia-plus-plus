@@ -1,0 +1,18 @@
+# Both privileged daemons live here so they can share the pieces they had in
+# common: the JSON subset their UI protocol needs, the Unix-socket server the
+# bar talks to, and the /proc reads that identify a process.
+[workspace]
+resolver = "2"
+members = ["redcommon", "redwalld", "redguardd"]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

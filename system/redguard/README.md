@@ -41,11 +41,37 @@ exec()  ->  kernel netlink proc-connector (real time, no polling)
 ## Pieces
 
 ```
-redguardd.py        the daemon (pure Python stdlib: netlink + /proc + signals)
+../rust/redguardd   the daemon: proc connector, detections, freeze, UI socket
+../rust/redcommon   shared with redwall: JSON, UI socket, rule store, /proc
+redguardd.py        the Python daemon it replaces, kept as a fallback
 redguardd.service   systemd unit (root; runs at boot, Restart=on-failure)
-install.sh          one-time root setup (no compile/venv needed)
+install.sh          one-time root setup (builds the Rust daemon, falls back)
 uninstall.sh        full removal
 ```
+
+The daemon is Rust with no dependencies at all: the netlink proc connector,
+the `/proc` reads and the signals are written out. It sees every exec on the
+machine, so the pre-filter that decides "worth a closer look" runs constantly —
+that is not work for an interpreter, and a monitor that costs nothing is a
+monitor people leave switched on. Machines with no Rust toolchain still get the
+Python implementation; `install.sh` picks whichever it can build.
+
+## Test the UI without root
+
+```sh
+../rust/build.sh redguardd    # prints the binary path
+../rust/target/release/redguardd --simulate \
+    --sock /run/user/$UID/redguard-ui.sock \
+    --rules /run/user/$UID/redguard-rules.json --ui-gid $(id -g)
+```
+
+Simulate mode never opens the proc connector and never freezes anything. It
+seeds two synthetic detections once a UI connects, and takes more on demand:
+feed it `{"t":"simdetect","exe":"...","name":"...","kind":"reverse-shell"}`
+lines over the socket.
+
+The daemon's own tests cover the detections, the connector's parser and the
+freeze/release/kill paths against real processes: `cd ../rust && cargo test`.
 
 Shell side (ships with the config, no install):
 
@@ -62,8 +88,13 @@ modules/protection/ProtectionTab.qml     rules manager (in the security center)
   waiting for its operator, a dropper about to act — the freeze lands in time.
   It is not a substitute for not running untrusted code.
 - **Fails open.** If the bar UI is not connected there is no one to answer, so
-  a frozen process is released and logged rather than stuck forever.
-  Enforcement is therefore active only while the shell runs (it is the desktop).
+  a frozen process is released and logged rather than stuck forever — on
+  detection when no UI is attached, and again the moment the last UI
+  disconnects with something still frozen. Enforcement is therefore active only
+  while the shell runs (it is the desktop).
+- **Loud about being blind.** If the kernel refuses the exec stream (no
+  CAP_NET_ADMIN), the daemon exits instead of sitting there with a healthy
+  shield in the bar and nothing being watched.
 - **Freeze, never silent kill.** Unknown detections always ask. Only an
   explicit remembered "block" kills on sight.
 

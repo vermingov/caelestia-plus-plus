@@ -1,0 +1,10 @@
+[package]
+name = "redcommon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared pieces of the Caelestia++ privileged daemons"
+
+# No dependencies on purpose: these run as root on a hot path, and the JSON and
+# netlink they need are small enough to own outright.
+[dependencies]

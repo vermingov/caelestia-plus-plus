@@ -121,7 +121,7 @@ impl Nfqueue {
         body.push(0);
         body.extend_from_slice(&AF_INET.to_be_bytes());
         let msg = self.build(NFQNL_MSG_CONFIG, &[(NFQA_CFG_CMD, &body)]);
-        self.send(&msg)
+        self.send_checked(&msg)
     }
 
     fn config_params(&self, copy_range: u32, copy_mode: u8) -> io::Result<()> {
@@ -130,13 +130,13 @@ impl Nfqueue {
         body.extend_from_slice(&copy_range.to_be_bytes());
         body.push(copy_mode);
         let msg = self.build(NFQNL_MSG_CONFIG, &[(NFQA_CFG_PARAMS, &body)]);
-        self.send(&msg)
+        self.send_checked(&msg)
     }
 
     fn config_maxlen(&self, max_len: u32) -> io::Result<()> {
         let body = max_len.to_be_bytes();
         let msg = self.build(NFQNL_MSG_CONFIG, &[(NFQA_CFG_QUEUE_MAXLEN, &body)]);
-        self.send(&msg)
+        self.send_checked(&msg)
     }
 
     /// Answer a held packet. Safe to call from any thread, and safe to call
@@ -195,6 +195,44 @@ impl Nfqueue {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    /// Send a setup message and wait for the kernel to say it took it.
+    ///
+    /// Every message carries NLM_F_ACK, and until this existed nothing ever
+    /// read the answer: a rejected bind looked exactly like a successful one,
+    /// the daemon settled into its receive loop, and the queue it thought it
+    /// owned delivered nothing — while the nftables rule went on handing every
+    /// new connection to a queue with nobody on it. The machine loses its
+    /// networking and the daemon reports itself healthy. Never again silently.
+    fn send_checked(&self, msg: &[u8]) -> io::Result<()> {
+        self.send(msg)?;
+
+        let mut buf = [0u8; 4096];
+        let n = unsafe { recv_raw(self.fd, buf.as_mut_ptr(), buf.len()) };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let reply = &buf[..n as usize];
+
+        // struct nlmsgerr { int error; struct nlmsghdr msg; } — a zero error
+        // is the plain acknowledgement.
+        const NLMSG_ERROR: u16 = 2;
+        if reply.len() < NLMSG_HDR_LEN + 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "short reply to a queue setup message",
+            ));
+        }
+        let kind = u16::from_le_bytes(reply[4..6].try_into().unwrap());
+        if kind != NLMSG_ERROR {
+            return Ok(()); // not an ack at all; the caller's next read sorts it
+        }
+        let code = i32::from_le_bytes(reply[NLMSG_HDR_LEN..NLMSG_HDR_LEN + 4].try_into().unwrap());
+        if code == 0 {
+            return Ok(());
+        }
+        Err(io::Error::from_raw_os_error(-code))
     }
 }
 

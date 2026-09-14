@@ -10,15 +10,53 @@
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::json::{self, Json};
+use redcommon::json::{self, Json};
+use redcommon::rules::{Rules, State, Verdict};
+use redcommon::ui_sock::Clients;
+use redcommon::{info, warn};
+
 use crate::netlink::{Nfqueue, NF_ACCEPT, NF_DROP};
 use crate::packet::Conn;
 use crate::proc::{Attribution, Attributor};
-use crate::rules::{Action, Rules, State};
-use crate::ui::Clients;
+
+/// What this daemon remembers about an executable. redguard's vocabulary is
+/// its own (allow/block), which is why the shared store is generic over this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Allow,
+    Deny,
+}
+
+impl Verdict for Action {
+    fn as_str(self) -> &'static str {
+        match self {
+            Action::Allow => "allow",
+            Action::Deny => "deny",
+        }
+    }
+
+    fn parse(word: &str) -> Option<Action> {
+        match word {
+            "allow" => Some(Action::Allow),
+            "deny" => Some(Action::Deny),
+            _ => None,
+        }
+    }
+}
+
+impl Action {
+    /// A verdict arriving from the UI. Anything that is not a clear "allow"
+    /// denies: the socket is trusted, but a typo must not open the network.
+    pub fn from_ui(word: &str) -> Action {
+        match Action::parse(word) {
+            Some(a) => a,
+            None => Action::Deny,
+        }
+    }
+}
 
 /// A held connection may never outlive this. nftables' `bypass` only fails
 /// open when *nothing* is bound to the queue, so a daemon that is bound but
@@ -43,24 +81,36 @@ struct Pending {
 
 pub struct Firewall {
     queue: Option<Nfqueue>,
-    rules: Mutex<Rules>,
+    /// Simulation only stages connections that never existed, so it is gated
+    /// on the flag the binary was started with rather than on the absence of
+    /// a queue.
+    simulate: bool,
+    rules: Mutex<Rules<Action>>,
     state: Mutex<State>,
     pending: Mutex<HashMap<String, Pending>>,
     attributor: Mutex<Attributor>,
     next_ask_id: AtomicU64,
-    pub clients: Clients,
+    /// Shared with the socket server, which adds and drops UIs as they come
+    /// and go while this side only ever broadcasts.
+    pub clients: Arc<Clients>,
 }
 
 impl Firewall {
-    pub fn new(queue: Option<Nfqueue>, rules: Rules, state: State) -> Firewall {
+    pub fn new(
+        queue: Option<Nfqueue>,
+        rules: Rules<Action>,
+        state: State,
+        simulate: bool,
+    ) -> Firewall {
         Firewall {
             queue,
+            simulate,
             rules: Mutex::new(rules),
             state: Mutex::new(state),
             pending: Mutex::new(HashMap::new()),
             attributor: Mutex::new(Attributor::new()),
             next_ask_id: AtomicU64::new(1),
-            clients: Clients::new(),
+            clients: Arc::new(Clients::new()),
         }
     }
 
@@ -89,7 +139,7 @@ impl Firewall {
     fn verdict(&self, packet_id: u32, verdict: u32) {
         if let Some(q) = &self.queue {
             if let Err(e) = q.verdict(packet_id, verdict) {
-                eprintln!("[redwall] verdict for {packet_id} failed: {e}");
+                warn!("verdict for {packet_id} failed: {e}");
             }
         }
     }
@@ -202,7 +252,7 @@ impl Firewall {
             self.rules
                 .lock()
                 .unwrap()
-                .set(&exe, action.clone(), name.as_deref());
+                .set(&exe, action, name.as_deref());
             self.push_rules();
         }
         self.resolve(&exe, action == Action::Allow);
@@ -215,7 +265,7 @@ impl Firewall {
     }
 
     pub fn set_rule(&self, exe: &str, action: Action, name: Option<&str>) {
-        self.rules.lock().unwrap().set(exe, action.clone(), name);
+        self.rules.lock().unwrap().set(exe, action, name);
 
         let waiting = self.pending.lock().unwrap().contains_key(exe);
         if waiting {
@@ -286,7 +336,7 @@ impl Firewall {
                 .broadcast(&json::obj([("t", json::s("resolved")), ("exe", json::s(exe.clone()))]));
         }
         if !held.is_empty() {
-            println!("[redwall] released {} held app(s): {reason}", held.len());
+            info!("released {} held app(s): {reason}", held.len());
         }
     }
 
@@ -306,8 +356,39 @@ impl Firewall {
             self.resolve(exe, true);
             self.clients
                 .broadcast(&json::obj([("t", json::s("resolved")), ("exe", json::s(exe.clone()))]));
-            println!("[redwall] prompt for {exe} timed out, letting it through");
+            info!("prompt for {exe} timed out, letting it through");
         }
+    }
+
+    /// A connection that never happened, for exercising the prompt and the
+    /// rule engine without root or a queue. Only reachable with --simulate,
+    /// where there is no packet to verdict and nothing is ever held for real.
+    pub fn inject(&self, msg: &Json) {
+        if !self.simulate {
+            return;
+        }
+        let exe = msg
+            .str_field("exe")
+            .unwrap_or("/usr/bin/unknownapp")
+            .to_string();
+        let conn = Conn {
+            proto: if msg.str_field("proto") == Some("udp") { "udp" } else { "tcp" },
+            saddr: "0.0.0.0".to_string(),
+            sport: 0,
+            daddr: msg.str_field("dst").unwrap_or("203.0.113.7").to_string(),
+            dport: msg.get("port").and_then(Json::as_u64).unwrap_or(443) as u16,
+        };
+        let who = Attribution {
+            name: msg
+                .str_field("name")
+                .unwrap_or_else(|| redcommon::procfs::file_name(&exe))
+                .to_string(),
+            exe,
+            pid: msg.get("pid").and_then(Json::as_u64).unwrap_or(0) as u32,
+        };
+        // No packet id exists for a connection nobody sent; with no queue
+        // bound, every verdict on it is a no-op anyway.
+        self.handle(0, &conn, &who);
     }
 
     /// Denying an app should stop it now, not at its next connection. Its
@@ -330,8 +411,12 @@ mod tests {
     use super::*;
     use crate::packet::Conn;
 
-    fn fixture() -> (Firewall, Conn, Attribution) {
-        let dir = std::env::temp_dir().join(format!("redwall-fw-{}", std::process::id()));
+    /// One firewall with its own rule and state files. Tests run in parallel
+    /// threads, so sharing a rules.json between them lets one test's verdict
+    /// answer another test's prompt.
+    fn fixture(tag: &str) -> (Firewall, Conn, Attribution) {
+        let dir = std::env::temp_dir()
+            .join(format!("redwall-fw-{}-{tag}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let _ = std::fs::remove_file(dir.join("rules.json"));
         let _ = std::fs::remove_file(dir.join("state.json"));
@@ -339,6 +424,7 @@ mod tests {
             None, // no queue: verdicts become no-ops, the bookkeeping still runs
             Rules::load(dir.join("rules.json")),
             State::load(dir.join("state.json")),
+            false,
         );
         let conn = Conn {
             proto: "tcp",
@@ -357,7 +443,7 @@ mod tests {
 
     #[test]
     fn one_app_gets_one_prompt_however_many_packets() {
-        let (fw, conn, who) = fixture();
+        let (fw, conn, who) = fixture("one_app_gets_one_prompt_however_many_packets");
         fw.clients.set_test_connected(true);
         for id in 0..5 {
             fw.handle(id, &conn, &who);
@@ -369,7 +455,7 @@ mod tests {
 
     #[test]
     fn a_single_app_cannot_fill_the_queue() {
-        let (fw, conn, who) = fixture();
+        let (fw, conn, who) = fixture("a_single_app_cannot_fill_the_queue");
         fw.clients.set_test_connected(true);
         for id in 0..(MAX_HELD_PER_EXE as u32 + 20) {
             fw.handle(id, &conn, &who);
@@ -383,7 +469,7 @@ mod tests {
 
     #[test]
     fn fails_open_with_no_ui_and_when_disabled() {
-        let (fw, conn, who) = fixture();
+        let (fw, conn, who) = fixture("fails_open_with_no_ui_and_when_disabled");
 
         fw.clients.set_test_connected(false);
         fw.handle(1, &conn, &who);
@@ -397,7 +483,7 @@ mod tests {
 
     #[test]
     fn dns_is_never_held() {
-        let (fw, mut conn, who) = fixture();
+        let (fw, mut conn, who) = fixture("dns_is_never_held");
         fw.clients.set_test_connected(true);
         conn.dport = 53;
         fw.handle(1, &conn, &who);
@@ -406,7 +492,7 @@ mod tests {
 
     #[test]
     fn a_remembered_verdict_answers_without_prompting() {
-        let (fw, conn, who) = fixture();
+        let (fw, conn, who) = fixture("a_remembered_verdict_answers_without_prompting");
         fw.clients.set_test_connected(true);
         fw.set_rule(&who.exe, Action::Allow, Some("curl"));
         fw.handle(1, &conn, &who);
@@ -419,7 +505,7 @@ mod tests {
 
     #[test]
     fn answering_clears_the_hold_and_remembers() {
-        let (fw, conn, who) = fixture();
+        let (fw, conn, who) = fixture("answering_clears_the_hold_and_remembers");
         fw.clients.set_test_connected(true);
         fw.handle(1, &conn, &who);
         let ask_id = fw.pending.lock().unwrap()["/usr/bin/curl"].ask_id;
@@ -428,13 +514,55 @@ mod tests {
         assert!(fw.pending.lock().unwrap().is_empty());
         assert_eq!(
             fw.rules.lock().unwrap().action_for("/usr/bin/curl"),
-            Some(&Action::Allow)
+            Some(Action::Allow)
         );
     }
 
     #[test]
+    fn a_staged_connection_prompts_only_when_simulating() {
+        let dir = std::env::temp_dir().join(format!("redwall-fw-{}-sim", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(dir.join("rules.json"));
+        let _ = std::fs::remove_file(dir.join("state.json"));
+        let staged = json::obj([
+            ("exe", json::s("/opt/telemetry/tracker")),
+            ("name", json::s("tracker")),
+            ("dst", json::s("8.8.8.8")),
+            ("port", json::n(4444u32)),
+            ("proto", json::s("udp")),
+        ]);
+
+        let real = Firewall::new(
+            None,
+            Rules::load(dir.join("rules.json")),
+            State::load(dir.join("state.json")),
+            false,
+        );
+        real.clients.set_test_connected(true);
+        real.inject(&staged);
+        assert!(
+            real.pending.lock().unwrap().is_empty(),
+            "a live daemon invents no connections"
+        );
+
+        let sim = Firewall::new(
+            None,
+            Rules::load(dir.join("rules.json")),
+            State::load(dir.join("state.json")),
+            true,
+        );
+        sim.clients.set_test_connected(true);
+        sim.inject(&staged);
+        let pending = sim.pending.lock().unwrap();
+        let held = &pending["/opt/telemetry/tracker"];
+        assert_eq!(held.name, "tracker");
+        assert_eq!(held.port, 4444);
+        assert_eq!(held.proto, "udp");
+    }
+
+    #[test]
     fn an_unanswered_prompt_is_released_not_left_holding() {
-        let (fw, conn, who) = fixture();
+        let (fw, conn, who) = fixture("an_unanswered_prompt_is_released_not_left_holding");
         fw.clients.set_test_connected(true);
         fw.handle(1, &conn, &who);
         fw.pending

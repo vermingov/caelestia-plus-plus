@@ -9,12 +9,22 @@ top bar (next to the tray).
 ## Pieces
 
 ```
-redwalld.py        enforcement daemon (NFQUEUE): attribution, rules, UI socket
+../rust/redwalld   enforcement daemon (NFQUEUE): attribution, rules, UI socket
+../rust/redcommon  shared with redguard: JSON, UI socket, rule store, /proc
+redwalld.py        the Python daemon it replaces, kept as a fallback
 redwall.nft        nftables ruleset: hooks OUTPUT, queues NEW connections
 redwalld.service   systemd unit: starts the daemon at boot (survives reboots)
-install.sh         one-time root setup
+install.sh         one-time root setup (builds the Rust daemon, falls back)
 uninstall.sh       full removal (networking returns to normal immediately)
 ```
+
+The daemon is Rust with no dependencies at all — it speaks NFQUEUE over a
+plain netlink socket, so there is no venv, no NetfilterQueue compiled against
+`libnetfilter_queue`, and no interpreter resident on the packet path. Machines
+with no Rust toolchain still get the Python implementation, which behaves the
+same but costs a continuous fraction of a core: it walked every process's file
+descriptors per packet, where the Rust daemon shares one scan across a burst.
+`install.sh` picks whichever it can build.
 
 Shell side (no install, ships with the config):
 
@@ -93,13 +103,19 @@ Rules live in `/var/lib/redwall/rules.json`. Socket: `/run/redwall/ui.sock`
 ## Test the UI without root
 
 ```sh
-python3 redwalld.py --simulate --sock /run/user/$UID/redwall-ui.sock \
+../rust/build.sh redwalld     # prints the binary path
+../rust/target/release/redwalld --simulate \
+    --sock /run/user/$UID/redwall-ui.sock \
     --rules /run/user/$UID/redwall-rules.json --ui-gid $(id -g)
 ```
 
-Simulate mode skips NFQUEUE/root and injects synthetic connection events; feed
-it `{"t":"simconnect","exe":"...","name":"...","dst":"...","port":443}` lines
-over the socket. Real enforcement only runs under the installed service.
+Simulate mode skips NFQUEUE and root, seeds a few synthetic connections once a
+UI connects, and takes more on demand: feed it
+`{"t":"simconnect","exe":"...","name":"...","dst":"...","port":443}` lines over
+the socket. Real enforcement only runs under the installed service.
+
+The daemon's own tests cover attribution, the packet and netlink parsers and
+every fail-open path: `cd ../rust && cargo test`.
 
 ## Remove
 

@@ -31,26 +31,22 @@ install -m644 "$here/README.md" /opt/redwall/README.md 2>/dev/null || true
 
 # The daemon is Rust. It talks to NFQUEUE over a plain netlink socket and has
 # no dependencies at all, so there is no venv, no NetfilterQueue build against
-# libnetfilter_queue, and no interpreter resident on the packet path. The
-# Python implementation is kept beside it as a fallback for machines with no
-# Rust toolchain.
+# libnetfilter_queue, and no interpreter resident on the packet path. It shares
+# its JSON, socket and /proc code with redguard, so both are built out of the
+# one workspace in system/rust.
+#
+# The Python daemon is what installs by default. The Rust daemon binds NFQUEUE and holds every new outbound connection until
+# it verdicts it. An untested one does not fail open — it takes the machine's
+# networking down with it, which is exactly what happened on 2026-09-14. It
+# installs only when asked for by name, and only until it has been verified
+# against a live queue.
 daemon_exec=""
-if command -v cargo >/dev/null; then
-    echo ">> Building redwalld (Rust)"
-    build_user=${SUDO_USER:-}
-    [[ -z $build_user && -n ${PKEXEC_UID:-} ]] && build_user=$(id -nu "$PKEXEC_UID")
-    [[ -z $build_user ]] && build_user=$(stat -c %U "$here")
-
-    if runuser -u "$build_user" -- env -C "$here/redwalld-rs" cargo build --release --offline \
-        || runuser -u "$build_user" -- env -C "$here/redwalld-rs" cargo build --release; then
-        install -m755 "$here/redwalld-rs/target/release/redwalld" /opt/redwall/redwalld
-        daemon_exec="/opt/redwall/redwalld"
-        echo "   built and installed /opt/redwall/redwalld"
-    else
-        echo "!! the Rust build failed; falling back to the Python daemon" >&2
-    fi
-else
-    echo "!! cargo not found; falling back to the Python daemon" >&2
+if [[ ${REDWALL_RUST:-0} == 1 ]] && binary=$("$here/../rust/build.sh" redwalld); then
+    install -m755 "$binary" /opt/redwall/redwalld
+    daemon_exec="/opt/redwall/redwalld"
+    echo "   installed /opt/redwall/redwalld"
+elif [[ ${REDWALL_RUST:-0} == 1 ]]; then
+    echo "!! the Rust build failed; falling back to the Python daemon" >&2
 fi
 
 if [[ -z $daemon_exec ]]; then

@@ -12,7 +12,7 @@ Type=simple
 RuntimeDirectory=redguard
 RuntimeDirectoryMode=0755
 StateDirectory=redguard
-ExecStart=/usr/bin/python3 /opt/redguard/redguardd.py --ui-gid __UIGID__
+ExecStart=__EXEC__ --ui-gid __UIGID__
 Restart=on-failure
 RestartSec=2
 
