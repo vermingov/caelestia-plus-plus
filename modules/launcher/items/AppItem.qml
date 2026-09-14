@@ -1,10 +1,12 @@
 import QtQuick
+import QtQuick.Layouts
 import Quickshell
-import Quickshell.Widgets
 import Caelestia.Config
 import qs.components
+import qs.components.images
 import qs.services
 import qs.utils
+import qs.modules.launcher
 import qs.modules.launcher.services
 
 LauncherItem {
@@ -14,54 +16,43 @@ LauncherItem {
 
     readonly property bool favourite: modelData ? Strings.testRegexList(GlobalConfig.launcher.favouriteApps, modelData.id) : false
 
+    trailing: qsTr("Application")
+
     onTriggered: {
         Apps.launch(modelData);
         list.screenState.launcher = false;
     }
 
     Tile {
-        id: tile
-
-        IconImage {
+        CachingIconImage {
             anchors.centerIn: parent
-            asynchronous: true
+            implicitSize: Style.iconSize
             source: Quickshell.iconPath(root.modelData?.icon, "image-missing")
-            implicitSize: Math.round(parent.height * 0.7)
         }
     }
 
-    Column {
-        anchors.left: tile.right
-        anchors.leftMargin: Tokens.spacing.medium
-        anchors.right: parent.right
-        anchors.rightMargin: root.favourite ? favIcon.implicitWidth + Tokens.spacing.medium : 0
-        anchors.verticalCenter: parent.verticalCenter
-
-        StyledText {
-            width: parent.width
-            text: root.modelData?.name ?? ""
-            font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
-            elide: Text.ElideRight
-        }
-
-        StyledText {
-            width: parent.width
-            text: (root.modelData?.comment || root.modelData?.genericName || root.modelData?.name) ?? ""
-            font: Tokens.font.body.small
-            color: Colours.palette.m3outline
-            elide: Text.ElideRight
-        }
+    StyledText {
+        Layout.maximumWidth: Style.panelWidth * 0.4
+        text: root.modelData?.name ?? ""
+        font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
+        elide: Text.ElideRight
     }
 
     MaterialIcon {
-        id: favIcon
-
         visible: root.favourite
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-
         text: "favorite"
         fill: 1
         color: Colours.palette.m3primary
+        fontStyle: Tokens.font.icon.small
+    }
+
+    // Secondary line folded onto the primary one, Raycast style: it takes the
+    // slack so the kind label stays pinned to the right edge
+    StyledText {
+        Layout.fillWidth: true
+        text: (root.modelData?.comment || root.modelData?.genericName) ?? ""
+        color: Colours.palette.m3onSurfaceVariant
+        font: Tokens.font.body.medium
+        elide: Text.ElideRight
     }
 }

@@ -16,7 +16,7 @@ Item {
     readonly property bool shouldBeActive: screenState.launcher && Config.launcher.enabled
 
     readonly property real maxHeight: {
-        let max = screen.height - Config.border.thickness * 2 + Tokens.padding.extraLarge;
+        let max = screen.height * 0.62;
         if (screenState.dashboard)
             max -= panels.dashboard.nonAnimHeight;
         return max;
@@ -32,16 +32,23 @@ Item {
     }
 
     visible: offsetScale < 1
-    anchors.bottomMargin: (-implicitHeight - 5) * offsetScale
     implicitHeight: content.implicitHeight
-    implicitWidth: content.implicitWidth || 630 // Hard coded fallback for first open
+    implicitWidth: Style.panelWidth
     opacity: 1 - offsetScale
+
+    // Rises the last few pixels into place instead of sliding in from an
+    // edge. Deliberately no scale on the way in: the panel's text renders
+    // with NativeRendering, which blurs under a fractional scale
+    // (see Bible qml-nativerendering-blurs-under-scale).
+    transform: Translate {
+        y: root.offsetScale * 10
+    }
 
     Component.onCompleted: Qt.callLater(() => Apps) // Load apps on init
 
     Behavior on offsetScale {
         Anim {
-            type: root.shouldBeActive ? Anim.DefaultSpatial : Anim.Emphasized
+            type: root.shouldBeActive ? Anim.DefaultSpatial : Anim.FastEffects
         }
     }
 
@@ -57,7 +64,6 @@ Item {
         // threads ("Cannot create children for a parent in a different
         // thread") and silently aborted, leaving the panel empty.
         active: true
-
 
         sourceComponent: Content {
             screenState: root.screenState

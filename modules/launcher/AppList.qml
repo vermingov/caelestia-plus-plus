@@ -7,6 +7,7 @@ import qs.components
 import qs.components.containers
 import qs.components.controls
 import qs.services
+import qs.modules.launcher
 import qs.modules.launcher.items
 import qs.modules.launcher.services
 
@@ -99,9 +100,9 @@ StyledListView {
         onValuesChanged: root.currentIndex = 0
     }
 
-    spacing: Tokens.spacing.small
+    spacing: 0
     orientation: Qt.Vertical
-    implicitHeight: (Tokens.sizes.launcher.itemHeight + spacing) * Math.min(Config.launcher.maxShown, count) - spacing
+    implicitHeight: Style.rowHeight * Math.min(Config.launcher.maxShown, count)
 
     preferredHighlightBegin: 0
     preferredHighlightEnd: height
@@ -113,28 +114,21 @@ StyledListView {
         implicitWidth: root.width
         implicitHeight: root.currentItem?.implicitHeight ?? 0
 
+        // Only the travel is animated; fading the fill in and out as well
+        // made every keystroke flash the whole row
         Behavior on y {
-            Anim {}
+            Anim {
+                type: Anim.EmphasizedSmall
+            }
         }
 
         StyledRect {
             anchors.fill: parent
+            anchors.leftMargin: Style.rowInset
+            anchors.rightMargin: Style.rowInset
 
-            radius: Tokens.rounding.large
-            color: Qt.alpha(Colours.palette.m3primary, 0.08)
-            border.width: 1
-            border.color: Qt.alpha(Colours.palette.m3primary, 0.2)
-        }
-
-        StyledRect {
-            anchors.left: parent.left
-            anchors.leftMargin: Tokens.padding.extraSmall
-            anchors.verticalCenter: parent.verticalCenter
-
-            implicitWidth: 4
-            implicitHeight: Math.round(parent.height * 0.42)
-            radius: Tokens.rounding.full
-            color: Colours.palette.m3primary
+            radius: Style.rowRadius
+            color: Qt.alpha(Colours.palette.m3onSurface, 0.1)
         }
     }
 
@@ -200,7 +194,7 @@ StyledListView {
                     target: root
                     property: "scale"
                     from: 1
-                    to: 0.9
+                    to: 0.98
                     duration: Tokens.anim.durations.small
                     easing: Tokens.anim.standardAccel
                 }
@@ -229,7 +223,7 @@ StyledListView {
                 Anim {
                     target: root
                     property: "scale"
-                    from: 0.9
+                    from: 0.98
                     to: 1
                     duration: Tokens.anim.durations.small
                     easing: Tokens.anim.standardDecel

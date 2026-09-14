@@ -1,13 +1,21 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import Caelestia
 import Caelestia.Config
 import qs.components
 import qs.components.controls
+import qs.components.effects
 import qs.services
+import qs.modules.launcher
 import qs.modules.launcher.services
 
+// One surface: search, results and action bar inside a single frosted panel.
+// The old layout floated the search field below the results as a separate
+// pill, which is what made it read as two unrelated widgets.
+//
+// The panel fill must stay above the compositor's ignore_alpha threshold
+// (Colours.reloadHyprRules sets it to transparency.base - 0.03) or Hyprland
+// stops blurring behind it and the frost disappears.
 Item {
     id: root
 
@@ -16,181 +24,223 @@ Item {
     required property real maxHeight
     property real openProgress: 1
 
-    readonly property int padding: Tokens.padding.large
     readonly property int rounding: Tokens.rounding.extraLarge
-    readonly property int inset: Tokens.padding.small
 
-    implicitWidth: listWrapper.width + padding * 2
-    implicitHeight: search.height + listWrapper.height + padding + search.anchors.bottomMargin
+    implicitWidth: Style.panelWidth
+    implicitHeight: Style.searchHeight + listArea.implicitHeight + Style.footerHeight + 2
 
-    Item {
-        id: listWrapper
+    Elevation {
+        anchors.fill: panel
+        radius: panel.radius
+        level: 3
+        opacity: root.openProgress
+    }
 
-        implicitWidth: list.implicitWidth + root.inset * 2
-        implicitHeight: header.anchors.topMargin + header.implicitHeight + Tokens.padding.small + list.height + root.inset
+    StyledClippingRect {
+        id: panel
 
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: search.top
-        anchors.bottomMargin: root.padding
+        anchors.fill: parent
 
-        transform: Translate {
-            y: (1 - root.openProgress) * root.Tokens.padding.large
-        }
+        radius: root.rounding
+        color: Colours.tPalette.m3surfaceContainer
 
-        StyledRect {
-            anchors.fill: parent
-
-            radius: root.rounding
-            color: Qt.alpha(Colours.palette.m3surfaceContainer, 0.7)
-            border.width: 1
-            border.color: Qt.alpha(Colours.palette.m3outlineVariant, 0.4)
-
-            StyledRect {
-                anchors.fill: parent
-                anchors.margins: Tokens.padding.extraSmall
-
-                radius: parent.radius - anchors.margins
-                color: Colours.tPalette.m3surfaceContainerLow
-            }
-        }
-
-        Header {
-            id: header
+        Item {
+            id: search
 
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.topMargin: root.inset + Tokens.padding.small
-            anchors.leftMargin: root.inset + Tokens.padding.medium
-            anchors.rightMargin: root.inset + Tokens.padding.medium
 
-            mode: list.mode
-            count: list.resultCount
+            implicitHeight: Style.searchHeight
+
+            SearchBar {
+                id: searchField
+
+                objectName: "launcherSearch"
+
+                anchors.fill: parent
+
+                topPadding: 0
+                bottomPadding: 0
+                font: Tokens.font.body.large
+                placeholderText: qsTr("Search for apps and commands…")
+
+                // Flat inside the panel: the panel is the surface, the field
+                // is just text on it
+                bg.color: "transparent"
+                bg.radius: 0
+
+                onAccepted: {
+                    const currentItem = list.currentList?.currentItem;
+                    if (!currentItem)
+                        return;
+
+                    if (list.showWallpapers) {
+                        if (Colours.scheme === "dynamic" && currentItem.modelData.path !== Wallpapers.actualCurrent)
+                            Wallpapers.previewColourLock = true;
+                        Wallpapers.setWallpaper(currentItem.modelData.path);
+                        root.screenState.launcher = false;
+                    } else if (text.startsWith(GlobalConfig.launcher.actionPrefix)) {
+                        if (text.startsWith(`${GlobalConfig.launcher.actionPrefix}calc `))
+                            currentItem.onClicked();
+                        else
+                            currentItem.modelData.onClicked(list.currentList);
+                    } else {
+                        Apps.launch(currentItem.modelData);
+                        root.screenState.launcher = false;
+                    }
+                }
+
+                Keys.onUpPressed: list.currentList?.decrementCurrentIndex()
+                Keys.onDownPressed: list.currentList?.incrementCurrentIndex()
+
+                Keys.onEscapePressed: root.screenState.launcher = false
+
+                Keys.onPressed: event => {
+                    if (!GlobalConfig.launcher.vimKeybinds)
+                        return;
+
+                    if (event.modifiers & Qt.ControlModifier) {
+                        if (event.key === Qt.Key_J || event.key === Qt.Key_N) {
+                            list.currentList?.incrementCurrentIndex();
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_K || event.key === Qt.Key_P) {
+                            list.currentList?.decrementCurrentIndex();
+                            event.accepted = true;
+                        }
+                    } else if (event.key === Qt.Key_Tab) {
+                        list.currentList?.incrementCurrentIndex();
+                        event.accepted = true;
+                    } else if (event.key === Qt.Key_Backtab || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
+                        list.currentList?.decrementCurrentIndex();
+                        event.accepted = true;
+                    }
+                }
+
+                // Content is preloaded and kept resident (see Wrapper), so the
+                // search field must retake focus on every open, not just on creation
+                Component.onCompleted: {
+                    if (root.screenState.launcher)
+                        forceActiveFocus();
+                }
+
+                Connections {
+                    function onLauncherChanged(): void {
+                        if (root.screenState.launcher)
+                            searchField.forceActiveFocus();
+                        else
+                            searchField.text = "";
+                    }
+
+                    function onSessionChanged(): void {
+                        if (!root.screenState.session && root.screenState.launcher)
+                            searchField.forceActiveFocus();
+                    }
+
+                    target: root.screenState
+                }
+            }
         }
 
-        ContentList {
-            id: list
+        Separator {
+            id: topRule
 
-            anchors.leftMargin: root.inset
-            anchors.rightMargin: root.inset
-            anchors.bottomMargin: root.inset
+            anchors.top: search.bottom
+        }
 
-            content: root
-            screenState: root.screenState
-            panels: root.panels
-            maxHeight: root.maxHeight - search.implicitHeight - root.padding * 3 - header.implicitHeight - Tokens.padding.small * 2
-            search: search
-            padding: root.padding
-            rounding: root.rounding
+        Item {
+            id: listArea
+
+            anchors.top: topRule.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+
+            implicitHeight: header.implicitHeight + list.height
+
+            Header {
+                id: header
+
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+
+                mode: list.mode
+            }
+
+            ContentList {
+                id: list
+
+                anchors.top: header.bottom
+
+                content: root
+                screenState: root.screenState
+                panels: root.panels
+                maxHeight: root.maxHeight - Style.searchHeight - Style.footerHeight - header.implicitHeight - 2
+                search: searchField
+            }
+        }
+
+        Separator {
+            id: bottomRule
+
+            anchors.top: listArea.bottom
+        }
+
+        Footer {
+            id: footer
+
+            anchors.top: bottomRule.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+
+            action: header.info.action
+            count: list.resultCount
         }
     }
 
-    SearchBar {
-        id: search
+    // Hairline over the frosted fill, the edge that gives the panel its shape
+    StyledRect {
+        anchors.fill: panel
 
-        objectName: "launcherSearch"
-
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: root.padding
-        anchors.bottomMargin: CUtils.clamp(root.padding - Config.border.thickness, 0, root.padding)
-
-        topPadding: Math.round((Tokens.padding.medium + Tokens.padding.large) / 2)
-        bottomPadding: Math.round((Tokens.padding.medium + Tokens.padding.large) / 2)
-
-        bg.border.width: 1
-        bg.border.color: Qt.alpha(Colours.palette.m3outlineVariant, 0.4)
-
-        placeholderText: qsTr("Type \"%1\" for commands").arg(GlobalConfig.launcher.actionPrefix)
-
-        onAccepted: {
-            const currentItem = list.currentList?.currentItem;
-            if (currentItem) {
-                if (list.showWallpapers) {
-                    if (Colours.scheme === "dynamic" && currentItem.modelData.path !== Wallpapers.actualCurrent)
-                        Wallpapers.previewColourLock = true;
-                    Wallpapers.setWallpaper(currentItem.modelData.path);
-                    root.screenState.launcher = false;
-                } else if (text.startsWith(GlobalConfig.launcher.actionPrefix)) {
-                    if (text.startsWith(`${GlobalConfig.launcher.actionPrefix}calc `))
-                        currentItem.onClicked();
-                    else
-                        currentItem.modelData.onClicked(list.currentList);
-                } else {
-                    Apps.launch(currentItem.modelData);
-                    root.screenState.launcher = false;
-                }
-            }
-        }
-
-        Keys.onUpPressed: list.currentList?.decrementCurrentIndex()
-        Keys.onDownPressed: list.currentList?.incrementCurrentIndex()
-
-        Keys.onEscapePressed: root.screenState.launcher = false
-
-        Keys.onPressed: event => {
-            if (!GlobalConfig.launcher.vimKeybinds)
-                return;
-
-            if (event.modifiers & Qt.ControlModifier) {
-                if (event.key === Qt.Key_J || event.key === Qt.Key_N) {
-                    list.currentList?.incrementCurrentIndex();
-                    event.accepted = true;
-                } else if (event.key === Qt.Key_K || event.key === Qt.Key_P) {
-                    list.currentList?.decrementCurrentIndex();
-                    event.accepted = true;
-                }
-            } else if (event.key === Qt.Key_Tab) {
-                list.currentList?.incrementCurrentIndex();
-                event.accepted = true;
-            } else if (event.key === Qt.Key_Backtab || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
-                list.currentList?.decrementCurrentIndex();
-                event.accepted = true;
-            }
-        }
-
-        // Content is preloaded and kept resident (see Wrapper), so the
-        // search field must retake focus on every open, not just on creation
-        Component.onCompleted: {
-            if (root.screenState.launcher)
-                forceActiveFocus();
-        }
-
-        Connections {
-            function onLauncherChanged(): void {
-                if (root.screenState.launcher)
-                    search.forceActiveFocus();
-                else
-                    search.text = "";
-            }
-
-            function onSessionChanged(): void {
-                if (!root.screenState.session && root.screenState.launcher)
-                    search.forceActiveFocus();
-            }
-
-            target: root.screenState
-        }
+        radius: panel.radius
+        color: "transparent"
+        border.width: 1
+        border.color: Qt.alpha(Colours.palette.m3onSurface, 0.1)
     }
 
     // Search icon follows the active mode: mode glyph in primary while a
     // command prefix is active, plain search otherwise.
     Binding {
-        target: search.searchIcon
+        target: searchField.searchIcon
         property: "animate"
         value: true
     }
 
     Binding {
-        target: search.searchIcon
+        target: searchField.searchIcon
         property: "text"
         value: list.mode === "apps" ? "search" : header.info.icon
     }
 
     Binding {
-        target: search.searchIcon
+        target: searchField.searchIcon
         property: "color"
         value: list.mode === "apps" ? Colours.palette.m3onSurfaceVariant : Colours.palette.m3primary
+    }
+
+    // SearchBar asks for Tokens.font.icon.builders.medium, which the plugin
+    // does not export — the resulting font is undefined
+    Binding {
+        target: searchField.searchIcon
+        property: "fontStyle"
+        value: Tokens.font.icon.small
+    }
+
+    component Separator: StyledRect {
+        anchors.left: parent.left
+        anchors.right: parent.right
+
+        implicitHeight: 1
+        color: Qt.alpha(Colours.palette.m3outlineVariant, 0.22)
     }
 }

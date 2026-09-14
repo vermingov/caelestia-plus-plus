@@ -1,7 +1,9 @@
 import QtQuick
+import QtQuick.Layouts
 import Caelestia.Config
 import qs.components
 import qs.services
+import qs.modules.launcher
 import qs.modules.launcher.services
 
 LauncherItem {
@@ -9,21 +11,24 @@ LauncherItem {
 
     required property Schemes.Scheme modelData
 
+    trailing: qsTr("Scheme")
+
     onTriggered: modelData?.onClicked(list)
 
     StyledRect {
         id: preview
 
-        anchors.verticalCenter: parent.verticalCenter
+        implicitWidth: Style.iconSize
+        implicitHeight: Style.iconSize
 
         border.width: 1
         border.color: Qt.alpha(`#${root.modelData?.colours?.outline}`, 0.5)
 
         color: `#${root.modelData?.colours?.surface}`
         radius: Tokens.rounding.full
-        implicitWidth: parent.height * 0.8
-        implicitHeight: parent.height * 0.8
 
+        // Right half filled with the scheme's primary, so one swatch shows
+        // both the surface and the accent it pairs with
         Item {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
@@ -44,38 +49,25 @@ LauncherItem {
         }
     }
 
-    Column {
-        anchors.left: preview.right
-        anchors.leftMargin: Tokens.spacing.medium
-        anchors.right: parent.right
-        anchors.rightMargin: current.visible ? current.implicitWidth + Tokens.spacing.medium : 0
-        anchors.verticalCenter: parent.verticalCenter
-
-        StyledText {
-            width: parent.width
-            text: root.modelData?.flavour ?? ""
-            font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
-            elide: Text.ElideRight
-        }
-
-        StyledText {
-            width: parent.width
-            text: root.modelData?.name ?? ""
-            font: Tokens.font.body.small
-            color: Colours.palette.m3outline
-            elide: Text.ElideRight
-        }
+    StyledText {
+        Layout.maximumWidth: Style.panelWidth * 0.4
+        text: root.modelData?.flavour ?? ""
+        font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
+        elide: Text.ElideRight
     }
 
     MaterialIcon {
-        id: current
-
         visible: `${root.modelData?.name} ${root.modelData?.flavour}` === Schemes.currentScheme
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-
         text: "check"
         color: Colours.palette.m3primary
-        fontStyle: Tokens.font.icon.large
+        fontStyle: Tokens.font.icon.small
+    }
+
+    StyledText {
+        Layout.fillWidth: true
+        text: root.modelData?.name ?? ""
+        font: Tokens.font.body.medium
+        color: Colours.palette.m3onSurfaceVariant
+        elide: Text.ElideRight
     }
 }

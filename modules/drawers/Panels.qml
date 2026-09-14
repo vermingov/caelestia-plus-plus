@@ -105,8 +105,12 @@ Item {
         screenState: root.screenState
         panels: root
 
+        // Upper third, where a command palette belongs: it lands under the
+        // eye rather than at the bottom edge, and leaves room to grow
+        // downwards as results come in
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
+        anchors.top: parent.top
+        anchors.topMargin: Math.round(root.screen.height * 0.16)
     }
 
     Dashboard.Wrapper {

@@ -1,18 +1,27 @@
 import QtQuick
+import QtQuick.Layouts
 import Caelestia.Config
 import qs.components
+import qs.services
+import qs.modules.launcher
 
-// Shared chrome for launcher result rows: staggered entrance (only while the
-// launcher is opening), press feedback and ripple. Rows declare their visuals
-// as children, which land in the padded content area.
+// One result row. Single line, icon then title then a muted inline subtitle,
+// with an optional right-aligned kind label — the Raycast shape.
+//
+// Deliberately no StateLayer: its ripple is a Shape with a radial gradient,
+// and a launcher builds a dozen rows per keystroke. Hover is a flat fill and
+// the selection highlight does the rest of the work.
 Item {
     id: root
 
     required property int index
     required property var list // AppList root: provides revealing + screenState
 
-    readonly property alias pressed: pressLayer.pressed
-    default property alias content: contentArea.data
+    property string trailing
+
+    readonly property alias hovered: hover.hovered
+    readonly property alias pressed: tap.pressed
+    default property alias content: contentRow.data
 
     signal triggered()
 
@@ -22,15 +31,14 @@ Item {
     // PauseAnimation warnings (see Bible).
     function playEntrance(): void {
         opacity = 0;
-        enterSlide.y = Tokens.padding.large;
+        enterSlide.y = Tokens.padding.medium;
         enterAnim.restart();
     }
 
     anchors.left: parent?.left
     anchors.right: parent?.right
-    implicitHeight: Tokens.sizes.launcher.itemHeight
+    implicitHeight: Style.rowHeight
 
-    scale: pressLayer.pressed ? 0.97 : 1
     transform: Translate {
         id: enterSlide
     }
@@ -53,43 +61,69 @@ Item {
         id: enterAnim
 
         PauseAnimation {
-            duration: Math.max(0, Math.min(root.index, 8)) * 30
+            duration: Math.max(0, Math.min(root.index, 7)) * 18
         }
         ParallelAnimation {
             Anim {
                 target: root
                 property: "opacity"
                 to: 1
-                type: Anim.DefaultEffects
+                type: Anim.FastEffects
             }
             Anim {
                 target: enterSlide
                 property: "y"
                 to: 0
-                type: Anim.DefaultSpatial
+                type: Anim.FastSpatial
             }
         }
     }
 
-    Behavior on scale {
-        Anim {
-            type: pressLayer.pressed ? Anim.FastSpatial : Anim.Emphasized
+    // Hover tint only; the current row already carries the selection fill, so
+    // painting both would double up on whichever row the pointer rests on
+    StyledRect {
+        anchors.fill: parent
+        anchors.leftMargin: Style.rowInset
+        anchors.rightMargin: Style.rowInset
+
+        radius: Style.rowRadius
+        color: hover.hovered && root.list.currentIndex !== root.index ? Qt.alpha(Colours.palette.m3onSurface, 0.05) : "transparent"
+    }
+
+    HoverHandler {
+        id: hover
+
+        onHoveredChanged: {
+            if (hovered)
+                root.list.currentIndex = root.index;
         }
     }
 
-    StateLayer {
-        id: pressLayer
+    TapHandler {
+        id: tap
 
-        radius: Tokens.rounding.large
-        onClicked: root.triggered()
+        onTapped: root.triggered()
     }
 
-    Item {
-        id: contentArea
-
+    RowLayout {
         anchors.fill: parent
-        anchors.margins: Tokens.padding.small
-        anchors.leftMargin: Tokens.padding.medium
-        anchors.rightMargin: Tokens.padding.medium
+        anchors.leftMargin: Style.contentPadding
+        anchors.rightMargin: Style.contentPadding
+
+        spacing: Tokens.spacing.small
+
+        RowLayout {
+            id: contentRow
+
+            Layout.fillWidth: true
+            spacing: Tokens.spacing.medium
+        }
+
+        StyledText {
+            visible: root.trailing
+            text: root.trailing
+            color: Colours.palette.m3outline
+            font: Tokens.font.label.small
+        }
     }
 }
