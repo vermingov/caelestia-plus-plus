@@ -68,7 +68,7 @@ RowLayout {
                 const index = Math.floor(((x - left - tray.padding * 2 + tray.spacing) / tray.layout.implicitWidth) * tray.items.count);
                 const trayItem = tray.items.itemAt(index);
                 if (trayItem) {
-                    popouts.currentName = `traymenu${index}`;
+                    popouts.currentName = `traymenu-${(trayItem as TrayItem).modelData.id}`;
                     popouts.currentCenter = Qt.binding(() => trayItem.mapToItem(null, trayItem.implicitWidth / 2, 0).x);
                     popouts.hasCurrent = true;
                 } else {
@@ -117,6 +117,10 @@ RowLayout {
         id: repeater
 
         model: ScriptModel {
+            // Entries are fresh objects on every evaluation; keying on id keeps
+            // the existing delegates instead of rebuilding the whole bar
+            objectProp: "id"
+
             // Endcap style: the logo caps the pill, so any "logo" entry from
             // the user's config is dropped (stock configs ship one). Inline
             // style: keep the config's logo entry, or lead with one if absent.

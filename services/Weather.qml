@@ -2,6 +2,7 @@ pragma Singleton
 
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import Caelestia
 import Caelestia.Config
 import qs.utils
@@ -25,6 +26,8 @@ Singleton {
     readonly property string sunset: cc ? Qt.formatDateTime(new Date(cc.sunset), GlobalConfig.services.useTwelveHourClock ? "h:mm A" : "h:mm") : "--:--"
 
     readonly property var cachedCities: new Map()
+    property bool citiesLoaded
+    property string pendingCoords
 
     function formatTemp(temp: var): string {
         return GlobalConfig.services.useFahrenheit ? `${temp !== undefined ? Math.round(toFahrenheit(temp)) : "--"}°F` : `${temp !== undefined ? Math.round(temp) : "--"}°C`;
@@ -101,42 +104,57 @@ Singleton {
         return mapping[cityName] || cityName;
     }
 
+    function cacheCity(coords: string, cityName: string): void {
+        cachedCities.set(coords, cityName);
+        citiesSaveTimer.restart();
+    }
+
     function fetchCityFromCoords(coords: string): void {
         if (cachedCities.has(coords)) {
             city = cachedCities.get(coords);
             return;
         }
 
+        // Wait for the on-disk cache so a known location never hits the network
+        if (!citiesLoaded) {
+            pendingCoords = coords;
+            return;
+        }
+
         const [lat, lon] = coords.split(",").map(s => s.trim());
         const lang = Qt.locale().name.split("_")[0] || "en";
 
-        const fallbackToBigDataCloud = () => {
-            const fallbackUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=${lang}`;
-            Requests.get(fallbackUrl, text => {
-                const geo = JSON.parse(text);
-                const geoCity = geo.city || geo.locality;
-                if (geoCity) {
-                    city = fixCityName(geoCity);
-                    cachedCities.set(coords, city);
-                } else {
-                    city = "Unknown City";
-                }
-            });
+        // Nominatim's usage policy requires an identifying User-Agent
+        const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=geocodejson&accept-language=${lang}`;
+        const nominatimHeaders = {
+            "User-Agent": `caelestia-plus-plus/${CUtils.version} (+https://github.com/vermingov/caelestia-plus-plus)`
         };
 
-        const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=geocodejson&accept-language=${lang}`;
         Requests.get(nominatimUrl, text => {
-            const geo = JSON.parse(text).features?.[0]?.properties.geocoding;
+            let geo;
+            try {
+                geo = JSON.parse(text).features?.[0]?.properties.geocoding;
+            } catch (error) {
+                console.warn(lc, `Unable to parse response from nominatim: ${error}`);
+                city = qsTr("Unknown City");
+                return;
+            }
+
             if (geo) {
                 const geoCity = geo.type === "city" ? geo.name : geo.city;
                 if (geoCity) {
                     city = fixCityName(geoCity);
-                    cachedCities.set(coords, city);
+                    cacheCity(coords, city);
                     return;
                 }
             }
-            fallbackToBigDataCloud();
-        }, fallbackToBigDataCloud);
+
+            console.warn(lc, "No locality in nominatim response");
+            city = qsTr("Unknown City");
+        }, error => {
+            console.warn(lc, `Nominatim request failed: ${error}`);
+            city = qsTr("Unknown City");
+        }, nominatimHeaders);
     }
 
     function fetchCoordsFromCity(cityName: string): void {
@@ -210,8 +228,8 @@ Singleton {
         });
     }
 
-    function toFahrenheit(celcius: real): real {
-        return celcius * 9 / 5 + 32;
+    function toFahrenheit(celsius: real): real {
+        return celsius * 9 / 5 + 32;
     }
 
     function getWeatherUrl(): string {
@@ -260,6 +278,14 @@ Singleton {
     }
 
     onLocChanged: fetchWeatherData()
+    onCitiesLoadedChanged: {
+        if (!citiesLoaded || !pendingCoords)
+            return;
+
+        const coords = pendingCoords;
+        pendingCoords = "";
+        fetchCityFromCoords(coords);
+    }
 
     Connections {
         function onWeatherLocationChanged(): void {
@@ -276,7 +302,54 @@ Singleton {
         onTriggered: fetchWeatherData()
     }
 
+    Timer {
+        id: citiesSaveTimer
+
+        interval: 1000
+        onTriggered: {
+            if (!root.citiesLoaded)
+                return;
+
+            const data = {};
+            root.cachedCities.forEach((cityName, coords) => data[coords] = cityName);
+            citiesStorage.setText(JSON.stringify(data));
+        }
+    }
+
     ElapsedTimer {
         id: timer
+    }
+
+    FileView {
+        id: citiesStorage
+
+        printErrors: false
+        path: `${Paths.cache}/cities.json`
+        onLoaded: {
+            try {
+                const data = JSON.parse(text());
+                for (const [coords, cityName] of Object.entries(data))
+                    if (!root.cachedCities.has(coords))
+                        root.cachedCities.set(coords, cityName);
+            } catch (error) {
+                console.warn(lc, `Unable to parse cached cities: ${error}`);
+            }
+
+            root.citiesLoaded = true;
+        }
+        onLoadFailed: err => {
+            root.citiesLoaded = true;
+            if (err === FileViewError.FileNotFound)
+                Qt.callLater(() => setText("{}"));
+            else
+                console.warn(lc, `Unable to load cached cities: ${err}`);
+        }
+    }
+
+    LoggingCategory {
+        id: lc
+
+        name: "caelestia.qml.services.weather"
+        defaultLogLevel: LoggingCategory.Info
     }
 }

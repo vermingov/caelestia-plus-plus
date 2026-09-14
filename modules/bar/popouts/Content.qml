@@ -14,8 +14,8 @@ Item {
     readonly property Popout currentPopout: content.children.find(c => c.shouldBeActive) ?? null
     readonly property Item current: currentPopout?.item ?? null
 
-    implicitWidth: (currentPopout?.implicitWidth ?? 0) + Tokens.padding.extraLargeIncreased
-    implicitHeight: (currentPopout?.implicitHeight ?? 0) + Tokens.padding.extraLargeIncreased
+    implicitWidth: currentPopout ? currentPopout.implicitWidth + Tokens.padding.extraLargeIncreased : 0
+    implicitHeight: currentPopout ? currentPopout.implicitHeight + Tokens.padding.extraLargeIncreased : 0
 
     Item {
         id: content
@@ -128,9 +128,10 @@ Item {
                 id: trayMenu
 
                 required property SystemTrayItem modelData
-                required property int index
 
-                name: `traymenu${index}`
+                // Keyed by item id: the bar resolves the hovered TrayItem the same
+                // way, so hidden or menu-less icons never shift the mapping
+                name: `traymenu-${modelData?.id ?? ""}`
                 sourceComponent: trayMenuComp
 
                 Connections {
@@ -149,7 +150,7 @@ Item {
 
                     TrayMenu {
                         popouts: root.popouts
-                        trayItem: trayMenu.modelData.menu // qmllint disable unresolved-type
+                        trayItem: trayMenu.modelData?.menu ?? null // qmllint disable unresolved-type
                     }
                 }
             }
