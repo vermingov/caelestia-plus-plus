@@ -33,10 +33,23 @@ Singleton {
     readonly property bool barShowRam: props.barShowRam
     readonly property bool barShowGpu: props.barShowGpu
 
+    // Liquid glass: strip the wallpaper's hue out of the surface colours so
+    // panels read as clear frosted glass instead of tinted plastic. Accents
+    // (primary, error, …) keep their colour — Apple tints the controls on
+    // the material, never the material itself.
+    readonly property bool glassNeutral: props.glassNeutral
+
     // Animated DNA background (shown when no image wallpaper is set)
     readonly property bool dnaEnabled: props.dnaEnabled
     readonly property bool dnaUseThemeColor: props.dnaUseThemeColor
     readonly property string dnaCustomColor: props.dnaCustomColor
+
+    function setGlassNeutral(value: bool): void {
+        if (value === props.glassNeutral)
+            return;
+        props.glassNeutral = value;
+        save();
+    }
 
     function setBarLogoEndcap(value: bool): void {
         if (value === props.barLogoEndcap)
@@ -160,6 +173,7 @@ Singleton {
         property bool barShowCpu: true
         property bool barShowRam: true
         property bool barShowGpu: true
+        property bool glassNeutral: true
         property bool dnaEnabled: true
         property bool dnaUseThemeColor: true
         property string dnaCustomColor: "#ff5449"

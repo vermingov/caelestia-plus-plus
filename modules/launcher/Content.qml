@@ -3,8 +3,8 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Caelestia.Config
 import qs.components
+import qs.components.containers
 import qs.components.controls
-import qs.components.effects
 import qs.services
 import qs.modules.launcher
 import qs.modules.launcher.services
@@ -29,20 +29,12 @@ Item {
     implicitWidth: Style.panelWidth
     implicitHeight: Style.searchHeight + listArea.implicitHeight + Style.footerHeight + 2
 
-    Elevation {
-        anchors.fill: panel
-        radius: panel.radius
-        level: 3
-        opacity: root.openProgress
-    }
-
-    StyledClippingRect {
+    GlassPanel {
         id: panel
 
         anchors.fill: parent
 
         radius: root.rounding
-        color: Colours.tPalette.m3surfaceContainer
 
         Item {
             id: search
@@ -196,16 +188,6 @@ Item {
             action: header.info.action
             count: list.resultCount
         }
-    }
-
-    // Hairline over the frosted fill, the edge that gives the panel its shape
-    StyledRect {
-        anchors.fill: panel
-
-        radius: panel.radius
-        color: "transparent"
-        border.width: 1
-        border.color: Qt.alpha(Colours.palette.m3onSurface, 0.1)
     }
 
     // Search icon follows the active mode: mode glyph in primary while a

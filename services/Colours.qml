@@ -34,6 +34,16 @@ Singleton {
         return Math.sqrt(0.299 * (c.r ** 2) + 0.587 * (c.g ** 2) + 0.114 * (c.b ** 2));
     }
 
+    // Surfaces, text on surfaces, and outlines: the material itself. Accents
+    // are excluded — a neutral material still carries coloured controls.
+    readonly property var materialRoles: new Set(["m3background", "m3onBackground", "m3surface", "m3surfaceDim", "m3surfaceBright", "m3surfaceContainerLowest", "m3surfaceContainerLow", "m3surfaceContainer", "m3surfaceContainerHigh", "m3surfaceContainerHighest", "m3onSurface", "m3surfaceVariant", "m3onSurfaceVariant", "m3inverseSurface", "m3inverseOnSurface", "m3outline", "m3outlineVariant", "m3shadow", "m3scrim", "m3surfaceTint", "m3neutral"])
+
+    // Same lightness, no hue. Keeps the scheme's steps between container
+    // levels intact while taking the wallpaper's tint out of the glass.
+    function neutralise(c: color): color {
+        return Qt.hsla(0, 0, c.hslLightness, c.a);
+    }
+
     function alterColour(c: color, a: real, layer: int): color {
         const luminance = getLuminance(c);
 
@@ -77,10 +87,12 @@ Singleton {
             previewLight = scheme.mode === "light";
         }
 
+        const neutral = ShellPrefs.glassNeutral;
         for (const [name, colour] of Object.entries(scheme.colours)) {
             const propName = name.startsWith("term") ? name : `m3${name}`;
-            if (colours.hasOwnProperty(propName))
-                colours[propName] = `#${colour}`;
+            if (!colours.hasOwnProperty(propName))
+                continue;
+            colours[propName] = neutral && root.materialRoles.has(propName) ? root.neutralise(`#${colour}`) : `#${colour}`;
         }
     }
 
@@ -127,10 +139,22 @@ Singleton {
     }
 
     FileView {
+        id: schemeFile
+
         path: `${Paths.state}/scheme.json`
         watchChanges: true
         onFileChanged: reload()
         onLoaded: root.load(text(), false)
+    }
+
+    // Toggling the glass material re-reads the scheme rather than mutating
+    // the live palette, so the neutralised and raw values never mix
+    Connections {
+        function onGlassNeutralChanged(): void {
+            schemeFile.reload();
+        }
+
+        target: ShellPrefs
     }
 
     ImageAnalyser {
