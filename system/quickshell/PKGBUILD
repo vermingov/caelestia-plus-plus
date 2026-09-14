@@ -8,7 +8,7 @@
 pkgname=caelestia++-quickshell
 _pkgname=quickshell
 pkgver=0.3.1
-pkgrel=1
+pkgrel=2
 pkgdesc='Quickshell built against the installed Qt, for Caelestia++'
 arch=(x86_64 aarch64)
 url="https://git.outfoxxed.me/$_pkgname/$_pkgname"
@@ -20,9 +20,17 @@ provides=("quickshell=$pkgver" quickshell-git)
 conflicts=(quickshell quickshell-git)
 options=(!debug)
 source=("$_pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
-        caelestia-quickshell-qt.hook)
+        caelestia-quickshell-qt.hook
+        0001-scan-build-override-text-lazily.patch)
 sha256sums=('d60592622f1aa1cbb853d4814f605dfde827bc692befbfecffaccf4c90e352d8'
+            'SKIP'
             'SKIP')
+
+prepare() {
+	cd "$_pkgname"
+	# Startup: the config scanner copied every QML file line by line for nothing
+	patch -p1 < "$srcdir/0001-scan-build-override-text-lazily.patch"
+}
 
 build() {
 	cd "$_pkgname"

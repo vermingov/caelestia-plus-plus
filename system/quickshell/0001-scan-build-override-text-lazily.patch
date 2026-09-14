@@ -1,0 +1,40 @@
+From: Caelestia++ <https://github.com/vermingov/caelestia-plus-plus>
+Subject: [PATCH] core/scan: build the preprocessed text only once a masking pragma is seen
+
+The scanner re-assembled every QML file line by line into overrideText on
+every start and threw the copy away unless the file contained a masking
+"//@ if". For a 49k-line config that was ~200 ms of QString appends
+before any QML compiled. Build the copy lazily instead.
+
+--- a/src/core/scan.cpp	2026-08-21 04:28:55.000000000 +0200
++++ b/src/core/scan.cpp	2026-09-14 10:52:37.067409701 +0200
+@@ -213,7 +213,15 @@
+ 			if (!sourceMasked && mask) hideMask = true;
+ 			mask = sourceMasked || mask; // can't unmask if a nested if passes
+ 			ifScopes.append(mask);
+-			if (mask) isOverridden = true;
++			if (mask && !isOverridden) {
++				// First masking pragma: everything before it passes through verbatim, so
++				// rebuild that prefix now instead of copying every file on every start.
++				isOverridden = true;
++				auto prefixStream = QTextStream(&fileData);
++				for (auto i = 1; i < lineNum; ++i) {
++					overrideText.append(prefixStream.readLine() % '\n');
++				}
++			}
+ 			sourceMasked = mask;
+ 		} else if (line.startsWith("//@ endif")) {
+ 			if (ifScopes.isEmpty()) {
+@@ -226,8 +234,10 @@
+ 			}
+ 		}
+ 
+-		if (!hideMask && sourceMasked) overrideText.append("// MASKED: " % rawLine % '\n');
+-		else overrideText.append(rawLine % '\n');
++		if (isOverridden) {
++			if (!hideMask && sourceMasked) overrideText.append("// MASKED: " % rawLine % '\n');
++			else overrideText.append(rawLine % '\n');
++		}
+ 
+ 	next:;
+ 	}
