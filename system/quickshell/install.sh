@@ -81,7 +81,13 @@ build_package() {
 
     echo ":: building quickshell in $build_dir (a few minutes)" >&2
     runuser -u "$target_user" -- mkdir -p "$build_dir"
-    runuser -u "$target_user" -- cp "$here/PKGBUILD" "$here/caelestia-quickshell-qt.hook" "$build_dir/"
+    # Everything the PKGBUILD lists in source=() lives beside it, patches included
+    local staged=("$here/PKGBUILD")
+    local extra
+    for extra in "$here"/*.hook "$here"/*.patch; do
+        [[ -e "$extra" ]] && staged+=("$extra")
+    done
+    runuser -u "$target_user" -- cp "${staged[@]}" "$build_dir/"
     # Generic flags: the package may be shared, and a shell gains nothing
     # from -march=native. makepkg refuses root, so drop to the user.
     runuser -u "$target_user" -- env HOME="$target_home" \
