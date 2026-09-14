@@ -132,6 +132,15 @@ if [ -f "$signers" ]; then
     git -c gpg.ssh.allowedSignersFile="$signers" verify-commit "$newtip" 2>/dev/null || { echo BAD_SIGNATURE; exit 6; }
 fi
 git merge --ff-only "$newtip" || exit 7
+# The checkout has moved; the installed binaries have not. A release that
+# adds a helper would otherwise restart into QML calling a tool the old
+# binary has never heard of. A build that fails is not fatal — the Python
+# fallbacks are still there and still correct.
+if command -v cargo >/dev/null 2>&1; then
+    for d in cli tools; do
+        [ -x "$d/install.sh" ] && "$d/install.sh" >/dev/null 2>&1 || true
+    done
+fi
 # Never restart into a quickshell that cannot start (Qt moved on under it)
 qs --version >/dev/null 2>&1 || { echo QS_BROKEN; exit 8; }`]
 

@@ -12,8 +12,12 @@ import Quickshell.Io
 //
 // The scripts are still there, and are still used when the binary is not
 // installed: a checkout without a Rust toolchain behaves exactly as it did.
-// Everything that runs one of these waits for `ready` first, so nothing is
-// launched with a command that is about to change under it.
+//
+// The check is per tool, not per binary. A checkout moves ahead of its
+// installed binary whenever the shell updates without rebuilding, and a tool
+// the old binary has never heard of has to fall back to its script rather
+// than fail — so the binary is asked what it can do, not merely whether it
+// exists. Everything that runs one of these waits for `ready` first.
 Singleton {
     id: root
 
@@ -21,7 +25,8 @@ Singleton {
 
     // True once the check below has answered, whichever way
     property bool ready: false
-    property bool hasBinary: false
+    // The tools the installed binary answers to; empty when there is none
+    property var available: []
 
     // tool -> the script that does the same job
     readonly property var scripts: ({
@@ -32,21 +37,30 @@ Singleton {
             "config-doctor": "config-doctor.py"
         })
 
+    function has(tool: string): bool {
+        return root.available.includes(tool);
+    }
+
     // The command to run `tool`, with `args` appended.
     function command(tool: string, args: var): var {
         const extra = args ?? [];
-        if (root.hasBinary)
+        if (root.has(tool))
             return [root.binary, tool, ...extra];
         return ["python3", Quickshell.shellPath(`assets/${root.scripts[tool]}`), ...extra];
     }
 
     Process {
         running: true
-        command: ["sh", "-c", `command -v ${root.binary} >/dev/null`]
+        // A binary too old to know `list` prints nothing and exits non-zero,
+        // which reads as "no tools" and sends everything to the scripts.
+        command: [root.binary, "list"]
 
-        onExited: code => {
-            root.hasBinary = code === 0;
-            root.ready = true;
+        stdout: StdioCollector {
+            onStreamFinished: {
+                root.available = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+            }
         }
+
+        onExited: root.ready = true
     }
 }
