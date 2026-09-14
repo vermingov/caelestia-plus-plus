@@ -46,9 +46,12 @@ Item {
 
     Component.onCompleted: Qt.callLater(() => Apps) // Load apps on init
 
+    // Close eases out rather than snapping: FastEffects front-loads too
+    // little of the fade, so the panel sat there and then vanished
     Behavior on offsetScale {
         Anim {
-            type: root.shouldBeActive ? Anim.DefaultSpatial : Anim.FastEffects
+            type: root.shouldBeActive ? Anim.DefaultSpatial : Anim.DefaultEffects
+            easing: root.shouldBeActive ? Tokens.anim.expressiveDefaultSpatial : Tokens.anim.standardDecel
         }
     }
 

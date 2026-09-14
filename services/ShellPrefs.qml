@@ -39,10 +39,40 @@ Singleton {
     // the material, never the material itself.
     readonly property bool glassNeutral: props.glassNeutral
 
+    // How the glass material is mixed. `scrim` is the dark base that keeps
+    // light text legible over a bright backdrop; `lift` is the illumination
+    // that makes the pane read as glass rather than a smoked panel. Their
+    // sum must stay above the compositor's ignore_alpha cutoff (0.1) or
+    // Hyprland stops blurring behind the panel entirely.
+    readonly property real glassScrim: props.glassScrim
+    readonly property real glassLift: props.glassLift
+    readonly property real glassRim: props.glassRim
+
     // Animated DNA background (shown when no image wallpaper is set)
     readonly property bool dnaEnabled: props.dnaEnabled
     readonly property bool dnaUseThemeColor: props.dnaUseThemeColor
     readonly property string dnaCustomColor: props.dnaCustomColor
+
+    function setGlassScrim(value: real): void {
+        if (value === props.glassScrim)
+            return;
+        props.glassScrim = value;
+        save();
+    }
+
+    function setGlassLift(value: real): void {
+        if (value === props.glassLift)
+            return;
+        props.glassLift = value;
+        save();
+    }
+
+    function setGlassRim(value: real): void {
+        if (value === props.glassRim)
+            return;
+        props.glassRim = value;
+        save();
+    }
 
     function setGlassNeutral(value: bool): void {
         if (value === props.glassNeutral)
@@ -174,6 +204,9 @@ Singleton {
         property bool barShowRam: true
         property bool barShowGpu: true
         property bool glassNeutral: true
+        property real glassScrim: 0.05
+        property real glassLift: 0.07
+        property real glassRim: 1.0
         property bool dnaEnabled: true
         property bool dnaUseThemeColor: true
         property string dnaCustomColor: "#ff5449"

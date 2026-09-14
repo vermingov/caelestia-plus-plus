@@ -110,13 +110,13 @@ Singleton {
             trEnabled = transparency.enabled ? 1 : 0;
         }
         // ignore_alpha is a hard cutoff: Hyprland blurs a pixel only once its
-        // alpha clears it. Tying it to transparency.base meant a panel fading
-        // in stayed unblurred until the last few percent of the animation and
-        // then snapped to frosted — panels looked like they popped into
-        // existence rather than fading. Keep it just high enough to skip
-        // pixels that are effectively invisible; the fully transparent parts
-        // of the fullscreen drawers surface are still excluded.
-        Hypr.extras.batchMessage([rule.arg("blur").arg(trEnabled), rule.arg("ignore_alpha").arg(0.1)]);
+        // alpha clears it, so any non-zero value makes a fading panel lose
+        // its blur partway through and snap. Tying it to transparency.base
+        // put that snap at 96% of the fade; even 0.02 cuts out early once the
+        // glass itself is thin. Zero means "blur anything not fully
+        // transparent", which is what a fade needs — the transparent parts of
+        // the fullscreen drawers surface sit at alpha 0 and stay excluded.
+        Hypr.extras.batchMessage([rule.arg("blur").arg(trEnabled), rule.arg("ignore_alpha").arg(0)]);
     }
 
     function requestReloadHyprRules(): void {
