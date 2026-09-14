@@ -38,21 +38,24 @@ ok()   { printf '%s  ok%s %s\n' "$green" "$reset" "$*"; }
 root_actions=()
 queue_root() { root_actions+=("$1"); }
 
+ROOT_SCRIPT=""
+cleanup_root_script() { [[ -n $ROOT_SCRIPT ]] && rm -f "$ROOT_SCRIPT"; ROOT_SCRIPT=""; }
+trap cleanup_root_script EXIT
+
 run_root_actions() {
     ((${#root_actions[@]})) || return 0
 
-    local script
-    script=$(mktemp) || die "could not create a temp file"
-    trap 'rm -f "$script"' RETURN
+    ROOT_SCRIPT=$(mktemp) || die "could not create a temp file"
     {
         # Fail fast: a half-applied update must stop and say so rather than
         # carry on and get restarted into
         echo "set -euo pipefail"
         printf '%s\n' "${root_actions[@]}"
-    } > "$script"
+    } > "$ROOT_SCRIPT"
 
     say "applying ${#root_actions[@]} privileged step(s) — this is the only password prompt"
-    sudo bash "$script" || die "a privileged step failed; nothing was restarted"
+    sudo bash "$ROOT_SCRIPT" || die "a privileged step failed; nothing was restarted"
+    cleanup_root_script
 }
 
 # --- the shell process ------------------------------------------------------
