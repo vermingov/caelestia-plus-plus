@@ -106,19 +106,20 @@ void main() {
     rgb += light * lift;
 
     // Lensing: light on the lit lip, shadow on the far one.
-    float lensLight = uLens * band * lit * 0.26;
-    float lensDark = uLens * band * (1.0 - lit) * 0.22;
+    // Dark glass: the lit lip barely glows, the far lip mostly darkens.
+    float lensLight = uLens * band * lit * 0.07;
+    float lensDark = uLens * band * (1.0 - lit) * 0.18;
     a += lensLight + lensDark;
     rgb += light * lensLight + dark * lensDark;
 
     // The rim, fringed.
-    float rimA = uRim * (0.10 + 0.30 * lit);
+    float rimA = uRim * (0.04 + 0.12 * lit);
     vec3 rim = vec3(rimR, rimG, rimB) * rimA;
     a += rimG * rimA;
     rgb += light * rim;
 
     // Speculars.
-    float spec = uRim * 0.42 * (streak + streakL);
+    float spec = uRim * 0.14 * (streak + streakL);
     a += spec;
     rgb += light * spec;
 

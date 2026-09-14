@@ -130,9 +130,10 @@ StyledListView {
             anchors.rightMargin: Style.rowInset
 
             radius: Style.rowRadius
-            lift: 0.045
-            rim: 0.5
-            lens: 0.5
+            lift: 0.05
+            rim: 0.45
+            lens: 0.4
+            scrim: 0
             band: 9
             grain: 0
         }

@@ -24,19 +24,19 @@ ShaderEffect {
     // Rim and specular brightness.
     property real rim: 1.0
 
-    // Dark base under the lift, for legibility over bright backdrops. Zero is
-    // clear glass; anything above starts to look like smoked plastic.
-    property real scrim: 0.0
+    // Dark body. Real dark glass is smoked, not clear: a little black gives
+    // it substance and keeps text legible. Too much and it is plastic.
+    property real scrim: 0.16
 
     // Strength of the edge lensing and the shadow it casts on the far lip.
     property real lens: 1.0
 
     // How deep the lens band reaches in from the edge, in pixels.
-    property real band: 14
+    property real band: 12
 
     // Grain in the lens band: enough to break its gradient, not enough to
     // see as texture.
-    property real grain: 0.05
+    property real grain: 0.03
 
     // White light and black shadow, whatever the theme: glass has no colour
     // of its own, and lighting it with the theme's text colour tints it.

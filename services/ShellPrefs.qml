@@ -204,8 +204,8 @@ Singleton {
         property bool barShowRam: true
         property bool barShowGpu: true
         property bool glassNeutral: true
-        property real glassScrim: 0.0
-        property real glassLift: 0.20
+        property real glassScrim: 0.16
+        property real glassLift: 0.0
         property real glassRim: 1.0
         property bool dnaEnabled: true
         property bool dnaUseThemeColor: true
