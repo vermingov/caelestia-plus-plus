@@ -12,6 +12,7 @@ pub mod colour;
 pub mod contrast;
 pub mod dislike;
 pub mod dynamic;
+pub mod generator;
 pub mod hct;
 pub mod math;
 pub mod palette;
