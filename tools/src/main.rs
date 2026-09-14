@@ -25,6 +25,7 @@ fn main() {
         "gpus" => cmd::gpus::run(),
         "startup" => cmd::startup::run(rest),
         "egg-watch" => cmd::egg::run(rest),
+        "hyprmod" => cmd::hyprmod::run(rest),
         "-h" | "--help" | "help" => {
             usage();
             0

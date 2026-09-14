@@ -4,15 +4,14 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 
-// Bridge to the HyprMod Hyprland-customizer layer. Three surfaces, all through hyprmod-ctl.py:
+// Bridge to the HyprMod Hyprland-customizer layer. Three surfaces, all through
+// the hyprmod helper:
 // curated scalar knobs from variables.lua, arbitrary option overrides on top
 // of the lua config, and custom keybinds. Writes are optimistic in the UI and
 // serialized through a queue so rapid changes never race the helper's
 // read-modify-write.
 Singleton {
     id: root
-
-    readonly property string ctl: Quickshell.shellPath("assets/hyprmod-ctl.py")
 
     property bool available
     property var knobs: ({})
@@ -109,19 +108,29 @@ Singleton {
     }
 
     function runQueue(): void {
-        if (ctlProc.running || !pendingCommands.length)
+        if (ctlProc.running || !pendingCommands.length || !Helpers.ready)
             return;
         const entry = pendingCommands[0];
         pendingCommands = pendingCommands.slice(1);
-        ctlProc.command = ["python3", ctl].concat(entry.command);
+        ctlProc.command = Helpers.command("hyprmod", entry.command);
         ctlProc.running = true;
+    }
+
+    // Nothing is sent before the helper is resolved, so whatever the UI piled
+    // up in the meantime goes out the moment it is.
+    Connections {
+        target: Helpers
+
+        function onReadyChanged(): void {
+            root.runQueue();
+        }
     }
 
     Process {
         id: dumpProc
 
-        running: true
-        command: ["python3", root.ctl, "dump"]
+        running: Helpers.ready
+        command: Helpers.command("hyprmod", ["dump"])
 
         stdout: StdioCollector {
             onStreamFinished: {
@@ -138,7 +147,7 @@ Singleton {
     Process {
         id: schemaProc
 
-        command: ["python3", root.ctl, "schema"]
+        command: Helpers.command("hyprmod", ["schema"])
 
         stdout: StdioCollector {
             onStreamFinished: {
@@ -153,7 +162,7 @@ Singleton {
     Process {
         id: overridesProc
 
-        command: ["python3", root.ctl, "overrides"]
+        command: Helpers.command("hyprmod", ["overrides"])
 
         stdout: StdioCollector {
             onStreamFinished: {

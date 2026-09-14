@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import qs.services
 
 // Desktop easter egg: `qs -c caelestia ipc call easterEgg pop` plays a 7s
 // bottom-edge scene - rise + jiggle, partner joins, approach, thrusting
