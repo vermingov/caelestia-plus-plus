@@ -2,6 +2,8 @@
 //!
 //! Ported from materialyoucolor's `hct/cam16.py`.
 
+use std::f64::consts::PI;
+
 use super::colour::{argb_from_xyz, blue_from_argb, green_from_argb, linearized, red_from_argb};
 use super::math::{sanitize_degrees_double, signum};
 use super::viewing::{self, ViewingConditions};
@@ -56,8 +58,8 @@ impl Cam16 {
         let u = (20.0 * r_a + 20.0 * g_a + 21.0 * b_a) / 20.0;
         let p2 = (40.0 * r_a + 20.0 * g_a + b_a) / 20.0;
 
-        let hue = sanitize_degrees_double(b.atan2(a).to_degrees());
-        let hue_radians = hue.to_radians();
+        let hue = sanitize_degrees_double(b.atan2(a) * 180.0 / PI);
+        let hue_radians = hue * PI / 180.0;
 
         let ac = p2 * vc.nbb;
         let j = 100.0 * (ac / vc.aw).powf(vc.c * vc.z);
@@ -65,7 +67,7 @@ impl Cam16 {
 
         // The hue wheel is cut at 20.14 degrees, not at zero.
         let hue_prime = if hue < 20.14 { hue + 360.0 } else { hue };
-        let e_hue = 0.25 * ((hue_prime.to_radians() + 2.0).cos() + 3.8);
+        let e_hue = 0.25 * ((hue_prime * PI / 180.0 + 2.0).cos() + 3.8);
         let p1 = (50000.0 / 13.0) * e_hue * vc.nc * vc.ncb;
         let t = (p1 * (a * a + b * b).sqrt()) / (u + 0.305);
         let alpha = t.powf(0.9) * (1.64 - 0.29f64.powf(vc.n)).powf(0.73);
@@ -95,7 +97,7 @@ impl Cam16 {
         let m = c * vc.f_l_root;
         let alpha = c / (j / 100.0).sqrt();
         let s = 50.0 * ((alpha * vc.c) / (vc.aw + 4.0)).sqrt();
-        let hue_radians = h.to_radians();
+        let hue_radians = h * PI / 180.0;
         let jstar = ((1.0 + 100.0 * 0.007) * j) / (1.0 + 0.007 * j);
         let mstar = (1.0 / 0.0228) * (1.0 + 0.0228 * m).ln();
         Cam16 {
@@ -144,7 +146,7 @@ impl Cam16 {
             self.chroma / (self.j / 100.0).sqrt()
         };
         let t = (alpha / (1.64 - 0.29f64.powf(vc.n)).powf(0.73)).powf(1.0 / 0.9);
-        let h_rad = self.hue.to_radians();
+        let h_rad = self.hue * PI / 180.0;
 
         let e_hue = 0.25 * ((h_rad + 2.0).cos() + 3.8);
         let ac = vc.aw * (self.j / 100.0).powf(1.0 / vc.c / vc.z);

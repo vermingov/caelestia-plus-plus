@@ -74,7 +74,9 @@ fn lab_f(t: f64) -> f64 {
     const E: f64 = 216.0 / 24389.0;
     const KAPPA: f64 = 24389.0 / 27.0;
     if t > E {
-        t.cbrt()
+        // Python computes this as pow(t, 1/3); cbrt can differ in the last bit,
+        // and that bit reaches the temperature model as a different hue.
+        t.powf(1.0 / 3.0)
     } else {
         (KAPPA * t + 16.0) / 116.0
     }
@@ -89,6 +91,17 @@ fn lab_inv_f(ft: f64) -> f64 {
     } else {
         (116.0 * ft - 16.0) / KAPPA
     }
+}
+
+/// CIELAB, which only the temperature model needs — it measures warmth as an
+/// angle in the a*/b* plane rather than by hue.
+pub fn lab_from_argb(argb: u32) -> [f64; 3] {
+    const WHITE_POINT_D65: [f64; 3] = [95.047, 100.0, 108.883];
+    let xyz = xyz_from_argb(argb);
+    let fx = lab_f(xyz[0] / WHITE_POINT_D65[0]);
+    let fy = lab_f(xyz[1] / WHITE_POINT_D65[1]);
+    let fz = lab_f(xyz[2] / WHITE_POINT_D65[2]);
+    [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
 }
 
 pub fn y_from_lstar(lstar: f64) -> f64 {
