@@ -158,11 +158,23 @@ Singleton {
         }
     }
 
+    // Retry fast right after start (the daemon may still be coming up), then
+    // back off: an install without the daemon must not rebuild the socket
+    // every two seconds for the shell's lifetime
     Timer {
-        interval: 2000
+        id: reconnectTimer
+
+        property int backoffMs: 2000
+
+        interval: backoffMs
         running: !root.connected
         repeat: true
+        onRunningChanged: {
+            if (running)
+                backoffMs = 2000;
+        }
         onTriggered: {
+            backoffMs = Math.min(backoffMs * 2, 30000);
             sockLoader.active = false;
             reconnectKick.restart();
         }

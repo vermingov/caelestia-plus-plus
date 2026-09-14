@@ -11,8 +11,8 @@ import qs.services
 // unreachable at that moment (boot race, daemon restart) it logs "will not
 // work" and stays dead for the whole session — profile switching silently
 // breaks until the shell is reloaded. It also mis-detects performance as
-// unavailable on this machine. Polling the CLI costs a ~10ms subprocess and
-// recovers from anything.
+// unavailable on this machine. A 30 s CLI poll (immediate after our own
+// set) costs a short python subprocess and recovers from anything.
 //
 // A profile set while the daemon is down is remembered and applied the moment
 // it comes back, so a mode picked right after boot sticks.
@@ -133,7 +133,7 @@ Singleton {
     Timer {
         id: pollTimer
 
-        interval: internal.ready ? 5000 : internal.retryMs
+        interval: internal.ready ? 30000 : internal.retryMs
         onTriggered: probe.running = true
     }
 

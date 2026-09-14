@@ -20,8 +20,13 @@ Card {
 
 
 
-    ServiceRef {
-        service: Storage
+    // Resident pane: hold the poller only while on screen
+    Loader {
+        active: root.visible
+
+        sourceComponent: ServiceRef {
+            service: Storage
+        }
     }
 
     ColumnLayout {

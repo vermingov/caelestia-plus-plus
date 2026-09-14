@@ -82,8 +82,13 @@ Item {
                         temperature: Cpu.temperature
                         accent: Colours.palette.m3primary
 
-                        ServiceRef {
-                            service: Cpu
+                        // Resident pane: hold the poller only while on screen
+                        Loader {
+                            active: root.visible
+
+                            sourceComponent: ServiceRef {
+                                service: Cpu
+                            }
                         }
                     }
                 }
@@ -102,8 +107,12 @@ Item {
                         temperature: Gpu.temperature
                         accent: Colours.palette.m3secondary
 
-                        ServiceRef {
-                            service: Gpu
+                        Loader {
+                            active: root.visible
+
+                            sourceComponent: ServiceRef {
+                                service: Gpu
+                            }
                         }
                     }
                 }

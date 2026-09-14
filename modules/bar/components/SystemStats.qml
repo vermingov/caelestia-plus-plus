@@ -76,7 +76,10 @@ StyledRect {
         required property string label
         required property color accent
         required property var service
-        readonly property real value: service.percentage
+        // Whole percents only: sub-percent jitter would restart both
+        // animations every sample, and any running animation renders the
+        // fullscreen drawers window at 60 fps
+        readonly property real value: isNaN(service.percentage) ? NaN : Math.round(service.percentage * 100) / 100
         // Danger tint well before saturation so a pegged core is obvious at a glance
         readonly property color colour: !isNaN(value) && value >= 0.9 ? Colours.palette.m3error : accent
 
@@ -132,7 +135,9 @@ StyledRect {
                     wavy: hover.hovered
 
                     Behavior on clampedVal {
-                        Anim {}
+                        Anim {
+                            type: Anim.FastEffects
+                        }
                     }
                 }
 
@@ -155,7 +160,9 @@ StyledRect {
                     text: isNaN(cell.value) ? "…" : Math.round(displayed * 100) + "%"
 
                     Behavior on displayed {
-                        Anim {}
+                        Anim {
+                            type: Anim.FastEffects
+                        }
                     }
                     color: cell.colour
                     font: Tokens.font.body.builders.small.scale(0.85).build()
