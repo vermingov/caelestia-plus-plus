@@ -15,6 +15,10 @@ Singleton {
     id: root
 
     property list<NotifData> list: []
+    // Newest entries kept in the history; anything older is dropped on load
+    // and closed as new ones arrive. Restoring a thousand entries froze the
+    // shell for seconds and every save rewrote hundreds of kilobytes.
+    readonly property int maxHistory: 300
     readonly property list<NotifData> notClosed: list.filter(n => !n.closed)
     readonly property list<NotifData> popups: list.filter(n => n.popup)
     property alias dnd: props.dnd
@@ -108,8 +112,15 @@ Singleton {
                     notification: notif
                 });
                 root.list = [comp, ...root.list];
+                root.trimHistory();
             }
         }
+    }
+
+    function trimHistory(): void {
+        const kept = root.notClosed;
+        for (const stale of kept.slice(root.maxHistory))
+            stale.close();
     }
 
     function _rebindServer(): void {
@@ -181,7 +192,11 @@ exit 10`]
                 console.warn(`Notifs: ${storage.path} is not valid JSON, starting with an empty history: ${e}`);
                 data = [];
             }
-            for (const notif of data) {
+            // Build the array first and assign once: pushing into the list
+            // property per entry re-ran every filter and the sidebar's model
+            // diff each time, quadratic in the history length
+            data.sort((a, b) => new Date(b.time) - new Date(a.time));
+            const restored = data.slice(0, root.maxHistory).map(notif => {
                 const properties = Object.assign({}, notif);
 
                 // Backwards compatibility for old notifications
@@ -189,9 +204,9 @@ exit 10`]
                     properties.notificationId = properties.id;
 
                 delete properties.id;
-                root.list.push(notifComp.createObject(root, properties));
-            }
-            root.list.sort((a, b) => b.time - a.time);
+                return notifComp.createObject(root, properties);
+            });
+            root.list = root.list.concat(restored).sort((a, b) => b.time - a.time);
             root.loaded = true;
         }
         onLoadFailed: err => {
