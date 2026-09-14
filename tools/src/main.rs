@@ -29,6 +29,7 @@ fn main() {
         "egg-watch" => cmd::egg::run(rest),
         "hyprmod" => cmd::hyprmod::run(rest),
         "config-doctor" => cmd::doctor::run(rest),
+        "seccomp" => cmd::seccomp::run(rest),
         "-h" | "--help" | "help" => {
             usage();
             0

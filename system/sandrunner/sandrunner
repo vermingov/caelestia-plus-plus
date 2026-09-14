@@ -147,8 +147,20 @@ cleanup() {
 }
 trap cleanup EXIT
 write_shims "$staging"
-python3 "$here/seccomp-gen.py" "$staging/seccomp.bpf" ||
-    die "seccomp filter generation failed"
+# The filter is a fixed blob, so either generator produces the same 132
+# instructions; the Rust one just does not start an interpreter to do it. The
+# size is checked before the filter is trusted — a short file here would be a
+# sandbox with holes in it, not a sandbox that fails to start.
+gen_seccomp() {
+    if command -v caelestia-tools >/dev/null 2>&1 &&
+        caelestia-tools seccomp "$staging/seccomp.bpf" 2>/dev/null &&
+        [[ $(stat -c %s "$staging/seccomp.bpf" 2>/dev/null) == 1056 ]]; then
+        return 0
+    fi
+    python3 "$here/seccomp-gen.py" "$staging/seccomp.bpf" &&
+        [[ $(stat -c %s "$staging/seccomp.bpf" 2>/dev/null) == 1056 ]]
+}
+gen_seccomp || die "seccomp filter generation failed"
 
 # Cgroup scope caps fork bombs and memory exhaustion — the namespaces alone
 # don't stop resource DoS against the host.
