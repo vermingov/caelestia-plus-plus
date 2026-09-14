@@ -51,7 +51,10 @@ Card {
                 startAngle: -225
                 sweepAngle: 270
 
+                // See dash/Resources.qml: unseen animations render the window.
                 Behavior on clampedVal {
+                    enabled: root.visible
+
                     Anim {}
                 }
 

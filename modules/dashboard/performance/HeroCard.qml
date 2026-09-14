@@ -36,7 +36,10 @@ Card {
         implicitSize: Math.max(icon.implicitWidth, icon.implicitHeight) + Tokens.padding.medium * 2
         value: root.usage
 
+        // See dash/Resources.qml: unseen animations render the window.
         Behavior on clampedVal {
+            enabled: tempProg.visible
+
             Anim {}
         }
 

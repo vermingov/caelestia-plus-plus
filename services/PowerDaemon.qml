@@ -5,14 +5,19 @@ import Quickshell
 import Quickshell.Io
 import qs.services
 
-// The one place that talks to power-profiles-daemon. Everything goes through
-// the powerprofilesctl CLI instead of quickshell's built-in PowerProfiles
-// singleton: that C++ service initialises once, and if the daemon is slow or
-// unreachable at that moment (boot race, daemon restart) it logs "will not
-// work" and stays dead for the whole session — profile switching silently
-// breaks until the shell is reloaded. It also mis-detects performance as
-// unavailable on this machine. A 30 s CLI poll (immediate after our own
-// set) costs a short python subprocess and recovers from anything.
+// The one place that talks to power-profiles-daemon. Setting a profile goes
+// through the powerprofilesctl CLI rather than quickshell's built-in
+// PowerProfiles singleton: that C++ service initialises once, and if the
+// daemon is slow or unreachable at that moment (boot race, daemon restart) it
+// logs "will not work" and stays dead for the whole session — profile
+// switching silently breaks until the shell is reloaded. It also mis-detects
+// performance as unavailable on this machine. Re-probing from scratch every
+// 30 s recovers from anything.
+//
+// Reading, though, is a D-Bus property read and nothing more. The CLI is
+// Python: 150 ms of interpreter start every 30 s, forever, to learn a string
+// that busctl fetches in 2.5 ms. Same daemon, same answer, same failure mode
+// (no reply means down, which is what the retry path below is for).
 //
 // A profile set while the daemon is down is remembered and applied the moment
 // it comes back, so a mode picked right after boot sticks.
@@ -96,30 +101,28 @@ Singleton {
             pollTimer.restart();
         }
 
-        // powerprofilesctl lists sections as "* balanced:" (active) and
-        // "  performance:", with "Degraded:   no|<reason>" attribute lines
+        // busctl prints one line per property in the order asked for, each
+        // as `s "value"`. A daemon that is down answers on stderr and leaves
+        // stdout empty, which parses to no active profile — exactly what the
+        // retry path treats as unreachable.
         function parse(text: string): var {
-            let active = "", degradation = "", section = "";
+            const values = [];
             for (const line of text.split("\n")) {
-                const head = /^\s*(\*?)\s*([a-z-]+):\s*$/.exec(line);
-                if (head) {
-                    section = head[2];
-                    if (head[1] === "*")
-                        active = section;
-                    continue;
-                }
-                const deg = /^\s+Degraded:\s+(.*\S)\s*$/.exec(line);
-                if (deg && deg[1] !== "no")
-                    degradation = deg[1];
+                const m = /^\s*s\s+"(.*)"\s*$/.exec(line);
+                if (m)
+                    values.push(m[1]);
             }
-            return {active, degradation};
+            return {
+                active: values[0] ?? "",
+                degradation: values[1] ?? ""
+            };
         }
     }
 
     Process {
         id: probe
 
-        command: ["powerprofilesctl"]
+        command: ["busctl", "--system", "get-property", "org.freedesktop.UPower.PowerProfiles", "/org/freedesktop/UPower/PowerProfiles", "org.freedesktop.UPower.PowerProfiles", "ActiveProfile", "PerformanceDegraded"]
         stdout: StdioCollector {
             // A down daemon (or missing tool) leaves stdout empty, which
             // parses to no active profile — exit codes aren't needed

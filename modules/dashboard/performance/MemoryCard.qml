@@ -60,7 +60,10 @@ Card {
             fgColour: root.accent
             value: Memory.percentage
 
+            // See dash/Resources.qml: unseen animations render the window.
             Behavior on clampedVal {
+                enabled: root.visible
+
                 Anim {}
             }
 

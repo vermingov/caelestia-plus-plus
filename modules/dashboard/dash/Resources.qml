@@ -70,7 +70,12 @@ Item {
         implicitSize: height
         strokeWidth: Tokens.sizes.dashboard.resourceProgressThickness
 
+        // Resident while the dashboard is closed: an animation nobody can
+        // see still renders this whole window at 60fps for its full half
+        // second, once per reading. Off screen the value just jumps.
         Behavior on clampedVal {
+            enabled: res.visible
+
             Anim {}
         }
 
