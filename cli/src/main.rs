@@ -17,6 +17,7 @@ mod clock;
 mod cmd;
 mod config;
 mod hypr;
+mod material;
 mod paths;
 mod proc;
 mod scheme;
