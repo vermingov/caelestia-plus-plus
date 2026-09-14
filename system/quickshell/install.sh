@@ -64,8 +64,10 @@ print(rules.get("qs", {}).get("type", ""))' 2>/dev/null || true)
 build_and_install() {
     local pkg=$prebuilt
     if [[ -z $pkg ]]; then
-        pkg=$(build_package)
+        # Command substitution swallows set -e, so check the status explicitly
+        pkg=$(build_package) || exit 1
     fi
+    [[ -f $pkg ]] || { echo "!! no package to install: $pkg" >&2; exit 1; }
     echo ":: installing $(basename "$pkg")"
     # --ask=22 auto-answers the conflict removal of quickshell/quickshell-git
     pacman -U --noconfirm --ask=22 "$pkg"
@@ -93,9 +95,13 @@ build_package() {
     runuser -u "$target_user" -- env HOME="$target_home" \
         CFLAGS="-march=x86-64 -mtune=generic -O2 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection" \
         CXXFLAGS="-march=x86-64 -mtune=generic -O2 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection -Wp,-D_GLIBCXX_ASSERTIONS" \
-        bash -c "cd '$build_dir' && makepkg -Cf --skipinteg" >&2
+        bash -c "cd '$build_dir' && makepkg -Cf --skipinteg" >&2 \
+        || { echo "!! the quickshell build failed; the makepkg output above says why" >&2; exit 1; }
 
-    ls -t "$build_dir"/caelestia++-quickshell-*.pkg.tar.zst | head -1
+    local built
+    built=$(ls -t "$build_dir"/caelestia++-quickshell-*.pkg.tar.zst 2>/dev/null | head -1)
+    [[ -n $built ]] || { echo "!! the build produced no package in $build_dir" >&2; exit 1; }
+    echo "$built"
 }
 
 force=0
