@@ -305,7 +305,10 @@ cmd_status() {
     local pid
     pid=$(shell_pid || true)
     if [[ -n $pid ]]; then
-        ok "running (pid $pid, up $(ps -o etime= -p "$pid" | tr -d ' '), nice $(ps -o ni= -p "$pid" | tr -d ' '))"
+        local nice
+        nice=$(ps -o ni= -p "$pid" | tr -d ' ')
+        ok "running (pid $pid, up $(ps -o etime= -p "$pid" | tr -d ' '), nice $nice)"
+        (( nice > 0 )) && warn "the shell is scheduled as a background task; 'cae' reinstalls the quickshell root half to fix that"
     else
         warn "not running"
     fi

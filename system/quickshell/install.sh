@@ -22,7 +22,7 @@ set -euo pipefail
 
 # Bump whenever ANY root-side file of this feature changes; the shell's
 # system scan compares it against /etc/caelestia/quickshell.version.
-root_half_version=1
+root_half_version=2
 
 if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo $0" >&2
@@ -46,18 +46,30 @@ qs_loads() {
 install_scheduler_override() {
     [[ -d /etc/ananicy.d ]] || return 0
     install -Dm644 "$here/quickshell.rules" /etc/ananicy.d/zz-caelestia/quickshell.rules
-    systemctl try-reload-or-restart ananicy-cpp.service 2>/dev/null || true
-    # ananicy-cpp keeps the last rule it reads for a name, in directory
-    # traversal order, which nothing guarantees; check what actually won
-    local effective
-    effective=$(timeout 10 ananicy-cpp dump rules 2>/dev/null | sed -n '/^{/,$p' | python3 -c '
-import json, sys
-rules = json.load(sys.stdin)
-print(rules.get("qs", {}).get("type", ""))' 2>/dev/null || true)
-    if [[ $effective == Chat ]]; then
-        echo ":: scheduler override installed (qs is no longer a nice-10 Service)"
+
+    # `ananicy-cpp --reload` logs that it reloaded but keeps applying the old
+    # rule to processes started afterwards; a restart is what actually takes.
+    systemctl restart ananicy-cpp.service 2>/dev/null || true
+
+    # Rules only apply at exec, so the shell that is running right now would
+    # keep its background priority until its next restart. Fix it in place.
+    local pid
+    for pid in $(pgrep -x qs 2>/dev/null || true); do
+        renice -n -3 -p "$pid" >/dev/null 2>&1 || true
+        ionice -c 2 -n 7 -p "$pid" >/dev/null 2>&1 || true
+    done
+
+    # Check the live process, not the rule files: the files can say one thing
+    # while the daemon applies another
+    local nice=""
+    pid=$(pgrep -x qs 2>/dev/null | head -1 || true)
+    [[ -n $pid ]] && nice=$(ps -o ni= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [[ -z $nice ]]; then
+        echo ":: scheduler override installed (no shell running to verify against)"
+    elif (( nice <= 0 )); then
+        echo ":: scheduler override active (shell at nice $nice)"
     else
-        echo "!! scheduler override lost to another qs rule (effective type: ${effective:-unknown}); the shell may still run at background priority" >&2
+        echo "!! the shell is still at nice $nice; another ananicy rule is winning" >&2
     fi
 }
 
