@@ -46,54 +46,54 @@ StyledClippingRect {
         visible: root.shadow
     }
 
-    // Illumination: an even lift across the pane, strongest where the light
-    // lands so the surface has a direction
+    // Illumination: an even lift across the whole pane. Flat on purpose —
+    // a gradient keyed to the panel's own height rescales as the panel
+    // grows and shrinks with the result count, so the surface visibly
+    // changed brightness while you typed.
     Rectangle {
         anchors.fill: parent
         radius: root.radius
+        color: Qt.alpha(root.light, root.lift)
+    }
+
+    // Lensing: light collecting along the edges. Fixed pixel depths, for
+    // the same reason — a real pane's rim does not scale with its size.
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        implicitHeight: 26
 
         gradient: Gradient {
             orientation: Gradient.Vertical
 
             GradientStop {
                 position: 0
-                color: Qt.alpha(root.light, root.lift * 1.2)
-            }
-            GradientStop {
-                position: 0.5
-                color: Qt.alpha(root.light, root.lift * 0.75)
+                color: Qt.alpha(root.light, 0.20 * root.rim)
             }
             GradientStop {
                 position: 1
-                color: Qt.alpha(root.light, root.lift)
+                color: "transparent"
             }
         }
     }
 
-    // Lensing: light collecting along the top and bottom edges and falling
-    // away through the middle, which is the cue that the pane has thickness
     Rectangle {
-        anchors.fill: parent
-        radius: root.radius
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        implicitHeight: 20
 
         gradient: Gradient {
             orientation: Gradient.Vertical
 
             GradientStop {
                 position: 0
-                color: Qt.alpha(root.light, 0.22 * root.rim)
-            }
-            GradientStop {
-                position: 0.12
-                color: "transparent"
-            }
-            GradientStop {
-                position: 0.88
                 color: "transparent"
             }
             GradientStop {
                 position: 1
-                color: Qt.alpha(root.light, 0.16 * root.rim)
+                color: Qt.alpha(root.light, 0.14 * root.rim)
             }
         }
     }

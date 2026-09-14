@@ -70,7 +70,11 @@ StyledWindow {
     name: "drawers"
     WlrLayershell.exclusionMode: ExclusionMode.Ignore
     WlrLayershell.layer: (fsTransitionProg > 0 && contentItem.Config.general.showOverFullscreen) || (hasSpecialWorkspace && hasFullscreenOnNormalWs) ? WlrLayer.Overlay : WlrLayer.Top
-    WlrLayershell.keyboardFocus: screenState.launcher || screenState.session ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+    // Held until the panel has finished animating away, not dropped the
+    // instant the state flips: reconfiguring a layer surface mid-animation
+    // makes the compositor re-run its own fade for the namespace, which
+    // reads as the panel flashing back for a frame
+    WlrLayershell.keyboardFocus: panels.launcher.visible || screenState.session ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
     mask: hasFullscreen ? emptyRegion : regions
 

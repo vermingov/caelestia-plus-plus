@@ -36,13 +36,32 @@ Item {
     implicitWidth: Style.panelWidth
     opacity: 1 - offsetScale
 
-    // Rises the last few pixels into place instead of sliding in from an
-    // edge. Deliberately no scale on the way in: the panel's text renders
-    // with NativeRendering, which blurs under a fractional scale
-    // (see Bible qml-nativerendering-blurs-under-scale).
-    transform: Translate {
-        y: root.offsetScale * 16
-    }
+    // Shrinks as it fades rather than vanishing at full size. This is not
+    // decoration: the compositor cannot fade a blur, so a panel that fades
+    // out at full size keeps its blurred backdrop until alpha hits zero and
+    // then snaps the whole region back to sharp in one frame. Shrinking
+    // means the blurred region closes to almost nothing first, so there is
+    // no large area left to snap. Text is NativeRendering and does go soft
+    // under a fractional scale, which is fine on the way out and is why the
+    // scale is kept small on the way in.
+    transform: [
+        Scale {
+            // Collapses hard on the way out, barely moves on the way in. The
+            // blur region is whatever still has alpha, so the smaller the
+            // panel is when alpha finally hits zero, the less area there is
+            // to snap back to sharp. Entry stays near 1 because scaling
+            // NativeRendering text softens it.
+            readonly property real amount: root.shouldBeActive ? 0.04 : 0.5
+
+            origin.x: root.width / 2
+            origin.y: root.height / 2
+            xScale: 1 - root.offsetScale * amount
+            yScale: 1 - root.offsetScale * amount
+        },
+        Translate {
+            y: root.offsetScale * 16
+        }
+    ]
 
     Component.onCompleted: Qt.callLater(() => Apps) // Load apps on init
 
