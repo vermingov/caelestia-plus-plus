@@ -529,8 +529,17 @@ impl Scheme {
         self.colours = if self.name == DYNAMIC {
             dynamic_colours(&self.variant, &self.flavour, &self.mode)?
         } else {
-            file_colours_ordered(&self.name, &self.flavour, &self.mode)
-                .ok_or_else(|| format!("no colours for {}/{}/{}", self.name, self.flavour, self.mode))?
+            file_colours_ordered(&self.name, &self.flavour, &self.mode).ok_or_else(|| {
+                // Usually a scheme that was installed once and is not any
+                // more, left behind in the state file by a package update.
+                format!(
+                    "scheme \"{} {}\" has no {} colours installed.\nPick one that is: {}",
+                    self.name,
+                    self.flavour,
+                    self.mode,
+                    names().join(", ")
+                )
+            })?
         };
         self.save();
         Ok(())
@@ -553,8 +562,18 @@ fn pick(options: &[String]) -> Option<String> {
 /// The generated palette for the current wallpaper, from the cache if it is
 /// there and generated if it is not.
 pub fn dynamic_colours(variant: &str, flavour: &str, mode: &str) -> Result<Colours, String> {
-    let thumbnail = paths::wallpaper_thumbnail_path();
-    let hash = sha256::file_hex(&thumbnail).ok_or(
+    dynamic_colours_for(&paths::wallpaper_thumbnail_path(), variant, flavour, mode)
+}
+
+/// The same, for a thumbnail that is not the one currently set — which is how
+/// `wallpaper --print` answers for an image without switching to it.
+pub fn dynamic_colours_for(
+    thumbnail: &std::path::Path,
+    variant: &str,
+    flavour: &str,
+    mode: &str,
+) -> Result<Colours, String> {
+    let hash = sha256::file_hex(thumbnail).ok_or(
         "no wallpaper set. Set one with `caelestia wallpaper` before setting a dynamic scheme.",
     )?;
 
@@ -567,7 +586,7 @@ pub fn dynamic_colours(variant: &str, flavour: &str, mode: &str) -> Result<Colou
         }
     }
 
-    let seed = seed_for(&thumbnail, &base)?;
+    let seed = seed_for(thumbnail, &base)?;
     let colours = crate::material::generator::gen_scheme(variant, flavour, mode, seed);
     if let Err(e) = paths::atomic_write(&cached, &dump_object(&colours)) {
         eprintln!("caelestia: cannot cache {}: {e}", cached.display());

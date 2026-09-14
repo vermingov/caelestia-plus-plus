@@ -8,3 +8,4 @@ pub mod scheme;
 pub mod screenshot;
 pub mod shell;
 pub mod toggle;
+pub mod wallpaper;

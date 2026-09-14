@@ -17,6 +17,7 @@ mod clock;
 mod cmd;
 mod config;
 mod hypr;
+mod image;
 mod material;
 mod paths;
 mod proc;
@@ -49,6 +50,7 @@ fn main() {
         Some(args::Command::SchemeGet(a)) => cmd::scheme::get(&a),
         Some(args::Command::SchemeList(a)) => cmd::scheme::list(&a),
         Some(args::Command::SchemeSet(a)) => cmd::scheme::set(&a),
+        Some(args::Command::Wallpaper(a)) => cmd::wallpaper::run(&a, &argv),
         None => hand_over(&argv),
     };
     std::process::exit(code);

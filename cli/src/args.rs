@@ -18,6 +18,7 @@ pub enum Command {
     SchemeGet(cmd::scheme::GetArgs),
     SchemeList(cmd::scheme::ListArgs),
     SchemeSet(cmd::scheme::SetArgs),
+    Wallpaper(cmd::wallpaper::Args),
 }
 
 pub fn parse(argv: &[String]) -> Option<Command> {
@@ -30,6 +31,7 @@ pub fn parse(argv: &[String]) -> Option<Command> {
         "screenshot" => parse_screenshot(rest),
         "record" => parse_record(rest),
         "scheme" => parse_scheme(rest),
+        "wallpaper" => parse_wallpaper(rest),
         _ => None,
     }
 }
@@ -169,6 +171,48 @@ fn parse_record(argv: &[String]) -> Option<Command> {
     Some(Command::Record(args))
 }
 
+/// `wallpaper`. Two of its options take a value or not — argparse's
+/// `nargs="?"` — so a following word is the value only when it does not look
+/// like another option.
+fn parse_wallpaper(argv: &[String]) -> Option<Command> {
+    let mut args = cmd::wallpaper::Args {
+        print: None,
+        random: None,
+        file: None,
+        no_filter: false,
+        threshold: 0.8,
+        no_smart: false,
+    };
+    let flags = expand_short_bundles(argv);
+    let mut i = 0;
+    while i < flags.len() {
+        let optional_value = |i: &mut usize| -> Option<String> {
+            let next = flags.get(*i + 1)?;
+            (!next.starts_with('-')).then(|| {
+                *i += 1;
+                next.clone()
+            })
+        };
+        match flags[i].as_str() {
+            "-p" | "--print" => args.print = Some(optional_value(&mut i)),
+            "-r" | "--random" => args.random = Some(optional_value(&mut i)),
+            "-f" | "--file" => {
+                i += 1;
+                args.file = Some(flags.get(i)?.clone());
+            }
+            "-t" | "--threshold" => {
+                i += 1;
+                args.threshold = flags.get(i)?.parse().ok()?;
+            }
+            "-n" | "--no-filter" => args.no_filter = true,
+            "-N" | "--no-smart" => args.no_smart = true,
+            _ => return None,
+        }
+        i += 1;
+    }
+    Some(Command::Wallpaper(args))
+}
+
 /// `scheme` has subcommands of its own: `get` and `list` read files, `set`
 /// regenerates the palette and pushes it out to every themed application.
 fn parse_scheme(argv: &[String]) -> Option<Command> {
@@ -274,6 +318,13 @@ mod tests {
             vec!["scheme", "set", "-n", "dynamic", "-f", "hard", "-m", "dark", "-v", "vibrant"],
             vec!["scheme", "set", "-r"],
             vec!["scheme", "set", "--notify", "--mode", "light"],
+            vec!["wallpaper"],
+            vec!["wallpaper", "-f", "/tmp/x.png"],
+            vec!["wallpaper", "-r"],
+            vec!["wallpaper", "-r", "/tmp/walls"],
+            vec!["wallpaper", "-p"],
+            vec!["wallpaper", "-rN"],
+            vec!["wallpaper", "--random", "--no-filter", "--threshold", "0.5"],
         ] {
             assert!(is_ours(&words), "{words:?} should not need the Python CLI");
         }
@@ -286,7 +337,8 @@ mod tests {
             vec!["scheme", "set", "-n"],  // the name is missing
             vec!["scheme", "get"],
             vec!["scheme", "get", "--colours"],
-            vec!["wallpaper", "-f", "/tmp/x.png"],
+            vec!["wallpaper", "--what"],
+            vec!["wallpaper", "-f"],  // the path is missing
             vec!["install"],
             vec!["--version"],
             vec!["-h"],
