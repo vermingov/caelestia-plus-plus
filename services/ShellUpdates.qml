@@ -39,6 +39,9 @@ Singleton {
     property list<string> changelog
     property string lastChecked
     property string lastError
+    // Set when the update had to move local edits out of the way. They are in
+    // a git stash, not gone, and saying nothing would look like data loss.
+    property bool stashedLocalChanges
 
     readonly property bool updateAvailable: commitsBehind > 0
 
@@ -126,111 +129,44 @@ Singleton {
     Process {
         id: updateProc
 
-        command: ["sh", "-c", `set -e
-cd '${root.repoDir}'
-url=$(git remote get-url origin) || exit 3
-[ "$url" = '${root.expectedRemote}' ] || { echo "REMOTE_MISMATCH:$url"; exit 4; }
-case "$url" in https://*) ;; *) echo INSECURE_REMOTE; exit 5 ;; esac
-git fetch --quiet --tags --prune --prune-tags origin || exit 2
-tag=$(git tag --list '${root.releaseTagGlob}' --sort=-v:refname | head -1)
-[ -n "$tag" ] || { echo NO_RELEASE; exit 9; }
-newtip=$(git rev-parse --verify "$tag^{commit}") || exit 2
-signers="$HOME/.config/caelestia/update-allowed-signers"
-if [ -f "$signers" ]; then
-    git -c gpg.ssh.allowedSignersFile="$signers" verify-commit "$newtip" 2>/dev/null || { echo BAD_SIGNATURE; exit 6; }
-fi
-git merge --ff-only "$newtip" || exit 7
-# The checkout has moved; the installed binaries have not. A release that
-# adds a helper would otherwise restart into QML calling a tool the old
-# binary has never heard of. A build that fails is not fatal — the Python
-# fallbacks are still there and still correct.
-if command -v cargo >/dev/null 2>&1; then
-    for d in cli tools; do
-        [ -x "$d/install.sh" ] && "$d/install.sh" >/dev/null 2>&1 || true
-    done
-fi
-# Never restart into a quickshell that cannot start (Qt moved on under it)
-qs --version >/dev/null 2>&1 || { echo QS_BROKEN; exit 8; }`]
-
-        onExited: code => {
-            root.updating = false;
-            if (code !== 0) {
-                root.lastError =
-                    code === 4 ? qsTr("Update blocked: origin is not the expected Caelestia++ remote") :
-                    code === 5 ? qsTr("Update blocked: the update remote is not HTTPS") :
-                    code === 6 ? qsTr("Update blocked: the new commit is not signed by a trusted key") :
-                    code === 2 ? qsTr("Could not reach the update server") :
-                    code === 8 ? qsTr("Updated, but quickshell can no longer start against this Qt — rebuild it from System check before restarting") :
-                    code === 9 ? qsTr("No published release to update to") :
-                    qsTr("Update failed — local changes may conflict");
-                return;
-            }
-            // Relaunch outside our own process tree so the new checkout loads
-            Quickshell.execDetached(["sh", "-c", "sleep 0.3; pkill -x qs; sleep 1; caelestia shell -d"]);
-        }
-    }
-
-
-    // Builds the bar to match the checkout, when the checkout has moved ahead
-    // of what is installed.
-    //
-    // The updater cannot do this itself. The update script that runs is the
-    // one in the checkout being replaced, so a release can never teach an
-    // older shell how to install something new — which is exactly how v2.5.0
-    // shipped a bar that nobody's updater knew to build. Doing it here, from
-    // the version that has just started, is the only place a release can
-    // reach.
-    //
-    // Keyed on the commit the binaries were built from, so it is a no-op on
-    // every startup but the first after an update.
-    function provisionApps(): void {
-        if (installingApps || updating || !autoInstallApps)
-            return;
-        installingApps = true;
-        provisionProc.running = true;
-    }
-
-    Process {
-        id: provisionProc
-
+        // No `set -e`: every failure here is handled where it happens, and a
+        // bare `[ … ] && exit 0` under `set -e` exits the script when the test
+        // is false, which is the opposite of what it reads like.
         command: ["sh", "-c", `cd '${root.repoDir}' || exit 0
-[ -x bar/install.sh ] || exit 0
-# Someone who removed the bar on purpose gets to keep it removed.
-[ -f '${Paths.state}/bar-optout' ] && exit 0
-command -v cargo >/dev/null 2>&1 || exit 0
-command -v npm >/dev/null 2>&1 || exit 0
-head=$(git rev-parse HEAD 2>/dev/null) || exit 0
-stamp='${Paths.state}/bar-built-from'
-[ "$(cat "$stamp" 2>/dev/null)" = "$head" ] && exit 0
-mkdir -p '${Paths.state}'
-bar/install.sh >/dev/null 2>&1 || exit 1
-printf '%s' "$head" > "$stamp"
+dir='${component.dir ?? ""}'
+install="$dir/${component.install ?? ""}"
+[ -x "$install" ] || exit 0
+
+# Someone who removed a component on purpose gets to keep it removed.
+optout='${component.optOut ?? ""}'
+if [ -n "$optout" ] && [ -f '${Paths.state}/'"$optout" ]; then
+    exit 0
+fi
+
+for tool in ${(component.requires ?? []).join(" ")}; do
+    command -v "$tool" >/dev/null 2>&1 || exit 0
+done
+
+# The directory's own tree hash: it moves when that component's files move,
+# and stays put when the rest of the release changes around it. A release
+# that only touches QML therefore never rebuilds the bar.
+tree=$(git rev-parse "HEAD:$dir" 2>/dev/null) || exit 0
+stamp='${root.stampDir}/${component.name ?? "unknown"}'
+if [ "$(cat "$stamp" 2>/dev/null)" = "$tree" ]; then
+    exit 0
+fi
+
+mkdir -p '${root.stampDir}'
+"$install" >/dev/null 2>&1 || exit 1
+printf '%s' "$tree" > "$stamp"
 echo BUILT`]
 
-        stdout: StdioCollector {
-            onStreamFinished: root._built = text.includes("BUILT")
-        }
-
         onExited: code => {
-            root.installingApps = false;
-            if (code !== 0) {
-                // Not an error worth a toast: the shell's own bar is still
-                // there and still correct, which is what they were using a
-                // moment ago anyway.
-                root.lastError = qsTr("Could not build the bar — the shell's own is still in use");
-                return;
-            }
-            if (!root._built)
-                return;
-            // Both singletons learned whether these existed at startup, and
-            // they have just stopped being right.
-            ExternalBar.recheck();
-            Launcher.recheck();
-            Toaster.toast(qsTr("Bar installed"), qsTr("The Caelestia++ bar and launcher are now in use"), "update");
+            if (code !== 0)
+                root.lastError = qsTr("Could not build %1 — the shell's own is still in use").arg(buildProc.component.label ?? buildProc.component.name ?? qsTr("a component"));
+            root._runNext();
         }
     }
-
-    property bool _built
 
     // Startup check (delayed so boot isn't competing with it) + periodic recheck
     Timer {

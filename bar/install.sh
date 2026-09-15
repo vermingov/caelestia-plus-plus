@@ -82,7 +82,13 @@ mkdir -p "$state"
 rm -f "$optout"
 git -C "$here/.." rev-parse HEAD 2>/dev/null > "$stamp" || rm -f "$stamp"
 
-setsid "$target" >/dev/null 2>&1 < /dev/null &
+# Not started here. The shell owns the bar: it runs it as a child so the two
+# come and go together, and it respawns one that exits — which is exactly what
+# stopping the old one above asks it to do. Started here as well, with setsid,
+# there would be two, and the detached one would outlive the shell.
+if ! pgrep -x qs >/dev/null 2>&1; then
+    echo "  (the shell is not running — it will start the bar when it does)"
+fi
 
 echo
 echo "Installed $target"

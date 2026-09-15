@@ -1,0 +1,27 @@
+{
+  "//": "What a release needs built after it lands. Read from the NEW checkout, which is the point: the update script that runs during an update is the one being replaced, so a release cannot teach an older shell anything through code. It can through data — an older shell reads this file from what it just pulled, so a release that adds a whole new directory works on shells that shipped before that directory existed.",
+  "version": 1,
+  "components": [
+    {
+      "name": "cli",
+      "dir": "cli",
+      "install": "install.sh",
+      "requires": ["cargo"]
+    },
+    {
+      "name": "tools",
+      "dir": "tools",
+      "install": "install.sh",
+      "requires": ["cargo"]
+    },
+    {
+      "name": "bar",
+      "dir": "bar",
+      "install": "install.sh",
+      "requires": ["cargo", "npm"],
+      "optOut": "bar-optout",
+      "label": "bar and launcher",
+      "slow": true
+    }
+  ]
+}
