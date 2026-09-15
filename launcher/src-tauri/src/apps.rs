@@ -23,6 +23,11 @@ pub struct App {
     /// re-lowercasing on every keystroke.
     #[serde(skip)]
     pub haystack: String,
+    /// The name alone, lowercased. Ranking scores it separately and far more
+    /// heavily than the rest, and lowercasing it per app per keystroke was
+    /// the single largest allocation in the search path.
+    #[serde(skip)]
+    pub name_lower: String,
     #[serde(skip)]
     pub keywords: String,
 }
@@ -105,8 +110,11 @@ fn parse_entry(path: &Path) -> Option<App> {
     let keywords = fields.get("Keywords").unwrap_or(&"").to_lowercase();
     let id = path.file_stem()?.to_string_lossy().into_owned();
 
+    let name_lower = name.to_lowercase();
+
     Some(App {
-        haystack: format!("{} {} {}", name.to_lowercase(), comment.to_lowercase(), keywords),
+        haystack: format!("{} {} {}", name_lower, comment.to_lowercase(), keywords),
+        name_lower,
         keywords,
         id,
         name,
@@ -134,7 +142,7 @@ pub fn load() -> Vec<App> {
         }
     }
     let mut apps: Vec<App> = seen.into_values().collect();
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by(|a, b| a.name_lower.cmp(&b.name_lower));
     apps
 }
 

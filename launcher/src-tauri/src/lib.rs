@@ -59,19 +59,6 @@ impl Launcher {
         }
     }
 
-    /// Re-read everything that can change while the launcher sits hidden: the
-    /// config, the app list, the wallpapers, the scheme in use.
-    fn refresh(&mut self) {
-        self.config = config::Config::load();
-        self.apps = apps::load();
-        self.usage = usage::Usage::load();
-        self.schemes = schemes::load();
-        self.wallpapers = wallpapers::load(&self.config.wallpaper_dir);
-        self.current_wallpaper = wallpapers::current().unwrap_or_default();
-        let (scheme, variant) = schemes::current();
-        self.current_scheme = scheme;
-        self.current_variant = variant;
-    }
 }
 
 /// One row, whatever mode produced it. The front end draws by `kind` — an
@@ -96,12 +83,17 @@ pub struct Entry {
     pub trailing: String,
     /// Marked in the list: a favourite app, the scheme already in use.
     pub marked: bool,
+    /// What Tab puts in the field. Empty means the name, which is right for
+    /// an app; a row reached through a prefix completes to the prefixed form
+    /// so that tabbing keeps you inside the mode you are in.
+    pub completion: String,
 }
 
 impl Default for Entry {
     fn default() -> Entry {
         Entry {
             id: String::new(),
+            completion: String::new(),
             name: String::new(),
             comment: String::new(),
             icon: String::new(),
@@ -182,6 +174,7 @@ fn app_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
 
 fn action_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
     let needle = query.trim().to_lowercase();
+    let prefix = &launcher.config.launcher.action_prefix;
     launcher
         .config
         .usable_actions()
@@ -192,6 +185,13 @@ fn action_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
                 || action.description.to_lowercase().contains(&needle)
         })
         .map(|action| Entry {
+            // An action that leads somewhere completes to where it leads, so
+            // tabbing `>sch` puts you in `>scheme ` with the name still to
+            // type; one that just runs completes to its own name.
+            completion: match action.command.as_slice() {
+                [verb, target, ..] if verb == "autocomplete" => format!("{prefix}{target} "),
+                _ => format!("{prefix}{}", action.name),
+            },
             id: action.name.clone(),
             name: action.name.clone(),
             comment: action.description.clone(),
@@ -229,6 +229,7 @@ fn calc_entries(expression: &str) -> Vec<Entry> {
 
 fn scheme_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
     let needle = query.trim().to_lowercase();
+    let prefix = &launcher.config.launcher.action_prefix;
     launcher
         .schemes
         .iter()
@@ -236,6 +237,7 @@ fn scheme_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
         .map(|scheme| {
             let full = format!("{} {}", scheme.name, scheme.flavour);
             Entry {
+                completion: format!("{prefix}scheme {} {}", scheme.name, scheme.flavour),
                 id: format!("{}/{}", scheme.name, scheme.flavour),
                 name: capitalise(&scheme.name),
                 comment: capitalise(&scheme.flavour),
@@ -250,6 +252,7 @@ fn scheme_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
 
 fn variant_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
     let needle = query.trim().to_lowercase();
+    let prefix = &launcher.config.launcher.action_prefix;
     variants::ALL
         .iter()
         .filter(|variant| {
@@ -258,6 +261,7 @@ fn variant_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
                 || variant.id.contains(&needle)
         })
         .map(|variant| Entry {
+            completion: format!("{prefix}variant {}", variant.id),
             id: variant.id.to_string(),
             name: variant.name.to_string(),
             comment: variant.description.to_string(),
@@ -271,16 +275,18 @@ fn variant_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
 
 fn wallpaper_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
     let needle = query.trim().to_lowercase();
+    let prefix = &launcher.config.launcher.action_prefix;
     launcher
         .wallpapers
         .iter()
         .filter(|wallpaper| needle.is_empty() || wallpaper.haystack.contains(&needle))
         .take(64)
         .map(|wallpaper| Entry {
+            completion: format!("{prefix}wallpaper {}", wallpaper.name),
             id: wallpaper.path.clone(),
             name: wallpaper.name.clone(),
             comment: wallpaper.category.clone(),
-            preview: wallpaper.preview.clone(),
+            preview: wallpapers::preview_for(&wallpaper.path),
             trailing: "Wallpaper".to_string(),
             marked: wallpaper.path == launcher.current_wallpaper,
             ..Entry::default()
@@ -389,21 +395,6 @@ fn spawn_detached(command: &str) {
     }
 }
 
-/// Sizes the window to what the pane actually needs.
-///
-/// A layer surface anchored only at the top takes the window's own size, so
-/// this is what makes the launcher grow and shrink with its results.
-#[tauri::command]
-fn resize(width: f64, height: f64, app: AppHandle) {
-    let Some(window) = app.get_webview_window("launcher") else { return };
-    // Clamped: a frontend bug must not ask for a surface taller than the
-    // screen or too small to see.
-    let size = tauri::LogicalSize::new(width.clamp(320.0, 2000.0), height.clamp(64.0, 1400.0));
-    if let Err(e) = window.set_size(size) {
-        eprintln!("caelestia-launcher: cannot resize: {e}");
-    }
-}
-
 #[tauri::command]
 fn dismiss(app: AppHandle) {
     hide(&app);
@@ -413,6 +404,31 @@ fn hide(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("launcher") {
         let _ = window.hide();
     }
+    // The front end resets itself now rather than on the way back in, so that
+    // opening shows the right list in its first painted frame instead of the
+    // last session's list for a beat and then the right one.
+    let _ = app.emit("launcher-closed", ());
+    refresh_in_background(app);
+}
+
+/// Re-reads everything that can go stale, off the main thread and after the
+/// window is out of the way.
+///
+/// This used to run on show, which is exactly backwards: rereading every
+/// desktop entry, shelling out to `caelestia scheme list` and hashing every
+/// wallpaper is hundreds of milliseconds, and it was hundreds of milliseconds
+/// between pressing the key and seeing anything. Doing it on hide costs
+/// nothing anyone waits for, and leaves the data at most one open stale.
+fn refresh_in_background(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // Built before the lock is taken, so the main thread is never held
+        // up behind a disk read.
+        let fresh = Launcher::new();
+        if let Ok(mut launcher) = app.state::<Mutex<Launcher>>().lock() {
+            *launcher = fresh;
+        }
+    });
 }
 
 fn show(app: &AppHandle) {
@@ -424,18 +440,21 @@ fn show(app: &AppHandle) {
 fn show_with(app: &AppHandle, query: &str) {
     let Some(window) = app.get_webview_window("launcher") else { return };
 
-    // Anything could have changed while it sat hidden: a new app installed,
-    // the wallpaper switched, the scheme changed from the shell.
-    if let Some(state) = app.try_state::<Mutex<Launcher>>() {
-        if let Ok(mut launcher) = state.lock() {
-            launcher.refresh();
-        }
-    }
-    // The frontend resets to this and refocuses, so the launcher never
-    // reopens showing the last thing that was typed.
-    let _ = app.emit("launcher-opened", query.to_string());
+    // Shown first, told second. The window is already drawn correctly — the
+    // reset happened when it was last closed — so there is nothing to wait
+    // for before putting it on screen, and a keybind should not be paying for
+    // an IPC round trip it does not need.
     let _ = window.show();
     let _ = window.set_focus();
+
+    // Fire-and-forget, and all it does is put the caret back in the field —
+    // no searching, nothing the first frame has to wait for.
+    let _ = app.emit("launcher-shown", ());
+
+    // Only a keybind that asked for a mode has anything left to say.
+    if !query.is_empty() {
+        let _ = app.emit("launcher-opened", query.to_string());
+    }
 }
 
 fn toggle_with(app: &AppHandle, query: &str) {
@@ -456,10 +475,11 @@ pub fn run() {
     }
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![search, activate, open_in_calculator, resize, dismiss])
+        .invoke_handler(tauri::generate_handler![search, activate, open_in_calculator, dismiss])
         .setup(|app| {
             let window = app.get_webview_window("launcher").expect("the launcher window exists");
             platform::place(&window);
+            trim_webview(&window);
 
             app.manage(Mutex::new(Launcher::new()));
 
@@ -483,7 +503,6 @@ pub fn run() {
 /// The socket a second invocation talks to, so `--toggle` is a connect and a
 /// byte rather than a program start.
 mod control {
-    use std::io::Read;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
 
@@ -498,10 +517,16 @@ mod control {
 
     /// Asks a running launcher to toggle. False when there is nothing
     /// listening, which is how the caller knows it has to start one.
+    /// One command, newline-terminated.
+    ///
+    /// The newline is what lets a client hold the connection open and send
+    /// again — which the shell does, because spawning this binary to write
+    /// eight bytes costs forty milliseconds of dynamic linking that the
+    /// person pressing the key can feel.
     pub fn send(word: &str) -> bool {
         use std::io::Write;
         let Ok(mut stream) = UnixStream::connect(socket_path()) else { return false };
-        stream.write_all(word.as_bytes()).is_ok()
+        stream.write_all(format!("{}\n", word.trim_end()).as_bytes()).is_ok()
     }
 
     /// True when a launcher is already listening. Only a socket nothing
@@ -522,21 +547,27 @@ mod control {
 
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let mut stream = stream;
-                let mut word = String::new();
-                if stream.read_to_string(&mut word).is_err() {
-                    continue;
-                }
                 let app = app.clone();
-                // Window calls have to happen on the main thread.
-                // "show" and "toggle" may carry a starting query after a
-                // space; everything up to the first space is the verb.
-                let (verb, query) = word.split_once(' ').unwrap_or((word.trim(), ""));
-                let (verb, query) = (verb.trim().to_string(), query.to_string());
-                let _ = app.clone().run_on_main_thread(move || match verb.as_str() {
-                    "show" => super::show_with(&app, &query),
-                    "hide" => super::hide(&app),
-                    _ => super::toggle_with(&app, &query),
+                // One connection, any number of commands: a client that stays
+                // connected pays for the socket once rather than once per
+                // keypress. Each gets its own thread because the shell's
+                // connection outlives every one of them.
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    for line in std::io::BufReader::new(stream).lines().map_while(Result::ok) {
+                        // "show" and "toggle" may carry a starting query after
+                        // a space; everything up to the first space is the
+                        // verb.
+                        let (verb, query) = line.split_once(' ').unwrap_or((line.trim(), ""));
+                        let (verb, query) = (verb.trim().to_string(), query.to_string());
+                        let app = app.clone();
+                        // Window calls have to happen on the main thread.
+                        let _ = app.clone().run_on_main_thread(move || match verb.as_str() {
+                            "show" => super::show_with(&app, &query),
+                            "hide" => super::hide(&app),
+                            _ => super::toggle_with(&app, &query),
+                        });
+                    }
                 });
             }
         });
@@ -544,6 +575,35 @@ mod control {
 }
 
 pub use control::{already_running, send as send_control};
+
+/// Turns off the parts of the webview a launcher has no use for.
+///
+/// A WebKit web process starts at well over a hundred megabytes, and a fair
+/// slice of that is machinery for being a browser: a page cache, offline
+/// storage, WebGL, media playback and capture. None of it is reachable from a
+/// list of applications served out of the binary, and all of it is allocated
+/// whether or not it is used.
+fn trim_webview(window: &tauri::WebviewWindow) {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+
+    let _ = window.with_webview(|webview| {
+        let view = webview.inner();
+        let Some(settings) = WebViewExt::settings(&view) else { return };
+
+        settings.set_enable_page_cache(false);
+        settings.set_enable_back_forward_navigation_gestures(false);
+        settings.set_enable_html5_database(false);
+        settings.set_enable_html5_local_storage(false);
+        settings.set_enable_offline_web_application_cache(false);
+        settings.set_enable_webgl(false);
+        settings.set_enable_webaudio(false);
+        settings.set_enable_media(false);
+        settings.set_enable_media_stream(false);
+        settings.set_enable_mediasource(false);
+        settings.set_enable_encrypted_media(false);
+        settings.set_enable_developer_extras(false);
+    });
+}
 
 /// Everything that needs the window underneath Tauri.
 mod platform {
@@ -582,12 +642,14 @@ mod platform {
         // What the compositor's blur rule matches on.
         gtk_window.set_namespace("caelestia-launcher");
 
-        // Anchored to the top and centred, a fifth of the way down: where the
-        // eye already is, and clear of what is being searched over.
-        gtk_window.set_anchor(Edge::Top, true);
-        gtk_window.set_layer_shell_margin(Edge::Top, 220);
-        for edge in [Edge::Left, Edge::Right, Edge::Bottom] {
-            gtk_window.set_anchor(edge, false);
+        // Anchored to all four edges, so the surface is exactly the output and
+        // never has to be resized. The pane is placed and sized inside it by
+        // CSS: growing a result list then costs a repaint rather than a
+        // surface resize, which is what used to make the whole thing jolt.
+        // Everything outside the pane is fully transparent, and the layer
+        // rule's `ignore_alpha` keeps the compositor's blur off it.
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            gtk_window.set_anchor(edge, true);
         }
         eprintln!(
             "caelestia-launcher: layer surface ready (protocol {})",

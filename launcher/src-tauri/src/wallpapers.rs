@@ -43,6 +43,12 @@ fn is_image(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// What to show for one wallpaper: the CLI's cached thumbnail if it has made
+/// one, the original otherwise.
+pub fn preview_for(path: &str) -> String {
+    cached_thumbnail(Path::new(path)).unwrap_or_else(|| path.to_string())
+}
+
 /// The CLI caches a 128px thumbnail per wallpaper, keyed by the hash of the
 /// file. Finding it means hashing, which is cheap next to decoding the image.
 fn cached_thumbnail(path: &Path) -> Option<String> {
@@ -78,7 +84,10 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<Wallpaper>) {
         let full = path.to_string_lossy().into_owned();
         out.push(Wallpaper {
             haystack: format!("{} {}", name.to_lowercase(), category.to_lowercase()),
-            preview: cached_thumbnail(&path).unwrap_or_else(|| full.clone()),
+            // Resolved on demand: finding a cached thumbnail means hashing
+            // the file, which is minutes of IO across a large collection and
+            // is only ever needed for the handful on screen.
+            preview: String::new(),
             path: full,
             name,
             category,

@@ -16,6 +16,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# For `mallopt`: capping the allocator's arena count is worth tens of
+# megabytes here, and it has to be done in-process to survive any launcher.
+libc = "0.2"
+# Reaching the webview's own settings; the version tracks what Tauri links.
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
 # The window wants to be a layer surface, not a floating one: a launcher
 # needs the keyboard to itself, has to sit above everything, and must not be
 # tiled or alt-tabbed to. That needs the gtk-layer-shell C library, so it is
@@ -30,7 +35,12 @@ layer-shell = ["dep:gtk", "dep:gtk-layer-shell"]
 
 [profile.release]
 opt-level = "s"
-lto = true
-codegen-units = 1
+# Thin rather than fat LTO, and more than one codegen unit: a full-LTO
+# single-unit build of this is well over a minute every time, and the binary
+# it produces is a few hundred kilobytes smaller. This is rebuilt on every
+# install, so the minute matters more than the kilobytes.
+lto = "thin"
+codegen-units = 4
+incremental = true
 panic = "abort"
 strip = true

@@ -3,8 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { computed } from "vue";
 
 const props = defineProps({
-    entry: { type: Object, required: true },
-    current: { type: Boolean, default: false }
+    entry: { type: Object, required: true }
 });
 
 // Icons and previews are absolute paths the backend resolved; the webview can
@@ -13,8 +12,8 @@ const iconSrc = computed(() => (props.entry.icon ? convertFileSrc(props.entry.ic
 </script>
 
 <template>
-    <div class="row" :class="{ current }">
-        <img v-if="iconSrc" class="icon" :src="iconSrc" alt="" draggable="false" />
+    <div class="row">
+        <img v-if="iconSrc" class="icon" :src="iconSrc" alt="" draggable="false" decoding="async" loading="lazy" />
         <span v-else-if="entry.glyph" class="icon glyph material-symbols-rounded">{{ entry.glyph }}</span>
         <span v-else-if="entry.swatches.length" class="icon swatches">
             <i v-for="(colour, i) in entry.swatches.slice(0, 4)" :key="i" :style="{ background: `#${colour}` }"></i>

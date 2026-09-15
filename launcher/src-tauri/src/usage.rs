@@ -44,11 +44,21 @@ impl Usage {
         usage
     }
 
+    /// The clock, as the scorer wants it. Ranking reads it once and passes it
+    /// to every `score_at`, rather than each call making its own syscall.
+    pub fn now_secs(&self) -> f64 {
+        now() as f64
+    }
+
     /// A launch is worth 100 when it happens and halves every fortnight, so a
     /// handful of recent launches outweighs a pile of stale ones.
     pub fn score(&self, id: &str) -> i64 {
+        self.score_at(id, self.now_secs())
+    }
+
+    /// As `score`, against a clock the caller already read.
+    pub fn score_at(&self, id: &str, now: f64) -> i64 {
         let Some(times) = self.launches.get(id) else { return 0 };
-        let now = now() as f64;
         let total: f64 = times
             .iter()
             .map(|at| {

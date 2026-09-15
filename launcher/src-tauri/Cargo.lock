@@ -211,10 +211,12 @@ version = "0.1.0"
 dependencies = [
  "gtk",
  "gtk-layer-shell",
+ "libc",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "webkit2gtk",
 ]
 
 [[package]]

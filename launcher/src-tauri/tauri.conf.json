@@ -12,8 +12,8 @@
       {
         "label": "launcher",
         "title": "caelestia-launcher",
-        "width": 720,
-        "height": 560,
+        "width": 1040,
+        "height": 900,
         "resizable": false,
         "decorations": false,
         "transparent": true,
