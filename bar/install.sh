@@ -14,6 +14,13 @@ target="$bindir/caelestia-bar"
 # The launcher is a window of the bar now; this is the client that asks for
 # it. Installed from here so the two can never be out of step.
 client="$bindir/caelestia-launcher"
+# What the shell reads to decide whether the installed binaries match the
+# checkout, and whether they were removed on purpose. Without the stamp it
+# would rebuild on every startup; without the opt-out it would undo an
+# uninstall the next time the shell came up.
+state="${XDG_STATE_HOME:-$HOME/.local/state}/caelestia"
+stamp="$state/bar-built-from"
+optout="$state/bar-optout"
 
 stop_running() {
     local pid exe
@@ -38,8 +45,10 @@ stop_running() {
 
 if [[ ${1:-} == --uninstall ]]; then
     stop_running
-    rm -f "$target" "$client"
+    rm -f "$target" "$client" "$stamp"
+    mkdir -p "$state" && : > "$optout"
     echo "Removed $target and $client"
+    echo "The shell's own bar and launcher are back in charge."
     exit 0
 fi
 
@@ -68,6 +77,10 @@ install -m755 "$here/src-tauri/target/release/caelestia-bar" "$target.new"
 mv -f "$target.new" "$target"
 install -m755 "$here/src-tauri/target/release/caelestia-launcher" "$client.new"
 mv -f "$client.new" "$client"
+
+mkdir -p "$state"
+rm -f "$optout"
+git -C "$here/.." rev-parse HEAD 2>/dev/null > "$stamp" || rm -f "$stamp"
 
 setsid "$target" >/dev/null 2>&1 < /dev/null &
 

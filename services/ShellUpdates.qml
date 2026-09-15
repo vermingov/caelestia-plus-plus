@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.services
+import qs.utils
 
 // Update channel for the Caelestia++ fork: compares the running shell's
 // checkout against the latest *release* and can fast-forward + restart.
@@ -45,12 +46,17 @@ Singleton {
     // from under an active session by a periodic check). Default on so fixes
     // actually reach people; opt out by flipping this in the Updates tab.
     property alias autoUpdate: props.autoUpdate
+    property alias autoInstallApps: props.autoInstallApps
+    property bool installingApps
     property bool _startupPass: true
 
     PersistentProperties {
         id: props
 
         property bool autoUpdate: true
+        // Whether the bar's binaries are built to match the checkout. Off
+        // leaves whatever is installed alone, including nothing at all.
+        property bool autoInstallApps: true
 
         reloadableId: "shellUpdates"
     }
@@ -111,6 +117,8 @@ Singleton {
                 // a finger; the shell restarts once into the new version.
                 Toaster.toast(qsTr("Updating Caelestia++"), qsTr("%1 released — applying and restarting").arg(root.latestRelease || qsTr("A new version")), "update");
                 root.update();
+            } else if (wasStartup) {
+                root.provisionApps();
             }
         }
     }
@@ -140,18 +148,6 @@ if command -v cargo >/dev/null 2>&1; then
     for d in cli tools; do
         [ -x "$d/install.sh" ] && "$d/install.sh" >/dev/null 2>&1 || true
     done
-    # The bar is rebuilt only for people already running it. It is a webview
-    # app, so building it is an npm install and a release cargo build — minutes,
-    # not seconds — and installing one on a machine that never asked for it
-    # would put a second bar on screen above the shell's own.
-    #
-    # This is also the migration path for the launcher: it used to be a process
-    # of its own and is a window of the bar now, so bar/install.sh is what
-    # replaces the standalone binary with the client that talks to it. Skipping
-    # this would leave the old launcher holding the socket the new one needs.
-    if command -v caelestia-bar >/dev/null 2>&1 && [ -x bar/install.sh ]; then
-        bar/install.sh >/dev/null 2>&1 || true
-    fi
 fi
 # Never restart into a quickshell that cannot start (Qt moved on under it)
 qs --version >/dev/null 2>&1 || { echo QS_BROKEN; exit 8; }`]
@@ -173,6 +169,68 @@ qs --version >/dev/null 2>&1 || { echo QS_BROKEN; exit 8; }`]
             Quickshell.execDetached(["sh", "-c", "sleep 0.3; pkill -x qs; sleep 1; caelestia shell -d"]);
         }
     }
+
+
+    // Builds the bar to match the checkout, when the checkout has moved ahead
+    // of what is installed.
+    //
+    // The updater cannot do this itself. The update script that runs is the
+    // one in the checkout being replaced, so a release can never teach an
+    // older shell how to install something new — which is exactly how v2.5.0
+    // shipped a bar that nobody's updater knew to build. Doing it here, from
+    // the version that has just started, is the only place a release can
+    // reach.
+    //
+    // Keyed on the commit the binaries were built from, so it is a no-op on
+    // every startup but the first after an update.
+    function provisionApps(): void {
+        if (installingApps || updating || !autoInstallApps)
+            return;
+        installingApps = true;
+        provisionProc.running = true;
+    }
+
+    Process {
+        id: provisionProc
+
+        command: ["sh", "-c", `cd '${root.repoDir}' || exit 0
+[ -x bar/install.sh ] || exit 0
+# Someone who removed the bar on purpose gets to keep it removed.
+[ -f '${Paths.state}/bar-optout' ] && exit 0
+command -v cargo >/dev/null 2>&1 || exit 0
+command -v npm >/dev/null 2>&1 || exit 0
+head=$(git rev-parse HEAD 2>/dev/null) || exit 0
+stamp='${Paths.state}/bar-built-from'
+[ "$(cat "$stamp" 2>/dev/null)" = "$head" ] && exit 0
+mkdir -p '${Paths.state}'
+bar/install.sh >/dev/null 2>&1 || exit 1
+printf '%s' "$head" > "$stamp"
+echo BUILT`]
+
+        stdout: StdioCollector {
+            onStreamFinished: root._built = text.includes("BUILT")
+        }
+
+        onExited: code => {
+            root.installingApps = false;
+            if (code !== 0) {
+                // Not an error worth a toast: the shell's own bar is still
+                // there and still correct, which is what they were using a
+                // moment ago anyway.
+                root.lastError = qsTr("Could not build the bar — the shell's own is still in use");
+                return;
+            }
+            if (!root._built)
+                return;
+            // Both singletons learned whether these existed at startup, and
+            // they have just stopped being right.
+            ExternalBar.recheck();
+            Launcher.recheck();
+            Toaster.toast(qsTr("Bar installed"), qsTr("The Caelestia++ bar and launcher are now in use"), "update");
+        }
+    }
+
+    property bool _built
 
     // Startup check (delayed so boot isn't competing with it) + periodic recheck
     Timer {

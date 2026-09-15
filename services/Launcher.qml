@@ -91,7 +91,16 @@ Singleton {
         }
     }
 
+    // Asked again after anything installs or removes the binary, because the
+    // check below runs once and a shell that learned the answer at startup
+    // would keep both this and the other one on screen until it restarted.
+    function recheck(): void {
+        check.running = true;
+    }
+
     Process {
+        id: check
+
         running: true
         command: ["sh", "-c", `command -v ${root.binary} >/dev/null`]
 
