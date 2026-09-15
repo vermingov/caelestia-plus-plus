@@ -51,11 +51,19 @@ Singleton {
         }
     }
 
-    // How many times in a row it may die immediately before the shell stops
-    // trying. A bar that cannot start is a bug to fix, not a thing to respawn
-    // a thousand times a minute.
-    readonly property int maxRetries: 5
-    property int _failures
+    // How many times in a row it may die before the shell gives up. A bar
+    // that cannot start is a bug to fix, not a thing to respawn forever.
+    readonly property int maxRetries: 6
+    // How many before trying it the other way first.
+    readonly property int softRetries: 2
+    property int failures
+    // WebKit renders through DMA-BUF by default, and on some drivers that
+    // trips the compositor's explicit sync: a machine with two GPUs died here
+    // every time with "Missing acquire timeline", so the bar never came up
+    // and the QML one had already stood down behind it. The fallback costs a
+    // little performance and is the difference between a bar and no bar, so
+    // it is worth trying before giving up.
+    property bool degraded
 
     Process {
         id: bar
@@ -63,24 +71,34 @@ Singleton {
         running: root.installed
         command: [root.binary]
 
-        // Tells the bar it is being run by the shell, which is what makes it
-        // set PR_SET_PDEATHSIG and die with it. Run by hand from a terminal
-        // it behaves as it always did.
-        environment: ({
+        // CAELESTIA_SHELL_MANAGED tells the bar the shell started it, which
+        // is what makes it die with the shell. Run by hand it behaves as
+        // it always did.
+        environment: root.degraded ? ({
+            CAELESTIA_SHELL_MANAGED: "1",
+            WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+        }) : ({
             CAELESTIA_SHELL_MANAGED: "1"
         })
 
-        onExited: (code, status) => {
+        onExited: code => {
             if (!root.installed)
                 return;
 
-            // An install replaces the binary and kills the old process, so an
-            // exit is usually a reinstall asking to be picked up rather than
-            // anything going wrong.
+            // An install replaces the binary and stops the old process, so a
+            // clean exit is usually a reinstall asking to be picked up.
             if (code === 0) {
-                root._failures = 0;
-            } else if (++root._failures >= root.maxRetries) {
-                console.warn(`ExternalBar: ${root.binary} exited ${code} ${root.maxRetries} times running; leaving it down`);
+                root.failures = 0;
+                respawn.restart();
+                return;
+            }
+
+            root.failures++;
+            if (root.failures === root.softRetries && !root.degraded) {
+                root.degraded = true;
+                console.warn(`ExternalBar: ${root.binary} keeps exiting ${code}; retrying without WebKit's DMA-BUF renderer`);
+            } else if (root.failures >= root.maxRetries) {
+                console.warn(`ExternalBar: ${root.binary} exited ${code} ${root.failures} times running; leaving it down`);
                 return;
             }
             respawn.restart();
