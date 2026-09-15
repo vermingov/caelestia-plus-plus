@@ -66,9 +66,29 @@ fn print_filtered(args: &[&str]) -> i32 {
     }
 }
 
+/// How many heap arenas the shell gets.
+///
+/// jemalloc defaults to four per core, and each one keeps its own cache of
+/// freed pages. On a sixteen-core machine that is sixty-four caches for a
+/// process whose live heap is a fraction of what they retain between them —
+/// measured here at 481 MiB resident against 280 MiB with this set, for the
+/// same shell doing the same work.
+///
+/// Four rather than fewer: two saves another eight megabytes and costs twice
+/// the idle CPU in contention, which is the wrong trade for a process that
+/// spends its life waiting.
+const ARENAS: &str = "narenas:4";
+
 fn start(args: &Args) -> i32 {
     let mut cmd = Command::new("qs");
     cmd.args(["-c", "caelestia", "-n"]);
+
+    // Set here rather than in the shell's own config: jemalloc reads this
+    // once, before `main`, so a pragma inside the QML would be far too late.
+    // Anything the caller already set wins, so this stays overridable.
+    if std::env::var_os("MALLOC_CONF").is_none() {
+        cmd.env("MALLOC_CONF", ARENAS);
+    }
     if let Some(rules) = &args.log_rules {
         cmd.args(["--log-rules", rules]);
     }
