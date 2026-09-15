@@ -3,6 +3,7 @@ pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Caelestia
 import qs.services
 
 // The one place that talks to power-profiles-daemon. Setting a profile goes
