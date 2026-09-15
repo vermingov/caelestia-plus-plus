@@ -17,6 +17,22 @@ pub struct Logo {
     pub show: bool,
 }
 
+/// When the files these settings come from were last written.
+///
+/// Polled rather than subscribed to, like the tray: two `stat` calls every
+/// couple of seconds against a dependency and an event loop is the right
+/// trade for something that changes when a person opens Settings.
+pub fn stamp() -> Vec<Option<std::time::SystemTime>> {
+    let files = [
+        state_dir().map(|dir| dir.join("prefs.json")),
+        config_dir().map(|dir| dir.join("shell.json")),
+    ];
+    files
+        .into_iter()
+        .map(|path| path.and_then(|path| std::fs::metadata(path).ok()?.modified().ok()))
+        .collect()
+}
+
 fn config_dir() -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let config = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{home}/.config"));

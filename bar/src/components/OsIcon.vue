@@ -1,5 +1,6 @@
 <script setup>
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { onMounted, ref } from "vue";
 
 // The two marks the bar can draw itself, inlined rather than linked: an <img>
@@ -20,6 +21,9 @@ const logo = ref({
 
 onMounted(async () => {
     logo.value = await invoke("logo");
+    // Turning the mark off in Settings writes a preference; this is what makes
+    // it leave the bar without a restart.
+    await listen("config", event => (logo.value = event.payload[0]));
 });
 </script>
 

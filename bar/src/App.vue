@@ -316,6 +316,13 @@ onMounted(async () => {
     await feed("services", value => (services.value = value));
     await feed("tray", value => (tray.value = value));
     await feed("media", value => (media.value = value));
+    // Settings changed underneath us: the mark, the entry list and the bar's
+    // own options all come from files a person can edit while this is running.
+    await listen("config", event => {
+        const [, options_, layout_] = event.payload;
+        options.value = options_;
+        layout.value = layout_;
+    });
     await listen("spectrum", event => {
         const [bars, live] = event.payload;
         spectrum.value = { bars, live };

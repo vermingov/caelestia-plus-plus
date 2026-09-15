@@ -541,6 +541,7 @@ pub fn start() {
             sample_system(app.handle().clone());
             sample_services(app.handle().clone());
             watch_tray(app.handle().clone());
+            watch_config(app.handle().clone());
             watch_spectrum(app.handle().clone());
             watch_media(app.handle().clone());
             Ok(())
@@ -892,6 +893,27 @@ fn watch_media(app: AppHandle) {
         media::watch(|now_playing| {
             let _ = app.emit("media", now_playing);
         });
+    });
+}
+
+/// Re-reads the settings when somebody changes them.
+///
+/// Everything the bar draws from config — the mark, the entry list, the bar's
+/// own options — used to be read once at startup and never again, so turning
+/// the logo off in Settings wrote the preference and changed nothing on
+/// screen until the bar was restarted.
+fn watch_config(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut last = logo::stamp();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let now = logo::stamp();
+            if now == last {
+                continue;
+            }
+            last = now;
+            let _ = app.emit("config", (logo::read(), logo::bar_config(), logo::layout()));
+        }
     });
 }
 
