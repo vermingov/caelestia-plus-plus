@@ -316,13 +316,13 @@ onMounted(async () => {
         layout.value = await invoke("layout");
         output.value = await invoke("monitor");
         const [items, now, playing] = await invoke("snapshot");
+        tray.value = items;
+        services.value = now;
+        media.value = playing;
     } catch (e) {
         await report(e);
         throw e;
     }
-    tray.value = items;
-    services.value = now;
-    media.value = playing;
 });
 </script>
 
