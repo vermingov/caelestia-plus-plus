@@ -298,11 +298,24 @@ async function report(error) {
 onMounted(async () => {
     watchThePointer();
 
-    await listen("hypr", event => (hypr.value = event.payload));
-    await listen("system", event => (system.value = event.payload));
-    await listen("services", event => (services.value = event.payload));
-    await listen("tray", event => (tray.value = event.payload));
-    await listen("media", event => (media.value = event.payload));
+    // A feed that has already pushed must not be overwritten by the opening
+    // snapshot below. The bar starts as a child of the shell and is up before
+    // the shell's tray watcher is, so that snapshot can answer "no items"
+    // after the push has already delivered them — and the watcher only pushes
+    // when its list *changes*, so an empty tray stayed empty for the life of
+    // the process.
+    const pushed = new Set();
+    const feed = (name, apply) =>
+        listen(name, event => {
+            pushed.add(name);
+            apply(event.payload);
+        });
+
+    await feed("hypr", value => (hypr.value = value));
+    await feed("system", value => (system.value = value));
+    await feed("services", value => (services.value = value));
+    await feed("tray", value => (tray.value = value));
+    await feed("media", value => (media.value = value));
     await listen("spectrum", event => {
         const [bars, live] = event.payload;
         spectrum.value = { bars, live };
@@ -316,9 +329,18 @@ onMounted(async () => {
         layout.value = await invoke("layout");
         output.value = await invoke("monitor");
         const [items, now, playing] = await invoke("snapshot");
-        tray.value = items;
-        services.value = now;
-        media.value = playing;
+        if (!pushed.has("tray")) {
+            tray.value = items;
+        }
+        if (!pushed.has("services")) {
+            services.value = now;
+        }
+        if (!pushed.has("media")) {
+            media.value = playing;
+        }
+        // Says what this window was handed, which is the difference between
+        // "the bar has no tray" and "the tray host found nothing". Discarded
+        // by the backend unless diagnostics are on.
     } catch (e) {
         await report(e);
         throw e;

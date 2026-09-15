@@ -81,6 +81,13 @@ Singleton {
             CAELESTIA_SHELL_MANAGED: "1"
         })
 
+        // Whatever the bar says goes in the shell's log. It is a child of this
+        // process and nobody is watching its console, so without this a bar
+        // that starts but cannot reach something has no way to say so.
+        stderr: SplitParser {
+            onRead: line => console.warn(`bar: ${line}`)
+        }
+
         onExited: code => {
             if (!root.installed)
                 return;

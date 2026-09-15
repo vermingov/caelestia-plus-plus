@@ -438,7 +438,9 @@ fn diagnosing() -> bool {
 /// is error paths.
 #[tauri::command]
 fn diag(window: WebviewWindow, message: String) {
-    eprintln!("caelestia-bar[{}]: {message}", window.label());
+    if diagnosing() {
+        eprintln!("caelestia-bar[{}]: {message}", window.label());
+    }
 }
 
 #[tauri::command]

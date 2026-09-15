@@ -270,22 +270,7 @@ pub fn watch(mut on_change: impl FnMut(Vec<Item>)) {
     loop {
         let items = read_items(&connection);
         if diagnosing && last.as_ref().map(Vec::len) != Some(items.len()) {
-            eprintln!(
-                "caelestia-bar[tray]: watcher lists {} item(s): {}",
-                items.len(),
-                items
-                    .iter()
-                    .map(|item| {
-                        let icon = if item.icon.is_empty() {
-                            "NO ICON".to_string()
-                        } else {
-                            format!("{}…", item.icon.chars().take(48).collect::<String>())
-                        };
-                        format!("{} [{icon}]", item.key)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+            eprintln!("caelestia-bar[tray]: {} item(s)", items.len());
         }
         if last.as_ref() != Some(&items) {
             last = Some(items.clone());
