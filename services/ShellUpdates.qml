@@ -140,6 +140,18 @@ if command -v cargo >/dev/null 2>&1; then
     for d in cli tools; do
         [ -x "$d/install.sh" ] && "$d/install.sh" >/dev/null 2>&1 || true
     done
+    # The bar is rebuilt only for people already running it. It is a webview
+    # app, so building it is an npm install and a release cargo build — minutes,
+    # not seconds — and installing one on a machine that never asked for it
+    # would put a second bar on screen above the shell's own.
+    #
+    # This is also the migration path for the launcher: it used to be a process
+    # of its own and is a window of the bar now, so bar/install.sh is what
+    # replaces the standalone binary with the client that talks to it. Skipping
+    # this would leave the old launcher holding the socket the new one needs.
+    if command -v caelestia-bar >/dev/null 2>&1 && [ -x bar/install.sh ]; then
+        bar/install.sh >/dev/null 2>&1 || true
+    fi
 fi
 # Never restart into a quickshell that cannot start (Qt moved on under it)
 qs --version >/dev/null 2>&1 || { echo QS_BROKEN; exit 8; }`]
