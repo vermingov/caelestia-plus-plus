@@ -213,28 +213,38 @@ fn flag_file(name: &str) -> Option<bool> {
 /// three-second tick was the single largest thing this process did. The files
 /// are the same source of truth the shell itself reloads from.
 fn read_features() -> Vec<Feature> {
-    let mut features = Vec::new();
+    // Every feature the shell has, whether or not it has been used. A state
+    // file only appears once something has been toggled, so reporting just
+    // the ones with files hid the button on a machine that had never toggled
+    // anything — and the button is how you toggle them, so it stayed hidden.
+    // Off is the right answer for a feature with nothing written down.
+    let modes = json_state("features.json");
+    let flag = |id: &str, file: &str| Feature {
+        id: id.to_string(),
+        enabled: flag_file(file).unwrap_or(false),
+    };
+    let mode = |id: &str| Feature {
+        id: id.to_string(),
+        enabled: modes
+            .as_ref()
+            .and_then(|json| json.get(id))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    };
 
-    for (id, file) in [("maxPerf", "max-perf"), ("antiHeat", "anti-heat")] {
-        if let Some(enabled) = flag_file(file) {
-            features.push(Feature { id: id.to_string(), enabled });
-        }
-    }
+    vec![
+        flag("maxPerf", "max-perf"),
+        flag("antiHeat", "anti-heat"),
+        // lidStay and caffeine share one JSON file.
+        mode("lidStay"),
+        mode("caffeine"),
+    ]
+}
 
-    // lidStay and caffeine share one JSON file.
-    if let Some(dir) = state_dir() {
-        if let Ok(text) = std::fs::read_to_string(dir.join("features.json")) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                for id in ["lidStay", "caffeine"] {
-                    if let Some(enabled) = json.get(id).and_then(serde_json::Value::as_bool) {
-                        features.push(Feature { id: id.to_string(), enabled });
-                    }
-                }
-            }
-        }
-    }
-
-    features
+/// One of the shell's JSON state files, when it has written one.
+fn json_state(name: &str) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(state_dir()?.join(name)).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 // ---- bluetooth -----------------------------------------------------------

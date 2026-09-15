@@ -284,6 +284,17 @@ function watchThePointer() {
     });
 }
 
+// Anything thrown in here leaves the window transparent and silent, which
+// on a multi-monitor desktop looks exactly like a bar that is simply not
+// there. Report it where the shell's log will pick it up.
+async function report(error) {
+    try {
+        await invoke("diag", { message: `startup failed: ${error?.stack ?? error}` });
+    } catch {
+        // Reporting is best-effort; there is nowhere else to put it.
+    }
+}
+
 onMounted(async () => {
     watchThePointer();
 
@@ -299,11 +310,16 @@ onMounted(async () => {
     // The first paint should not wait for something to happen — and the
     // pushed feeds only fire on a change, whose first one lands before these
     // listeners exist.
-    hypr.value = await invoke("state");
-    options.value = await invoke("bar_config");
-    layout.value = await invoke("layout");
-    output.value = await invoke("monitor");
-    const [items, now, playing] = await invoke("snapshot");
+    try {
+        hypr.value = await invoke("state");
+        options.value = await invoke("bar_config");
+        layout.value = await invoke("layout");
+        output.value = await invoke("monitor");
+        const [items, now, playing] = await invoke("snapshot");
+    } catch (e) {
+        await report(e);
+        throw e;
+    }
     tray.value = items;
     services.value = now;
     media.value = playing;
@@ -311,11 +327,6 @@ onMounted(async () => {
 </script>
 
 <template>
-    <!-- Outside the bar, not in it: the pill is masked to the mark's contour,
-         and a mask clips its element's children too — so a mark drawn inside
-         the bar would be cut away by its own silhouette. -->
-    <OsIcon v-if="layout.entries.includes('logo')" />
-
     <div class="bar" @wheel.prevent="onWheel">
         <!-- The pill itself. It is a layer of its own because it carries the
              mask that cuts it to the mark's contour, and a mask clips
@@ -336,6 +347,7 @@ onMounted(async () => {
              guessed at. -->
         <template v-for="(entry, index) in layout.entries" :key="`${entry}-${index}`">
             <div v-if="entry === 'spacer'" class="spacer"></div>
+            <OsIcon v-else-if="entry === 'logo'" />
             <Workspaces
                 v-else-if="entry === 'workspaces'"
                 :workspaces="workspaces"

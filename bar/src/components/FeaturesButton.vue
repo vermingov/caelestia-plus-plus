@@ -15,7 +15,6 @@ const active = computed(() => props.features.filter(feature => feature.enabled).
     <!-- The wrench is only drawn when there are modes to reach: on a machine
          with none, an always-dead button is worse than no button. -->
     <div
-        v-if="features.length"
         class="pill button icon-only"
         :class="{ lit: active > 0 }"
         @click="invoke('features_menu')"

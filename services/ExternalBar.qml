@@ -85,9 +85,12 @@ Singleton {
             if (!root.installed)
                 return;
 
-            // An install replaces the binary and stops the old process, so a
-            // clean exit is usually a reinstall asking to be picked up.
-            if (code === 0) {
+            // An install replaces the binary and stops the old process, so
+            // being asked to stop is a reinstall wanting to be picked up
+            // rather than anything going wrong. Counting SIGTERM as a failure
+            // meant a few installs in a row used up the retries and the shell
+            // gave up on a bar that was working perfectly well.
+            if (code === 0 || code === 15) {
                 root.failures = 0;
                 respawn.restart();
                 return;

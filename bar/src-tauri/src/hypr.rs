@@ -118,6 +118,13 @@ pub fn layer_origin(namespace: &str) -> Option<(i32, i32)> {
 /// The bar builds one surface per output and has to know which is which; GDK
 /// numbers its monitors and Hyprland names them, and the geometry is the only
 /// thing both agree on.
+/// Every output, with its geometry in *logical* pixels.
+///
+/// Hyprland reports width and height in physical pixels and the scale
+/// separately; GDK reports the logical size. Handing back the raw numbers
+/// meant a fractionally scaled output never matched the GDK monitor beside
+/// it — a 3440x1440 at 1.333 is 2580x1080 to GDK — so it fell through to a
+/// made-up name and the bar on it never knew which screen it was.
 pub fn monitors() -> Vec<(String, i32, i32, i32, i32)> {
     let Some(reply) = request("j/monitors") else { return Vec::new() };
     serde_json::from_str::<Vec<serde_json::Value>>(&reply)
@@ -125,12 +132,20 @@ pub fn monitors() -> Vec<(String, i32, i32, i32, i32)> {
         .into_iter()
         .filter_map(|monitor| {
             let number = |key: &str| monitor.get(key).and_then(serde_json::Value::as_i64).unwrap_or(-1) as i32;
+            let scale = monitor
+                .get("scale")
+                .and_then(serde_json::Value::as_f64)
+                .filter(|scale| *scale > 0.0)
+                .unwrap_or(1.0);
+            // Rounded the way the compositor rounds it, so 3440/1.333 is the
+            // 2580 GDK reports rather than 2580.2.
+            let logical = |value: i32| (f64::from(value) / scale).round() as i32;
             Some((
                 monitor.get("name").and_then(serde_json::Value::as_str)?.to_string(),
                 number("x"),
                 number("y"),
-                number("width"),
-                number("height"),
+                logical(number("width")),
+                logical(number("height")),
             ))
         })
         .collect()

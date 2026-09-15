@@ -422,6 +422,25 @@ fn toggle_launcher(app: AppHandle) {
     launcher::toggle_with(&app, "");
 }
 
+/// Whether to narrate what the windows are doing.
+///
+/// Off unless CAELESTIA_BAR_DIAG is set, so a release build pays for one
+/// environment lookup per window at startup and nothing after.
+fn diagnosing() -> bool {
+    std::env::var_os("CAELESTIA_BAR_DIAG").is_some()
+}
+
+/// Somewhere for the front end to report what went wrong.
+///
+/// A webview that fails while starting up renders nothing and says nothing:
+/// the window is transparent, so a broken one and an idle one look identical
+/// from outside. Costs nothing unless something calls it, and what calls it
+/// is error paths.
+#[tauri::command]
+fn diag(window: WebviewWindow, message: String) {
+    eprintln!("caelestia-bar[{}]: {message}", window.label());
+}
+
 #[tauri::command]
 fn run(command: String) {
     let _ = std::process::Command::new("sh")
@@ -497,6 +516,7 @@ pub fn start() {
             reach,
             toggle_launcher,
             run,
+            diag,
             launcher::search,
             launcher::activate,
             launcher::open_in_calculator,
@@ -687,13 +707,29 @@ fn open_bars(app: &AppHandle) -> Vec<(WebviewWindow, Option<gtk::gdk::Monitor>)>
                 )
                 .title("caelestia-bar")
                 .inner_size(1920.0, f64::from(SURFACE))
-                .resizable(true)
+                // Not resizable, which is what the window in the config is.
+                // A resizable one renders nothing at all here: the surface is
+                // mapped, the page loads and runs, and no frame is ever
+                // painted — so on a single-monitor machine, where this window
+                // is the only one built by hand, the bug is invisible and on
+                // a three-monitor desktop two screens have no bar.
+                .resizable(false)
                 .decorations(false)
                 .transparent(true)
                 .shadow(false)
                 .visible(false)
                 .skip_taskbar(true)
                 .focused(false)
+                .on_page_load(|window, payload| {
+                    if diagnosing() {
+                        eprintln!(
+                            "caelestia-bar[{}]: page {:?} {}",
+                            window.label(),
+                            payload.event(),
+                            payload.url()
+                        );
+                    }
+                })
                 .build();
 
                 match built {
@@ -706,6 +742,15 @@ fn open_bars(app: &AppHandle) -> Vec<(WebviewWindow, Option<gtk::gdk::Monitor>)>
             }
         };
 
+        if diagnosing() {
+            eprintln!(
+                "caelestia-bar[{label}]: output {name}, monitor {}",
+                monitor.as_ref().map_or("none".to_string(), |m| {
+                    let area = gtk::prelude::MonitorExt::geometry(m);
+                    format!("{}x{} at {},{}", area.width(), area.height(), area.x(), area.y())
+                })
+            );
+        }
         if let Ok(mut outputs) = app.state::<Mutex<Outputs>>().lock() {
             outputs.0.insert(label, name);
         }

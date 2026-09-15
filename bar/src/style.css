@@ -17,16 +17,6 @@
     --height: 38px;
     --float: 12px;
 
-    /* The mark that caps the left end, and how far the pill's own left edge
-     * sits inside it. Measured from the mark rather than guessed: its spine
-     * is columns 10-18, solid top to bottom, so the pill's own edge goes at
-     * 14 where the C covers it completely. What is actually seen as the end
-     * of the bar is the mask below — the pill is cut to the C's own contour,
-     * so it flows out of the mouth instead of stopping at a straight line. */
-    --mark: 62px;
-    /* Wider than tall once cropped to its ink. */
-    --mark-w: 81px;
-    --mark-bite: 14px;
 
     --lit: rgba(255, 255, 255, 0.1);
     --lit-soft: rgba(255, 255, 255, 0.045);
@@ -107,13 +97,11 @@ body,
      * pill shrinks to fit its contents and leaves the right-hand end of the
      * screen bare. */
     flex: 1;
-    /* Flush to the left edge of the screen: the mark sits in that margin, so
-     * giving the pill the usual float there would indent the whole assembly.
-     */
-    margin: var(--float) var(--float) 0 var(--mark-bite);
-    /* The right end is a full pill radius, so its contents need that much
-     * clearance or the last control sits against the curve. */
-    padding: 0 22px 0 calc(var(--mark-w) - var(--mark-bite) + 8px);
+    margin: var(--float) var(--float) 0 var(--float);
+    /* The right end needs a full pill radius of clearance or the last
+     * control sits against the curve. The left starts with the mark, which
+     * is round itself and sits happily much closer to the edge. */
+    padding: 0 22px 0 8px;
 
 
 
@@ -141,7 +129,7 @@ body,
     position: absolute;
     inset: 0;
     z-index: 0;
-    border-radius: 0 999px 999px 0;
+    border-radius: 999px;
     background: linear-gradient(180deg, var(--body-top) 0%, var(--body) 100%);
     /* Kept well under the compositor's alpha threshold for blurring (0.72 in
      * the layer rule): a heavier shadow crossed it and the halo around the
@@ -151,52 +139,6 @@ body,
         inset 0 0 0 1px rgba(255, 255, 255, 0.07);
     pointer-events: none;
 
-    /* The C is cut out of the pill.
-     *
-     * Placing the pill's edge near the mark is not enough on its own: a
-     * straight edge anywhere in the mouth is visible as a straight edge, and
-     * hiding it behind the spine leaves the pill showing through the opening.
-     * Masking the mark out of the pill makes the boundary the C's own
-     * contour, so the bar reads as flowing out from between its arms.
-     *
-     * Two layers composited with `exclude`: everything, minus the mark. The
-     * mask is the C's body alone — the dots belong on top of the pill, and
-     * punching them out of it leaves holes. The shape lives in the alpha
-     * channel, because that is what a CSS image mask reads.
-     */
-    -webkit-mask-image: url("./assets/mark-mask.png"), linear-gradient(#000 0 0);
-    -webkit-mask-position: calc(-1 * var(--mark-bite) + var(--logo-x, 0px))
-            calc(50% + var(--logo-y, 0px)),
-        0 0;
-    -webkit-mask-size: calc(var(--mark-w) * var(--logo-scale, 1)) calc(var(--mark) * var(--logo-scale, 1)),
-        100% 100%;
-    -webkit-mask-repeat: no-repeat, no-repeat;
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-}
-
-/* A logo the user supplied is not this shape, so nothing is cut out of the
- * pill and it simply ends with a rounded cap. */
-body.custom-logo .bar-face,
-body.custom-logo .visualiser {
-    -webkit-mask-image: none;
-    mask-image: none;
-}
-
-body.custom-logo .bar-face,
-body.custom-logo .visualiser {
-    border-radius: 999px;
-}
-
-/* The spectrum is part of that surface, so it is cut the same way. */
-.visualiser {
-    -webkit-mask-image: url("./assets/mark-mask.png"), linear-gradient(#000 0 0);
-    -webkit-mask-position: calc(-1 * var(--mark-bite)) center, 0 0;
-    -webkit-mask-size: calc(var(--mark-w) * var(--logo-scale, 1)) calc(var(--mark) * var(--logo-scale, 1)),
-        100% 100%;
-    -webkit-mask-repeat: no-repeat, no-repeat;
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
 }
 
 /* One lit edge along the top of the pill, following its curve. */
@@ -418,14 +360,14 @@ body.custom-logo .visualiser {
 }
 
 .logo .image {
-    width: calc(19px * var(--logo-scale, 1));
-    height: calc(19px * var(--logo-scale, 1));
+    width: 19px;
+    height: 19px;
     object-fit: contain;
 }
 
 .logo svg {
-    width: calc(19px * var(--logo-scale, 1));
-    height: calc(19px * var(--logo-scale, 1));
+    width: 19px;
+    height: 19px;
     /* Clipped to its viewBox. These marks carry paths that reach well outside
      * it — the CachyOS one spans roughly -57 to 43 in a 0-64 box — and left
      * unclipped the browser happily draws all of it, so the logo rendered as
@@ -990,7 +932,7 @@ body.custom-logo .visualiser {
     /* The pill's own shape, stated rather than inherited: the radius lives on
      * `.bar-face` now, and `inherit` here picked up the bar's — which has
      * none — so the bands ran out past both ends. */
-    border-radius: 0 999px 999px 0;
+    border-radius: 999px;
     pointer-events: none;
     /* Under the bar's own content, over its background. */
     z-index: 0;
@@ -1504,40 +1446,4 @@ body.custom-logo .visualiser {
 .popout .warning .glyph {
     font-size: 17px;
     flex: none;
-}
-
-/* ---- the logo as an endcap ---------------------------------------------- */
-
-/* The mark caps the left end at well over the bar's own height, centred on
- * the strip so it overhangs both edges, and the row that follows tucks into
- * the opening of the C rather than starting clear of it. That overlap is the
- * whole idea: the logo is the end of the bar, not an icon sitting at one end
- * of it.
- */
-.logo.endcap {
-    position: absolute;
-    /* Placed against the screen, because it is a sibling of the bar rather
-     * than a child of it: flush to the left edge, and centred on the pill. */
-    left: 0;
-    top: calc(var(--float) + (var(--height) - var(--mark)) / 2);
-    width: calc(var(--mark-w) * var(--logo-scale, 1));
-    height: calc(var(--mark) * var(--logo-scale, 1));
-
-    /* Over the pill's background, so the C reads as the end of the bar
-     * rather than as something lying on top of it. */
-    z-index: 2;
-    background: none !important;
-    overflow: visible;
-}
-
-.logo.endcap svg,
-.logo.endcap .image {
-    /* Height drives it; the width follows the mark's own proportions. */
-    width: auto;
-    height: calc(var(--mark) * var(--logo-scale, 1));
-}
-
-/* Nothing about an endcap should light up a box behind it. */
-.logo.endcap:hover {
-    background: none;
 }

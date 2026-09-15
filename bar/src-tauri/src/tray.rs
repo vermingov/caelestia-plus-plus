@@ -266,8 +266,27 @@ pub fn watch(mut on_change: impl FnMut(Vec<Item>)) {
     // only telling the front end when it actually differs, is the same
     // outcome for a fraction of the code.
     let mut last: Option<Vec<Item>> = None;
+    let diagnosing = std::env::var_os("CAELESTIA_BAR_DIAG").is_some();
     loop {
         let items = read_items(&connection);
+        if diagnosing && last.as_ref().map(Vec::len) != Some(items.len()) {
+            eprintln!(
+                "caelestia-bar[tray]: watcher lists {} item(s): {}",
+                items.len(),
+                items
+                    .iter()
+                    .map(|item| {
+                        let icon = if item.icon.is_empty() {
+                            "NO ICON".to_string()
+                        } else {
+                            format!("{}…", item.icon.chars().take(48).collect::<String>())
+                        };
+                        format!("{} [{icon}]", item.key)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         if last.as_ref() != Some(&items) {
             last = Some(items.clone());
             on_change(items);

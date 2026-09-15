@@ -12,17 +12,9 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct Logo {
     /// "caelestia" and "cachyos" are drawn from marks bundled with the bar, so
-    /// they can take the accent colour; "file" is loaded from `path`.
+    /// they can take the accent colour.
     pub kind: String,
-    pub path: String,
     pub show: bool,
-    /// Drawn oversized as the left endcap, with the row tucked into the
-    /// opening of it, rather than sitting in the row as one more icon.
-    pub endcap: bool,
-    /// A multiplier on its size, for a mark that reads small or large.
-    pub scale: f64,
-    pub offset_x: i64,
-    pub offset_y: i64,
 }
 
 fn config_dir() -> Option<std::path::PathBuf> {
@@ -320,37 +312,15 @@ pub fn read() -> Logo {
 
     let mut logo = Logo {
         show: prefs.get("barLogoShow").and_then(serde_json::Value::as_bool).unwrap_or(true),
-        endcap: prefs.get("barLogoEndcap").and_then(serde_json::Value::as_bool).unwrap_or(true),
-        scale: prefs.get("barLogoScale").and_then(serde_json::Value::as_f64).unwrap_or(1.0),
-        offset_x: prefs.get("barLogoOffsetX").and_then(serde_json::Value::as_i64).unwrap_or(0),
-        offset_y: prefs.get("barLogoOffsetY").and_then(serde_json::Value::as_i64).unwrap_or(0),
         ..Logo::default()
     };
 
-    // An image the user chose outright wins over everything.
-    let source = string(&prefs, "barLogoSource");
-    if !source.is_empty() {
-        if let Some(path) = resolve(&source) {
-            logo.kind = "file".to_string();
-            logo.path = path;
-            return logo;
-        }
-    }
-
-    // Then the shell config's own choice.
+    // The shell config's choice.
     let configured = config.get("general").map(|general| string(general, "logo")).unwrap_or_default();
     if configured == "caelestia" {
         logo.kind = "caelestia".to_string();
         return logo;
     }
-    if !configured.is_empty() {
-        if let Some(path) = resolve(&configured) {
-            logo.kind = "file".to_string();
-            logo.path = path;
-            return logo;
-        }
-    }
-
     // Then the distribution's, which is the case on an untouched install.
     let distro = os_release("LOGO").or_else(|| os_release("ID")).unwrap_or_default();
     if distro.contains("cachyos") {
@@ -359,31 +329,10 @@ pub fn read() -> Logo {
         logo.kind = "cachyos".to_string();
         return logo;
     }
-    if !distro.is_empty() {
-        if let Some(path) = resolve(&distro) {
-            logo.kind = "file".to_string();
-            logo.path = path;
-            return logo;
-        }
-    }
-
     logo.kind = "caelestia".to_string();
     logo
 }
 
-/// A path as given, or an icon name looked up in the theme.
-fn resolve(name: &str) -> Option<String> {
-    if name.starts_with('/') {
-        return std::path::Path::new(name).is_file().then(|| name.to_string());
-    }
-    if let Some(home) = std::env::var("HOME").ok().filter(|_| name.starts_with("~/")) {
-        let expanded = name.replacen('~', &home, 1);
-        if std::path::Path::new(&expanded).is_file() {
-            return Some(expanded);
-        }
-    }
-    crate::icons::lookup(name)
-}
 
 #[cfg(test)]
 mod tests {
