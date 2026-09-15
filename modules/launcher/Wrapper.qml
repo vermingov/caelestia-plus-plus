@@ -5,6 +5,9 @@ import Quickshell
 import Caelestia.Config
 import qs.components
 import qs.modules.launcher.services
+// Namespaced: this module has a `services` of its own, and the singleton
+// wanted here is the shell's.
+import qs.services as Shell
 
 Item {
     id: root
@@ -13,7 +16,13 @@ Item {
     required property ScreenState screenState
     required property var panels
 
-    readonly property bool shouldBeActive: screenState.launcher && Config.launcher.enabled
+    // Never opens while the external launcher is installed. The shortcut
+    // routes there already, but `showall`, the `drawers toggle launcher` IPC
+    // and anything else that sets the screen state directly do not know about
+    // it — and two launchers answering one keypress is how the QML one kept
+    // appearing. Everything below is left intact; uninstalling the other one
+    // puts this back.
+    readonly property bool shouldBeActive: screenState.launcher && Config.launcher.enabled && !Shell.Launcher.external
 
     readonly property real maxHeight: {
         let max = screen.height * 0.62;

@@ -1,0 +1,557 @@
+//! The parts of the bar that are somebody else's state.
+//!
+//! Power profiles, the firewall and protection guards, feature modes, wifi and
+//! bluetooth. None of it is the bar's to own, so none of it is reimplemented
+//! here: the two guards and the feature hub already live in the shell and
+//! already answer over its IPC, and asking them is what keeps the bar and the
+//! shell's own panels from disagreeing about what is switched on.
+//!
+//! This is the slow tick. Everything in `system` is a file read; everything
+//! here costs a process, so it runs every few seconds rather than every one,
+//! and only when something is actually listening.
+
+use serde::Serialize;
+
+use crate::guards::Guards;
+
+/// The shell's own instance name, which is what `qs -c` wants.
+const SHELL: &str = "caelestia";
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub power: Power,
+    pub guards: Guards,
+    pub features: Vec<Feature>,
+    pub bluetooth: Bluetooth,
+    /// The laptop fan-curve mode, which is a state file the shell owns rather
+    /// than one of the feature hub's modes.
+    pub bed_mode: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Power {
+    /// Whether the auto-switching daemon is driving the profile, and which one
+    /// it has currently picked.
+    pub dynamic: bool,
+    pub dynamic_tier: String,
+    /// "power-saver", "balanced" or "performance"; empty if the daemon is not
+    /// there.
+    pub profile: String,
+    pub available: Vec<String>,
+    /// Why the machine is not delivering the profile it is set to — thermal
+    /// throttling, usually. Empty when it is.
+    pub degraded: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Feature {
+    pub id: String,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Bluetooth {
+    pub powered: bool,
+    pub connected: i64,
+    pub discovering: bool,
+}
+
+/// One wireless network, as the popout lists them.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Wifi {
+    pub ssid: String,
+    pub strength: i64,
+    pub active: bool,
+    /// Whether joining it needs a password we do not already have.
+    pub secured: bool,
+    pub known: bool,
+}
+
+/// A wired device, as the popout lists them.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Ethernet {
+    pub interface: String,
+    pub connected: bool,
+    /// The profile it is on, which is the name a person recognises.
+    pub connection: String,
+}
+
+/// A bluetooth device, as the popout lists them.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Device {
+    pub address: String,
+    pub name: String,
+    pub connected: bool,
+}
+
+fn output(program: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Calls one of the shell's IPC handlers and returns what it said.
+///
+/// `qs` exits zero whether or not the handler exists, and says so on stdout
+/// instead — so a missing target has to be read out of the reply rather than
+/// out of the exit status, or every caller silently believes it succeeded.
+pub fn ipc(target: &str, function: &str, args: &[&str]) -> Option<String> {
+    let mut argv = vec!["-c", SHELL, "ipc", "call", target, function];
+    argv.extend_from_slice(args);
+    let reply = output("qs", &argv)?;
+    if is_missing(&reply) {
+        return None;
+    }
+    Some(reply)
+}
+
+/// Whether a reply is `qs` reporting that there was nobody to ask.
+fn is_missing(reply: &str) -> bool {
+    let reply = reply.trim();
+    reply.starts_with("Target not found")
+        || reply.starts_with("Function not found")
+        || reply.starts_with("No such")
+}
+
+// ---- power profiles ------------------------------------------------------
+
+fn read_power() -> Power {
+    let profile = output("powerprofilesctl", &["get"]).unwrap_or_default();
+    let listing = output("powerprofilesctl", &["list"]).unwrap_or_default();
+
+    // `list` marks the active one with a `*` and indents the rest; the names
+    // are the only part of it the bar wants.
+    let available = listing
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start_matches(['*', ' ']);
+            line.strip_suffix(':').map(str::to_string)
+        })
+        .collect();
+
+    // "Degraded: <reason>" sits under whichever profile is affected, and says
+    // "no" when nothing is wrong.
+    let degraded = listing
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Degraded:").map(str::trim))
+        .filter(|reason| !reason.is_empty() && *reason != "no")
+        .unwrap_or_default()
+        .to_string();
+
+    Power {
+        profile,
+        available,
+        degraded,
+        dynamic: flag_file("dynamic").unwrap_or(false),
+        dynamic_tier: state_dir()
+            .and_then(|dir| std::fs::read_to_string(dir.join("dynamic-tier")).ok())
+            .map(|tier| tier.trim().to_string())
+            .unwrap_or_default(),
+    }
+}
+
+/// Hands the profile to the auto-switching daemon, or takes it back.
+///
+/// The daemon watches the state file through a systemd path unit, which is
+/// also how the shell drives it — there is no service to call, only a byte to
+/// write. Max-perf owns the plan when it is on, so the two are never both on.
+pub fn set_dynamic(on: bool) {
+    let Some(dir) = state_dir() else { return };
+    let _ = std::fs::write(dir.join("dynamic"), if on { "1\n" } else { "0\n" });
+    if on {
+        let _ = std::fs::write(dir.join("max-perf"), "0\n");
+    }
+}
+
+pub fn set_power_profile(profile: &str) {
+    let _ = std::process::Command::new("powerprofilesctl").args(["set", profile]).status();
+}
+
+// ---- the guards ----------------------------------------------------------
+
+
+
+// ---- feature modes -------------------------------------------------------
+
+/// Parses `maxPerf: off; antiHeat: off; lidStay: on`.
+fn parse_features(status: &str) -> Vec<Feature> {
+    status
+        .split(';')
+        .filter_map(|part| {
+            let (id, state) = part.split_once(':')?;
+            Some(Feature { id: id.trim().to_string(), enabled: state.trim() == "on" })
+        })
+        .collect()
+}
+
+/// The state directory the shell keeps its modes in.
+fn state_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let state = std::env::var("XDG_STATE_HOME").unwrap_or_else(|_| format!("{home}/.local/state"));
+    Some(std::path::PathBuf::from(state).join("caelestia"))
+}
+
+/// Whether a one-byte state file says on.
+fn flag_file(name: &str) -> Option<bool> {
+    let text = std::fs::read_to_string(state_dir()?.join(name)).ok()?;
+    Some(text.trim() == "1")
+}
+
+/// The feature modes, read from the files the shell writes rather than asked
+/// for over its IPC.
+///
+/// `qs ipc call` boots a whole QML runtime for each question, which on a
+/// three-second tick was the single largest thing this process did. The files
+/// are the same source of truth the shell itself reloads from.
+fn read_features() -> Vec<Feature> {
+    let mut features = Vec::new();
+
+    for (id, file) in [("maxPerf", "max-perf"), ("antiHeat", "anti-heat")] {
+        if let Some(enabled) = flag_file(file) {
+            features.push(Feature { id: id.to_string(), enabled });
+        }
+    }
+
+    // lidStay and caffeine share one JSON file.
+    if let Some(dir) = state_dir() {
+        if let Ok(text) = std::fs::read_to_string(dir.join("features.json")) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                for id in ["lidStay", "caffeine"] {
+                    if let Some(enabled) = json.get(id).and_then(serde_json::Value::as_bool) {
+                        features.push(Feature { id: id.to_string(), enabled });
+                    }
+                }
+            }
+        }
+    }
+
+    features
+}
+
+// ---- bluetooth -----------------------------------------------------------
+
+fn read_bluetooth() -> Bluetooth {
+    let show = output("bluetoothctl", &["show"]).unwrap_or_default();
+    let flag = |name: &str| show.lines().any(|line| line.trim() == format!("{name}: yes"));
+    let connected = output("bluetoothctl", &["devices", "Connected"])
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with("Device "))
+        .count() as i64;
+    Bluetooth { powered: flag("Powered"), connected, discovering: flag("Discovering") }
+}
+
+/// Scanning is a mode the adapter is in, not a one-off: the popout shows it
+/// as a switch, the way the shell's does.
+pub fn set_discovering(on: bool) {
+    // `scan on` blocks holding the adapter, so it is left running and killed
+    // by the matching `scan off` rather than waited on.
+    let _ = std::process::Command::new("sh")
+        .args(["-c", &format!("setsid -f bluetoothctl scan {} >/dev/null 2>&1", if on { "on" } else { "off" })])
+        .spawn();
+}
+
+pub fn forget_device(address: &str) {
+    let _ = std::process::Command::new("bluetoothctl").args(["remove", address]).status();
+}
+
+pub fn set_bluetooth(on: bool) {
+    let _ = std::process::Command::new("bluetoothctl")
+        .args(["power", if on { "on" } else { "off" }])
+        .status();
+}
+
+pub fn devices() -> Vec<Device> {
+    let connected: Vec<String> = output("bluetoothctl", &["devices", "Connected"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(str::to_string))
+        .collect();
+
+    output("bluetoothctl", &["devices", "Paired"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            // "Device AA:BB:CC:DD:EE:FF Some Headphones"
+            let rest = line.strip_prefix("Device ")?;
+            let (address, name) = rest.split_once(' ')?;
+            Some(Device {
+                connected: connected.iter().any(|c| c == address),
+                address: address.to_string(),
+                name: name.to_string(),
+            })
+        })
+        .collect()
+}
+
+pub fn connect_device(address: &str, connect: bool) {
+    let verb = if connect { "connect" } else { "disconnect" };
+    let _ = std::process::Command::new("bluetoothctl").args([verb, address]).status();
+}
+
+// ---- wifi ----------------------------------------------------------------
+
+/// The networks in range, best signal first, one entry per name.
+///
+/// `nmcli -t` is the parseable form: colon-separated, with colons inside a
+/// field escaped as `\:`.
+pub fn networks() -> Vec<Wifi> {
+    let known: Vec<String> = output("nmcli", &["-t", "-f", "NAME", "connection", "show"])
+        .unwrap_or_default()
+        .lines()
+        .map(unescape)
+        .collect();
+
+    let mut found: Vec<Wifi> = Vec::new();
+    for line in output("nmcli", &["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"])
+        .unwrap_or_default()
+        .lines()
+    {
+        let fields = split_escaped(line);
+        let [in_use, ssid, signal, security] = &fields[..] else { continue };
+        if ssid.is_empty() {
+            continue; // a hidden network is not something to offer
+        }
+        // The same network on two bands is one row in the list.
+        if found.iter().any(|w| &w.ssid == ssid) {
+            continue;
+        }
+        found.push(Wifi {
+            active: in_use.trim() == "*",
+            strength: signal.parse().unwrap_or(0),
+            secured: !security.is_empty() && security != "--",
+            known: known.contains(ssid),
+            ssid: ssid.clone(),
+        });
+    }
+    found.sort_by(|a, b| b.active.cmp(&a.active).then(b.strength.cmp(&a.strength)));
+    found
+}
+
+fn unescape(field: &str) -> String {
+    field.replace("\\:", ":")
+}
+
+/// Splits an `nmcli -t` line into exactly four fields, honouring `\:`.
+fn split_escaped(line: &str) -> Vec<String> {
+    let mut fields = vec![String::new()];
+    let mut escaped = false;
+    for c in line.chars() {
+        match c {
+            '\\' if !escaped => escaped = true,
+            ':' if !escaped => fields.push(String::new()),
+            _ => {
+                escaped = false;
+                fields.last_mut().expect("there is always a current field").push(c);
+            }
+        }
+    }
+    fields
+}
+
+/// Joins a network. An empty password means "use what is already stored",
+/// which is the right thing for one that has been joined before.
+pub fn join(ssid: &str, password: &str) -> Result<(), String> {
+    let mut command = std::process::Command::new("nmcli");
+    command.args(["device", "wifi", "connect", ssid]);
+    if !password.is_empty() {
+        command.args(["password", password]);
+    }
+    match command.output() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Asks NetworkManager to look again. The list is re-read a moment later by
+/// the popout; a scan takes a second or two and nmcli returns before it is
+/// done.
+pub fn rescan() {
+    let _ = std::process::Command::new("nmcli").args(["device", "wifi", "rescan"]).status();
+}
+
+/// The wired devices, which the original popout lists alongside the wireless
+/// ones — a dock or a USB adapter is a thing you connect and disconnect.
+pub fn ethernet() -> Vec<Ethernet> {
+    output("nmcli", &["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let fields = split_escaped(line);
+            let [device, kind, state, connection] = &fields[..] else { return None };
+            if kind != "ethernet" {
+                return None;
+            }
+            Some(Ethernet {
+                interface: device.clone(),
+                connected: state == "connected",
+                connection: connection.clone(),
+            })
+        })
+        .collect()
+}
+
+pub fn set_ethernet(interface: &str, connect: bool) {
+    let verb = if connect { "connect" } else { "disconnect" };
+    let _ = std::process::Command::new("nmcli").args(["device", verb, interface]).status();
+}
+
+pub fn set_wifi(on: bool) {
+    let _ = std::process::Command::new("nmcli")
+        .args(["radio", "wifi", if on { "on" } else { "off" }])
+        .status();
+}
+
+/// Bed mode, from the state file the shell's service owns. Read rather than
+/// asked for: it is one byte on disk, and a subprocess to learn it would cost
+/// more than the whole rest of this tick.
+fn read_bed_mode() -> Option<bool> {
+    flag_file("bed-mode")
+}
+
+/// Flips it through the shell, so its toast fires and its own UI keeps up. If
+/// the shell is not running there is nobody to tell, and the state file is
+/// the thing the root-side path unit actually watches — so that is written
+/// directly as the fallback.
+pub fn toggle_bed_mode() {
+    if ipc("bedMode", "toggle", &[]).is_some() {
+        return;
+    }
+    let Some(current) = read_bed_mode() else { return };
+    let Some(dir) = state_dir() else { return };
+    let _ = std::fs::write(dir.join("bed-mode"), if current { "0\n" } else { "1\n" });
+}
+
+pub fn read(guards: Guards) -> Snapshot {
+    Snapshot {
+        power: read_power(),
+        guards,
+        features: read_features(),
+        bluetooth: read_bluetooth(),
+        bed_mode: read_bed_mode(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_healthy_machine_reports_no_degradation() {
+        // The field says "no" rather than being absent, so a naive read of it
+        // would put "no" on the bar as if it were a reason.
+        assert_eq!(read_power().degraded, "");
+    }
+
+
+
+
+    #[test]
+    fn features_are_read_as_switches() {
+        let features = parse_features("maxPerf: off; antiHeat: off; lidStay: on");
+        assert_eq!(features.len(), 3);
+        assert_eq!(features[0].id, "maxPerf");
+        assert!(!features[0].enabled);
+        assert!(features[2].enabled);
+    }
+
+    #[test]
+    fn a_missing_handler_is_not_an_answer() {
+        // `qs` exits zero and prints this, so a caller that only checked the
+        // exit status would take it for the handler's reply.
+        assert!(is_missing("Target not found."));
+        assert!(is_missing("Function not found"));
+        assert!(!is_missing("connected; 0 pending; 119 rules"));
+        assert!(!is_missing("on"));
+    }
+
+    #[test]
+    fn an_nmcli_line_splits_on_unescaped_colons_only() {
+        // An SSID with a colon in it is escaped by nmcli, and splitting on it
+        // would shift every field after it by one.
+        let fields = split_escaped(r"*:Cafe\: Wifi:72:WPA2");
+        assert_eq!(fields, vec!["*", "Cafe: Wifi", "72", "WPA2"]);
+    }
+
+    #[test]
+    fn an_empty_field_is_still_a_field() {
+        let fields = split_escaped(":Open Network:41:");
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields[3], "");
+    }
+}
+
+// ---- audio devices -------------------------------------------------------
+
+/// One sink or source, as the audio popout lists them.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioNode {
+    /// PipeWire's name for it, which is what selecting it needs.
+    pub name: String,
+    /// What a person would call it.
+    pub description: String,
+    pub default: bool,
+}
+
+fn nodes(kind: &str) -> Vec<AudioNode> {
+    let default = output("pactl", &[&format!("get-default-{kind}")]).unwrap_or_default();
+    let short = output("pactl", &["list", "short", &format!("{kind}s")]).unwrap_or_default();
+
+    // The short listing has the names; the long one has the descriptions, and
+    // a person picks a device by the second of those.
+    let long = output("pactl", &["list", &format!("{kind}s")]).unwrap_or_default();
+    let mut descriptions: Vec<(String, String)> = Vec::new();
+    let (mut name, mut description) = (String::new(), String::new());
+    for line in long.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("Name: ") {
+            name = value.to_string();
+        } else if let Some(value) = line.strip_prefix("Description: ") {
+            description = value.to_string();
+            if !name.is_empty() {
+                descriptions.push((std::mem::take(&mut name), std::mem::take(&mut description)));
+            }
+        }
+    }
+
+    short
+        .lines()
+        .filter_map(|line| {
+            let name = line.split('\t').nth(1)?.to_string();
+            let description = descriptions
+                .iter()
+                .find(|(known, _)| known == &name)
+                .map(|(_, description)| description.clone())
+                .unwrap_or_else(|| name.clone());
+            Some(AudioNode { default: name == default, name, description })
+        })
+        .collect()
+}
+
+pub fn sinks() -> Vec<AudioNode> {
+    nodes("sink")
+}
+
+pub fn sources() -> Vec<AudioNode> {
+    nodes("source")
+}
+
+pub fn set_default_node(kind: &str, name: &str) {
+    if kind != "sink" && kind != "source" {
+        return;
+    }
+    let _ = std::process::Command::new("pactl")
+        .args([&format!("set-default-{kind}"), name])
+        .status();
+}

@@ -175,15 +175,23 @@ StyledWindow {
         // dashboard merge into it via SDF smoothing instead of hanging loose.
         // The left end keeps its full rounding and tucks into the distro
         // logo's mouth (logoCap in BarWrapper).
-        BlobRect {
-            group: blobGroup
-            x: bar.floatMargin + bar.logoInset
-            // Slides up out of view together with the bar hide animation
-            y: bar.implicitHeight - bar.pillHeight
-            implicitWidth: root.width - bar.floatMargin * 2 - bar.logoInset
-            implicitHeight: bar.pillHeight
-            radius: bar.pillHeight / 2
-            deformScale: (0.05 * Config.appearance.deformScale) / 10000
+        // Not created at all when the external bar owns the strip: the blob
+        // is drawn through a blurred shadow, so a pill for a bar that is not
+        // there reads as a smear across the top of the screen. Hiding it is
+        // not enough — the group rasterises whatever it has been given.
+        Loader {
+            active: !ExternalBar.external
+
+            sourceComponent: BlobRect {
+                group: blobGroup
+                x: bar.floatMargin + bar.logoInset
+                // Slides up out of view together with the bar hide animation
+                y: bar.implicitHeight - bar.pillHeight
+                implicitWidth: root.width - bar.floatMargin * 2 - bar.logoInset
+                implicitHeight: bar.pillHeight
+                radius: bar.pillHeight / 2
+                deformScale: (0.05 * Config.appearance.deformScale) / 10000
+            }
         }
 
         PanelBg {

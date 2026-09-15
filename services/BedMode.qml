@@ -32,6 +32,17 @@ Singleton {
         Toaster.toast(value ? qsTr("Bed mode enabled") : qsTr("Bed mode disabled"), value ? qsTr("Aggressive fan curve on — performance untouched") : qsTr("Firmware fan curve restored"), "bed");
     }
 
+    // Exposed so a front end outside the shell can flip it — the Tauri bar's
+    // battery popout carries this switch, the same as the shell's own does.
+    // Going through here rather than writing the state file directly is what
+    // keeps the toast and the in-shell UI in step with it.
+    IpcHandler {
+        target: "bedMode"
+
+        function toggle(): void { root.setEnabled(!root.enabled); }
+        function status(): string { return root.enabled ? "on" : "off"; }
+    }
+
     Process {
         id: ensureStateDir
 

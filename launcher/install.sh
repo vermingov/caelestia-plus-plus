@@ -9,6 +9,19 @@
 #        ./install.sh --uninstall  remove
 set -euo pipefail
 
+# The launcher moved into the bar.
+#
+# Its sources are still here, and still build, but installing them puts a
+# second process on the socket the bar's launcher listens on — so this refuses
+# rather than leaving two launchers racing for every keypress. Build and
+# install from ../bar instead, which ships both binaries.
+if [[ ${1:-} != --uninstall ]]; then
+    echo "The launcher now runs inside caelestia-bar." >&2
+    echo "Install it with:  ../bar/install.sh" >&2
+    exit 1
+fi
+
+
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 target="${XDG_BIN_HOME:-$HOME/.local/bin}/caelestia-launcher"
 

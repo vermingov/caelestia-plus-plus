@@ -18,9 +18,17 @@ Item {
     required property BarPopouts.Wrapper popouts
     required property bool fullscreen
 
-    readonly property bool disabled: Strings.testRegexList(Config.bar.excludedScreens, screen.name)
+    // Stood down entirely while the external bar is installed — it owns the
+    // strip, its own exclusive zone and its own popouts, and two bars fighting
+    // over the top of the screen is worse than either. Everything below is
+    // left intact: uninstalling the other one puts this back.
+    readonly property bool disabled: ExternalBar.external || Strings.testRegexList(Config.bar.excludedScreens, screen.name)
 
-    readonly property int clampedHeight: Math.max(Config.border.minThickness, implicitHeight)
+    // Nothing at the top at all when the external bar owns the strip. The
+    // usual floor exists so the border still reads as a border with the bar
+    // hidden; here there is another bar sitting on that exact strip, and the
+    // floor showed up underneath it as a band of the background's own glow.
+    readonly property int clampedHeight: ExternalBar.external ? 0 : Math.max(Config.border.minThickness, implicitHeight)
     readonly property int padding: Math.max(Tokens.padding.small, Config.border.thickness)
     // Gap between the pill and the screen edges — the "float". Fixed to
     // hyprland gaps_out (variables.lua windowGapsOut = 10, keep in sync) so

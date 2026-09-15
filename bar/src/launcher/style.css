@@ -1,0 +1,609 @@
+/* The glass itself.
+ *
+ * The frost behind the window is the compositor's — Hyprland blurs whatever
+ * is under a layer surface, and nothing in a webview can see the desktop to
+ * blur it. What is drawn here is the pane: a smoky body, light gathering
+ * along the lit lip, a rim that is brighter where it faces the light and
+ * almost gone where it does not, and one specular streak.
+ *
+ * Dark glass is mostly dark. The failure mode is making the edges bright
+ * enough to read as a white outline, so every light value here is low and
+ * the body carries the weight.
+ */
+
+:root {
+    /* Where the light is: up and to the left. Every highlight follows it. */
+    --lit: rgba(255, 255, 255, 0.11);
+    --lit-soft: rgba(255, 255, 255, 0.05);
+    --unlit: rgba(255, 255, 255, 0.015);
+    --shade: rgba(0, 0, 0, 0.55);
+
+    /* Substantial enough to read over a busy backdrop at a modest
+     * compositor blur. A thinner body looks better over a still wallpaper
+     * and turns to soup over a terminal. */
+    --body: rgba(13, 13, 15, 0.76);
+    --body-top: rgba(26, 26, 30, 0.72);
+
+    --text: rgba(255, 255, 255, 0.94);
+    --text-dim: rgba(255, 255, 255, 0.55);
+    --text-faint: rgba(255, 255, 255, 0.34);
+
+    /* Geometry is derived from the output rather than fixed: the surface
+     * covers the screen, so viewport units are the screen's units. vmin
+     * rather than vw is what makes it aspect-ratio aware — on an ultrawide,
+     * a width in vw would stretch the pane into a letterbox, while vmin
+     * follows the short side and keeps the proportions the design was drawn
+     * at. The vw term is only a guard for genuinely narrow outputs. */
+    --pane-width: min(66vmin, 92vw);
+    --pane-width-wide: min(96vmin, 94vw);
+    /* A fifth of the way down, wherever the eye already is. */
+    --pane-top: clamp(56px, 20vh, 280px);
+    /* The list never takes more than its share of the screen, however many
+     * rows the config allows. */
+    --list-height: min(calc(var(--max-shown, 8) * 44px), 44vh);
+
+    /* Tighter than a phone sheet: this is a command surface, and a large
+     * radius on a wide pane reads as a dialog rather than a bar. */
+    --radius: 15px;
+    --row-radius: 9px;
+    --pad: 16px;
+
+    --font: "Rubik", "Noto Sans", system-ui, sans-serif;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body,
+#app,
+.stage {
+    width: 100%;
+    height: 100%;
+    /* The surface is a fixed transparent sheet; only the pane paints. The
+     * compositor's blur is kept off the empty part by the layer rule's
+     * ignore_alpha, so the sheet costs nothing visually. */
+    background: transparent;
+    overflow: hidden;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    font-family: var(--font);
+    color: var(--text);
+    /* Nothing here is a document: no text selection, no drag, no callout. */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+}
+
+/* ---- the pane ---------------------------------------------------------- */
+
+/* The pane's distance from the top of the screen. This used to be the layer
+ * surface's own top margin; the surface covers the output now, so the offset
+ * is a fraction of the screen's height instead of a fixed pixel count. */
+.stage {
+    padding-top: var(--pane-top);
+}
+
+.glass {
+    position: relative;
+    width: var(--pane-width);
+    /* The rounded clip has to be its own compositing layer, or WebKit lets a
+     * descendant that makes one of its own — the selected row's
+     * backdrop-filter — paint past the corners. */
+    isolation: isolate;
+    transform: translateZ(0);
+    /* Height is set from the content's measured height so it can be animated:
+     * `auto` is not an interpolable value. The window itself never resizes,
+     * which is what stops a growing result list from jolting the whole pane.
+     * The list caps itself by row count so this stays bounded. */
+    height: auto;
+    overflow: hidden;
+    transition:
+        height 190ms cubic-bezier(0.2, 0, 0, 1),
+        width 190ms cubic-bezier(0.2, 0, 0, 1);
+    border-radius: var(--radius);
+
+    /* The body: dark, slightly lighter at the top where the light falls. */
+    background: linear-gradient(160deg, var(--body-top) 0%, var(--body) 42%, var(--body) 100%);
+
+    /* Depth under it, and the faintest inner lift at the very top so the
+     * surface does not begin abruptly. */
+    box-shadow:
+        0 24px 60px -12px rgba(0, 0, 0, 0.7),
+        0 4px 14px -4px rgba(0, 0, 0, 0.5),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.055);
+}
+
+/* One frame with no transition, for a pane that is arriving rather than
+ * resizing — see `settleInstantly`. */
+.glass.instant {
+    transition: none;
+}
+
+.glass.wide {
+    width: var(--pane-width-wide);
+}
+
+/* The measured child. The pane's own height is animated towards this one's,
+ * so it must be free to be exactly as tall as the content. */
+.content {
+    display: flex;
+    flex-direction: column;
+}
+
+/* The rim, as a gradient border. A plain border is one flat colour all the
+ * way round, which is exactly what makes a pane look drawn rather than lit —
+ * this one is brightest where it faces the light and gone where it does not. */
+.glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+        150deg,
+        var(--lit) 0%,
+        var(--lit-soft) 26%,
+        var(--unlit) 55%,
+        rgba(255, 255, 255, 0.035) 100%
+    );
+    /* Keep only the 1px frame: fill minus content box. */
+    -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+}
+
+/* The specular: a short streak just inside the top edge, a third of the way
+ * across, fading out well before the corners. */
+.glass::after {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 12%;
+    width: 46%;
+    height: 1px;
+    border-radius: 1px;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.16) 42%,
+        transparent 100%
+    );
+    pointer-events: none;
+}
+
+/* ---- search ------------------------------------------------------------ */
+
+.search {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 var(--pad);
+    height: 58px;
+    flex: none;
+}
+
+.search .icon {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    opacity: 0.5;
+}
+
+.search input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 16px;
+    letter-spacing: 0.1px;
+    caret-color: var(--accent, #ff5449);
+}
+
+.search input::placeholder {
+    color: var(--text-faint);
+}
+
+/* What Tab would do, at the far end of the field where it does not compete
+ * with what is being typed. */
+.search .hint {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: none;
+    font-size: 12px;
+    color: var(--text-faint);
+    white-space: nowrap;
+}
+
+/* A seam across the whole pane rather than a rule that fades out at the ends:
+ * the fading one drew attention to itself as a decoration. */
+.rule {
+    flex: none;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+/* ---- results ----------------------------------------------------------- */
+
+/* The group's name, said once and quietly — not a tracked-out uppercase
+ * label competing with the rows under it. */
+.section {
+    padding: 11px var(--pad) 5px;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-faint);
+    flex: none;
+}
+
+.results {
+    position: relative;
+    flex: 0 0 auto;
+    /* Walking the list scrolls rather than jumps. */
+    scroll-behavior: smooth;
+    /* As many rows as the shell's own maxShown, or as many as fit the screen,
+     * whichever is fewer — then it scrolls. */
+    max-height: var(--list-height);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 6px 6px;
+    /* The scrollbar is a gutter of dead pixels in a pane this size. */
+    scrollbar-width: none;
+}
+
+.results::-webkit-scrollbar {
+    display: none;
+}
+
+/* Leaving rows are taken out of the flow so the ones that stay can slide up
+ * into the gap instead of snapping. */
+.rows {
+    position: relative;
+    /* Above the travelling highlight, never behind it. */
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 44px;
+    padding: 0 10px;
+    border-radius: var(--row-radius);
+    /* Kept out of the compositing fast path until it is actually the current
+     * row: a backdrop-filter on every row is a separate blur pass each. */
+    contain: layout paint;
+}
+
+.row .icon {
+    width: 22px;
+    height: 22px;
+    flex: none;
+    object-fit: contain;
+}
+
+.row .icon.missing {
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.row .name {
+    font-size: 14px;
+    font-weight: 400;
+    white-space: nowrap;
+    flex: none;
+    max-width: 44%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.row .comment {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.row .kind {
+    flex: none;
+    font-size: 13px;
+    color: var(--text-faint);
+}
+
+/* The selection: a smaller pane of the same glass sitting on the first one.
+ * This is the one place backdrop-filter earns its cost — it lenses the panel
+ * behind it, which is what glass on glass actually does.
+ *
+ * One element for the whole list rather than a class on the current row: it
+ * travels between rows, which is the difference between a highlight that
+ * moves and two rows blinking at each other.
+ */
+.cursor {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    top: 0;
+    z-index: 0;
+    opacity: 0;
+    pointer-events: none;
+    border-radius: var(--row-radius);
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.03));
+    backdrop-filter: blur(6px) saturate(1.15);
+    -webkit-backdrop-filter: blur(6px) saturate(1.15);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
+        0 2px 10px -4px rgba(0, 0, 0, 0.6);
+    /* Fading is always animated; travel only when it is actually walking the
+     * list. A new set of results places it, because sliding across rows that
+     * are themselves still moving reads as a glitch. */
+    transition: opacity 120ms ease, height 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.cursor.shown {
+    opacity: 1;
+}
+
+.cursor.travelling {
+    transition:
+        transform 210ms cubic-bezier(0.2, 0, 0, 1),
+        height 150ms cubic-bezier(0.2, 0, 0, 1),
+        opacity 120ms ease;
+}
+
+/* ---- list transitions --------------------------------------------------- */
+
+/* Narrowing a search removes rows and reorders the rest. Without this the
+ * list is a different list every keystroke; with it, rows that survive slide
+ * to their new place and the ones that do not fade out of it. */
+.row-move {
+    transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.row-enter-active {
+    transition:
+        opacity 150ms ease-out,
+        transform 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.row-leave-active {
+    /* Out of the flow, or everything below it jumps the moment it starts to
+     * leave rather than closing the gap smoothly. */
+    position: absolute;
+    left: 0;
+    right: 0;
+    transition:
+        opacity 110ms ease-in,
+        transform 150ms cubic-bezier(0.4, 0, 1, 1);
+}
+
+.row-enter-from {
+    opacity: 0;
+    transform: translateY(-7px);
+}
+
+.row-leave-to {
+    opacity: 0;
+    transform: translateY(7px);
+}
+
+/* ---- footer ------------------------------------------------------------ */
+
+.footer {
+    /* Sits inside the rounded corners rather than squaring them off. */
+    position: relative;
+    z-index: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--pad);
+    height: 40px;
+    flex: none;
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+.footer .action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-dim);
+}
+
+kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.07);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    font-family: inherit;
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.empty {
+    flex: 0 0 auto;
+    padding: 34px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    color: var(--text-faint);
+}
+
+.empty .headline {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+}
+
+.empty .hint {
+    font-size: 12px;
+}
+
+/* ---- glyphs, swatches and marks ---------------------------------------- */
+
+.material-symbols-rounded {
+    font-family: "Material Symbols Rounded";
+    font-weight: 400;
+    font-style: normal;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    white-space: nowrap;
+    direction: ltr;
+    /* Ligature lookup is what turns the name into the glyph. */
+    -webkit-font-feature-settings: "liga";
+    -webkit-font-smoothing: antialiased;
+}
+
+.row .icon.glyph {
+    display: grid;
+    place-items: center;
+    font-size: 20px;
+    color: var(--text-dim);
+}
+
+/* A scheme's palette, as the four colours that identify it. */
+.row .icon.swatches {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.row .icon.swatches i {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.row .mark {
+    flex: none;
+    font-size: 16px;
+    color: var(--accent, rgba(255, 255, 255, 0.55));
+}
+
+.row .name.error {
+    color: #ff8a80;
+}
+
+/* ---- wallpapers -------------------------------------------------------- */
+
+/* A strip rather than a grid: the wallpaper list is walked left and right,
+ * and one row of larger tiles shows more of each image than two rows of
+ * small ones. */
+.wallpapers {
+    flex: 0 0 auto;
+    scroll-behavior: smooth;
+    min-height: 0;
+    display: flex;
+    gap: 10px;
+    padding: 4px 12px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+}
+
+.wallpapers::-webkit-scrollbar {
+    display: none;
+}
+
+.tile {
+    position: relative;
+    flex: none;
+    /* Tiles scale with the pane, so the strip always shows about five of
+     * them whatever the output is. */
+    width: clamp(150px, 18vmin, 260px);
+    border-radius: 12px;
+    overflow: hidden;
+    scroll-snap-align: center;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    /* The selected tile lifts rather than gaining a border: a ring on a
+     * photograph reads as a crop mark. */
+    transition: transform 140ms cubic-bezier(0.2, 0, 0, 1), box-shadow 140ms;
+}
+
+.tile img {
+    display: block;
+    width: 100%;
+    /* The thumbnails keep a 16:10 face rather than a fixed pixel height. */
+    aspect-ratio: 16 / 10;
+    height: auto;
+    object-fit: cover;
+}
+
+.tile figcaption {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 7px 10px 9px;
+}
+
+.tile .name {
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tile .category {
+    font-size: 11px;
+    color: var(--text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tile.current {
+    transform: translateY(-3px);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+        0 8px 22px -8px rgba(0, 0, 0, 0.8);
+}
+
+.tile .badge {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    font-size: 15px;
+    color: #fff;
+}
+
+kbd + kbd {
+    margin-left: 2px;
+}

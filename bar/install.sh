@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Build and install the bar, and the launcher that now lives inside it.
+#
+# No root: the binaries go in ~/.local/bin with the frontend baked in.
+# Uninstalling leaves the shell's own bar and launcher in charge.
+#
+# Usage: ./install.sh              install (builds first)
+#        ./install.sh --uninstall  remove
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+bindir="${XDG_BIN_HOME:-$HOME/.local/bin}"
+target="$bindir/caelestia-bar"
+# The launcher is a window of the bar now; this is the client that asks for
+# it. Installed from here so the two can never be out of step.
+client="$bindir/caelestia-launcher"
+
+stop_running() {
+    local pid exe
+    # By executable rather than by name: `comm` is capped at fifteen
+    # characters, so "caelestia-launcher" never matches a `pkill -x`, and a
+    # standalone launcher left from before the merge would survive to fight
+    # the bar for the socket.
+    for pid in /proc/[0-9]*; do
+        pid=${pid#/proc/}
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+        case "$exe" in
+            "$target"|"$target (deleted)") kill "$pid" 2>/dev/null ;;
+            "$client"|"$client (deleted)") kill "$pid" 2>/dev/null ;;
+        esac
+    done
+    # The visualiser's recorder is a child, and killing its parent does not
+    # always take it with it — an orphan left holding the sink monitor is a
+    # process per install that nothing will ever clean up.
+    pkill -x pw-record 2>/dev/null || true
+    rm -f "${XDG_RUNTIME_DIR:-/tmp}/caelestia-launcher.sock"
+}
+
+if [[ ${1:-} == --uninstall ]]; then
+    stop_running
+    rm -f "$target" "$client"
+    echo "Removed $target and $client"
+    exit 0
+fi
+
+command -v cargo >/dev/null || { echo "cargo not found: install rust first" >&2; exit 1; }
+command -v npm >/dev/null || { echo "npm not found: install node first" >&2; exit 1; }
+
+echo ">> Building the frontend"
+(cd "$here" && npm install --silent && npm run build --silent)
+
+features=()
+if pkg-config --exists gtk-layer-shell-0; then
+    features=(--features layer-shell)
+    echo ">> Building with layer-shell support"
+else
+    echo ">> gtk-layer-shell not found — the bar will not reserve its strip"
+fi
+
+echo ">> Building the bar"
+cargo build --release --manifest-path "$here/src-tauri/Cargo.toml" "${features[@]}"
+
+stop_running
+sleep 0.5
+
+mkdir -p "$(dirname "$target")"
+install -m755 "$here/src-tauri/target/release/caelestia-bar" "$target.new"
+mv -f "$target.new" "$target"
+install -m755 "$here/src-tauri/target/release/caelestia-launcher" "$client.new"
+mv -f "$client.new" "$client"
+
+setsid "$target" >/dev/null 2>&1 < /dev/null &
+
+echo
+echo "Installed $target"
+echo "Installed $client (asks the bar for the launcher)"
+echo "  undo: $here/install.sh --uninstall"

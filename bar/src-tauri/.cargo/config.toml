@@ -1,0 +1,5 @@
+# Rebuilds here are a development loop, not a distribution build: the launcher
+# is compiled again every time install.sh runs. lld links it in a fraction of
+# the time the default linker takes, and costs nothing at runtime.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

@@ -137,6 +137,11 @@ Singleton {
         target: "features"
 
         function toggleMenu(): void { root.menuOpen = !root.menuOpen; }
+        // Generic, for a front end that has the list from `status` and wants
+        // to flip one by id — the Tauri bar's battery popout does exactly
+        // that, and a named function per mode would need one added here every
+        // time a mode is.
+        function toggle(id: string): void { root.toggle(id); }
         function toggleLidStay(): void { root.setLidStay(!props.lidStay); }
         function toggleMaxPerf(): void { MaxPerf.setEnabled(!MaxPerf.enabled); }
         function toggleAntiHeat(): void { AntiHeat.setEnabled(!AntiHeat.enabled); }

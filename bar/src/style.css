@@ -1,0 +1,1543 @@
+/* The bar.
+ *
+ * Same layout as the shell's own — logo, workspaces, what is focused, a gap,
+ * the readouts, the clock — drawn the way the launcher is drawn: near-black
+ * glass, one quiet rim, nothing coloured unless it is saying something.
+ *
+ * The compositor blurs whatever is behind a layer surface, so there is no
+ * backdrop-filter here. What is drawn is the pane and what is on it.
+ */
+
+:root {
+    /* The pill's own height and the gap above it, matching PILL and FLOAT in
+     * lib.rs — not the surface's height, which is far taller so that popouts
+     * have somewhere to go. The webview's viewport can lag the surface by a
+     * frame after it is resized, so the bar is sized from these constants
+     * rather than from a percentage of a viewport that may still be stale. */
+    --height: 38px;
+    --float: 12px;
+
+    /* The mark that caps the left end, and how far the pill's own left edge
+     * sits inside it. Measured from the mark rather than guessed: its spine
+     * is columns 10-18, solid top to bottom, so the pill's own edge goes at
+     * 14 where the C covers it completely. What is actually seen as the end
+     * of the bar is the mask below — the pill is cut to the C's own contour,
+     * so it flows out of the mouth instead of stopping at a straight line. */
+    --mark: 62px;
+    /* Wider than tall once cropped to its ink. */
+    --mark-w: 81px;
+    --mark-bite: 14px;
+
+    --lit: rgba(255, 255, 255, 0.1);
+    --lit-soft: rgba(255, 255, 255, 0.045);
+    --unlit: rgba(255, 255, 255, 0.015);
+
+    /* Denser than they would be over a compositor blur, because there is no
+     * blur behind this surface — see the layer rule. At this alpha the pill
+     * still takes the colour of what is behind it without turning to soup
+     * over a busy wallpaper. */
+    --body: rgba(13, 13, 15, 0.88);
+    --body-top: rgba(26, 26, 30, 0.85);
+
+    --text: rgba(255, 255, 255, 0.92);
+    --text-dim: rgba(255, 255, 255, 0.56);
+    --text-faint: rgba(255, 255, 255, 0.34);
+
+    /* One filled state for everything that can be on: the focused workspace,
+     * a pressed button, a live readout. */
+    --on: rgba(255, 255, 255, 0.09);
+    --on-edge: rgba(255, 255, 255, 0.08);
+
+    /* The one colour on the bar, and it is the mark's own. Used for exactly
+     * two things — the logo under the pointer and the focused workspace — so
+     * that when it appears it means something. */
+    --accent: #ff5449;
+
+    --warn: #f5a25d;
+    --alert: #ff8a80;
+
+    --radius: 11px;
+    --pill-radius: 8px;
+    --gap: 6px;
+
+    --font: "Rubik", "Noto Sans", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "Noto Sans Mono", ui-monospace, monospace;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+    width: 100%;
+    height: 100%;
+    /* The surface is taller than the bar — see `place` in lib.rs — so the
+     * strip is pinned to the top of it rather than centred in it. */
+    display: flex;
+    align-items: flex-start;
+    background: transparent;
+    overflow: hidden;
+    font-family: var(--font);
+    color: var(--text);
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+}
+
+/* ---- the pane ----------------------------------------------------------- */
+
+/* The bar floats: a pill with air around it, not a strip welded to the top of
+ * the screen. Its left end stops inside the mark — the margin clears the part
+ * of the C that sticks out past the pill, and the padding clears the part
+ * that overlaps it. */
+.bar {
+    position: relative;
+    /* Arrives rather than appears. The surface is mapped with a compositor
+     * animation of its own, and this is the content settling into it. */
+    animation: arrive 320ms cubic-bezier(0.2, 0, 0, 1) both;
+    display: flex;
+    align-items: center;
+    gap: var(--gap);
+    height: var(--height);
+    /* Fills the width it is given. `#app` is a flex row, so without this the
+     * pill shrinks to fit its contents and leaves the right-hand end of the
+     * screen bare. */
+    flex: 1;
+    /* Flush to the left edge of the screen: the mark sits in that margin, so
+     * giving the pill the usual float there would indent the whole assembly.
+     */
+    margin: var(--float) var(--float) 0 var(--mark-bite);
+    /* The right end is a full pill radius, so its contents need that much
+     * clearance or the last control sits against the curve. */
+    padding: 0 22px 0 calc(var(--mark-w) - var(--mark-bite) + 8px);
+
+
+
+    /* The mark hangs off the left end, so nothing here may clip. */
+    overflow: visible;
+
+}
+
+@keyframes arrive {
+    from {
+        opacity: 0;
+        transform: translateY(-100%);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* The lit lip along the top edge and the seam along the bottom: the two
+ * things that make a strip read as a surface rather than a band of colour. */
+/* The pill's own surface: everything the bar looks like, on a layer that can
+ * be masked without taking the rest of the bar with it. */
+.bar-face {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: 0 999px 999px 0;
+    background: linear-gradient(180deg, var(--body-top) 0%, var(--body) 100%);
+    /* Kept well under the compositor's alpha threshold for blurring (0.72 in
+     * the layer rule): a heavier shadow crossed it and the halo around the
+     * pill came back blurred, which read as a smudge on the screen. */
+    box-shadow:
+        0 6px 18px -8px rgba(0, 0, 0, 0.45),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+    pointer-events: none;
+
+    /* The C is cut out of the pill.
+     *
+     * Placing the pill's edge near the mark is not enough on its own: a
+     * straight edge anywhere in the mouth is visible as a straight edge, and
+     * hiding it behind the spine leaves the pill showing through the opening.
+     * Masking the mark out of the pill makes the boundary the C's own
+     * contour, so the bar reads as flowing out from between its arms.
+     *
+     * Two layers composited with `exclude`: everything, minus the mark. The
+     * mask is the C's body alone — the dots belong on top of the pill, and
+     * punching them out of it leaves holes. The shape lives in the alpha
+     * channel, because that is what a CSS image mask reads.
+     */
+    -webkit-mask-image: url("./assets/mark-mask.png"), linear-gradient(#000 0 0);
+    -webkit-mask-position: calc(-1 * var(--mark-bite) + var(--logo-x, 0px))
+            calc(50% + var(--logo-y, 0px)),
+        0 0;
+    -webkit-mask-size: calc(var(--mark-w) * var(--logo-scale, 1)) calc(var(--mark) * var(--logo-scale, 1)),
+        100% 100%;
+    -webkit-mask-repeat: no-repeat, no-repeat;
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+}
+
+/* A logo the user supplied is not this shape, so nothing is cut out of the
+ * pill and it simply ends with a rounded cap. */
+body.custom-logo .bar-face,
+body.custom-logo .visualiser {
+    -webkit-mask-image: none;
+    mask-image: none;
+}
+
+body.custom-logo .bar-face,
+body.custom-logo .visualiser {
+    border-radius: 999px;
+}
+
+/* The spectrum is part of that surface, so it is cut the same way. */
+.visualiser {
+    -webkit-mask-image: url("./assets/mark-mask.png"), linear-gradient(#000 0 0);
+    -webkit-mask-position: calc(-1 * var(--mark-bite)) center, 0 0;
+    -webkit-mask-size: calc(var(--mark-w) * var(--logo-scale, 1)) calc(var(--mark) * var(--logo-scale, 1)),
+        100% 100%;
+    -webkit-mask-repeat: no-repeat, no-repeat;
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+}
+
+/* One lit edge along the top of the pill, following its curve. */
+.bar-face::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    /* A hairline all the way round, brightest where the light falls. Faint
+     * enough to be an edge rather than an outline, but not so faint that a
+     * pill on a dark desktop loses its shape — which is what happened when
+     * this was tuned for a full-width strip against the screen edge. */
+    background: linear-gradient(
+        160deg,
+        rgba(255, 255, 255, 0.22) 0%,
+        rgba(255, 255, 255, 0.1) 38%,
+        rgba(255, 255, 255, 0.05) 100%
+    );
+    -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+}
+
+.spacer {
+    flex: 1;
+    min-width: 0;
+}
+
+/* ---- the common shape --------------------------------------------------- */
+
+/* Everything on the bar is one of these: a pill with an optional glyph and an
+ * optional number. Buttons, readouts and the clock differ in what they say,
+ * not in how they sit. */
+.pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: none;
+    height: 26px;
+    padding: 0 9px;
+    border-radius: var(--pill-radius);
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    transition: background 130ms ease, color 130ms ease;
+}
+
+.pill.hovered,
+.pill.button.hovered {
+    background: rgba(255, 255, 255, 0.055);
+    color: var(--text);
+}
+
+.pill.button:active {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.pill .glyph {
+    font-size: 17px;
+    line-height: 1;
+    flex: none;
+}
+
+.pill .value {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: -0.2px;
+    font-variant-numeric: tabular-nums;
+    /* Same reason as the dials: a percentage that reaches three digits must
+     * not move the things beside it. */
+    min-width: 34px;
+    text-align: right;
+}
+
+.pill.warn {
+    color: var(--warn);
+}
+
+.pill.alert {
+    color: var(--alert);
+}
+
+/* An icon on its own needs no room for a number beside it. */
+.pill.icon-only {
+    position: relative;
+    padding: 0 7px;
+}
+
+/* Something is switched on: a mode armed, the microphone muted, a guard
+ * asking. Said with the accent rather than with a filled box, because a
+ * filled box is what hovering looks like — a wrench that is lit because a
+ * mode is on read as a wrench the pointer was sitting on. */
+.pill.lit {
+    color: var(--accent);
+}
+
+/* Nothing is answering, so the control is drawn as unavailable rather than
+ * hidden: a slot that disappears is a slot you stop checking. */
+.pill.dim {
+    color: var(--text-faint);
+}
+
+.pill.danger {
+    color: var(--alert);
+}
+
+.pill.danger.hovered {
+    background: rgba(255, 138, 128, 0.14);
+    color: var(--alert);
+}
+
+.pill.layout {
+    padding: 0 8px;
+    text-transform: uppercase;
+}
+
+/* The count on the shield and the wrench. */
+.badge {
+    position: absolute;
+    top: -1px;
+    right: -1px;
+    display: grid;
+    place-items: center;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--text);
+    color: #101013;
+    font-size: 9.5px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.badge-enter-active,
+.badge-leave-active {
+    transition: transform 200ms cubic-bezier(0.2, 0, 0, 1), opacity 140ms ease;
+}
+
+.badge-enter-from,
+.badge-leave-to {
+    transform: scale(0);
+    opacity: 0;
+}
+
+/* Only while something is actually waiting, so it is never a standing idle
+ * animation. */
+.pill.pulsing .glyph {
+    animation: pulse 1.8s ease-in-out infinite;
+}
+
+.pill.pulsing:hover .glyph {
+    animation: none;
+}
+
+@keyframes pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.45;
+    }
+}
+
+/* ---- lock keys ---------------------------------------------------------- */
+
+/* They take no width at all until one is on, so the row does not carry a gap
+ * for something that is off. */
+.locks {
+    display: flex;
+    align-items: center;
+    flex: none;
+    color: var(--text-dim);
+}
+
+.locks .glyph {
+    font-size: 16px;
+    padding: 0 3px;
+}
+
+.lock-enter-active,
+.lock-leave-active {
+    transition: opacity 160ms ease, transform 200ms cubic-bezier(0.2, 0, 0, 1), width 200ms cubic-bezier(0.2, 0, 0, 1);
+    overflow: hidden;
+}
+
+.lock-enter-from,
+.lock-leave-to {
+    opacity: 0;
+    transform: scale(0.5);
+    width: 0;
+}
+
+/* ---- logo --------------------------------------------------------------- */
+
+.logo {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 32px;
+    height: 26px;
+    border-radius: var(--pill-radius);
+    /* The mark wears the accent, which is the one place on the bar a colour
+     * is used for identity rather than for state. */
+    color: var(--accent);
+    cursor: pointer;
+    transition: background 130ms ease, color 130ms ease;
+}
+
+.logo .mark {
+    display: grid;
+    place-items: center;
+}
+
+.logo .image {
+    width: calc(19px * var(--logo-scale, 1));
+    height: calc(19px * var(--logo-scale, 1));
+    object-fit: contain;
+}
+
+.logo svg {
+    width: calc(19px * var(--logo-scale, 1));
+    height: calc(19px * var(--logo-scale, 1));
+    /* Clipped to its viewBox. These marks carry paths that reach well outside
+     * it — the CachyOS one spans roughly -57 to 43 in a 0-64 box — and left
+     * unclipped the browser happily draws all of it, so the logo rendered as
+     * a slab hanging below the bar rather than as a mark inside its own box. */
+    overflow: hidden;
+    /* The file is a full-colour mark; on a monochrome bar it wears the bar's
+     * colour and earns its own only under the pointer. */
+    transition: transform 320ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Every element, not just the shapes: these marks are built from gradients,
+ * shading layers and part-transparent highlights, and anything left at its own
+ * colour or opacity reads as grime on a one-colour silhouette. */
+.logo svg * {
+    fill: currentColor !important;
+    stroke: none !important;
+    opacity: 1 !important;
+    transition: fill 130ms ease;
+}
+
+/* The sparkles are a separate weight in the original and have to stay one
+ * here, or flattening every path to a single colour welds them to the
+ * crescent and the mark turns into a blob at 19px. They are the only paths
+ * the file gives a grey inline fill, which is what picks them out. */
+.logo svg [style*="7b7c7d"] {
+    opacity: 0.55 !important;
+}
+
+
+
+/* No hover animation on the mark. It is the end of the bar, not a button
+ * pretending to be one — a 62px logo spinning when the pointer crosses the
+ * corner of the screen is the sort of thing that is charming once. */
+
+/* ---- workspaces --------------------------------------------------------- */
+
+/* One track with a travelling marker under the numbers, rather than a filled
+ * box that jumps from one to the next. Same idea as the launcher's selection:
+ * the thing that moves should look like one thing moving. */
+.workspaces {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+    height: 26px;
+    padding: 0 3px;
+    border-radius: var(--pill-radius);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.workspaces .marker {
+    position: absolute;
+    top: 3px;
+    left: 0;
+    height: 20px;
+    border-radius: 6px;
+    /* Filled, not outlined: the focused workspace is the one thing in the row
+     * that has to be findable without reading it. */
+    background: var(--accent);
+    transition:
+        transform 220ms cubic-bezier(0.2, 0, 0, 1),
+        width 220ms cubic-bezier(0.2, 0, 0, 1),
+        opacity 130ms ease;
+    pointer-events: none;
+}
+
+/* The run of workspaces that have something on them. */
+.workspaces .occupied-bg {
+    position: absolute;
+    top: 3px;
+    height: 20px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    transition:
+        left 220ms cubic-bezier(0.2, 0, 0, 1),
+        width 220ms cubic-bezier(0.2, 0, 0, 1);
+    pointer-events: none;
+}
+
+.workspaces .ws {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    min-width: 22px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-faint);
+    transition: color 130ms ease;
+}
+
+/* An occupied workspace is worth reading; an empty one is only worth
+ * knowing is there. */
+.workspaces .ws.occupied {
+    color: var(--text-dim);
+}
+
+.workspaces .ws.focused {
+    color: #1a0d0c;
+    font-weight: 600;
+}
+
+/* How many windows are on it, when the config asks for that. */
+.workspaces .ws .count {
+    position: absolute;
+    right: 1px;
+    bottom: 0;
+    font-size: 8px;
+    line-height: 1;
+    opacity: 0.65;
+}
+
+.workspaces .ws:hover:not(.focused) {
+    color: var(--text-dim);
+}
+
+/* ---- active window ------------------------------------------------------ */
+
+.active {
+    display: flex;
+    border-radius: var(--pill-radius);
+    transition: background 130ms ease;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    flex: 0 1 auto;
+    padding: 0 4px;
+    font-size: 12px;
+}
+
+.active.hovered {
+    background: rgba(255, 255, 255, 0.045);
+}
+
+.active .class {
+    flex: none;
+    color: var(--text);
+}
+
+.active .title {
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-faint);
+    font-size: 11.5px;
+}
+
+/* ---- clock -------------------------------------------------------------- */
+
+.clock {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex: none;
+    padding: 0 6px;
+    font-size: 12.5px;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.clock .date {
+    font-size: 11.5px;
+    color: var(--text-faint);
+}
+
+/* ---- material symbols --------------------------------------------------- */
+
+.material-symbols-rounded {
+    font-family: "Material Symbols Rounded";
+    font-weight: 400;
+    font-style: normal;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    white-space: nowrap;
+    direction: ltr;
+    -webkit-font-feature-settings: "liga";
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ---- popouts ------------------------------------------------------------ */
+
+/* The surface is taller than the bar precisely so these have somewhere to go.
+ * The input region is widened to match while one is open and handed straight
+ * back when it closes — see `reach` in lib.rs. */
+.popout {
+    position: fixed;
+    /* Measured from where the bar actually ends — the float plus the pill —
+     * not from the pill's height alone, which had the panel starting four
+     * pixels above the bar's own bottom edge. */
+    top: calc(var(--float) + var(--height) + 2px);
+    left: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    /* Fixed, not measured: a panel whose width follows its content moves
+     * sideways under the pointer every time anything in it changes. */
+    width: 340px;
+    /* Never taller than the surface it is drawn in: anything past that edge
+     * is not clipped, it simply does not exist — there is no window there. */
+    max-height: calc(100vh - var(--height) - 20px);
+    overflow-y: auto;
+    scrollbar-width: none;
+    padding: 15px 17px;
+    border-radius: var(--radius);
+    background: linear-gradient(160deg, var(--body-top) 0%, var(--body) 60%);
+    box-shadow:
+        0 18px 40px -12px rgba(0, 0, 0, 0.75),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.055),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.07);
+    transform-origin: top center;
+}
+
+.popout::-webkit-scrollbar {
+    display: none;
+}
+
+.popout .headline {
+    font-size: 14px;
+    color: var(--text);
+}
+
+.popout .detail {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-faint);
+}
+
+.popout .detail.wrap {
+    white-space: normal;
+    line-height: 1.35;
+}
+
+/* One shape for every quantity a popout shows: signal, charge, load, memory. */
+.popout .meter {
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+    overflow: hidden;
+}
+
+.popout .meter .fill {
+    height: 100%;
+    border-radius: inherit;
+    background: rgba(255, 255, 255, 0.45);
+    transition: width 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.popout .meter .fill.charging {
+    background: #9fd6a0;
+}
+
+/* The one control on the bar, so it is built rather than borrowed: the
+ * platform slider brings its own colours and its own idea of a track. */
+.popout .slider {
+    width: 100%;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+    appearance: none;
+    -webkit-appearance: none;
+    outline: none;
+    cursor: pointer;
+}
+
+.popout .slider::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--text);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    transition: transform 120ms ease;
+}
+
+.popout .slider:active::-webkit-slider-thumb {
+    transform: scale(1.15);
+}
+
+/* Opens downward out of the bar and closes back into it. The translate is on
+ * top of the positioning transform, so it is applied as a second function
+ * rather than replacing it. */
+.popout-enter-active {
+    transition:
+        opacity 140ms ease-out,
+        translate 200ms cubic-bezier(0.2, 0, 0, 1),
+        scale 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.popout-leave-active {
+    transition:
+        opacity 110ms ease-in,
+        translate 150ms cubic-bezier(0.4, 0, 1, 1),
+        scale 150ms cubic-bezier(0.4, 0, 1, 1);
+}
+
+.popout-enter-from,
+.popout-leave-to {
+    opacity: 0;
+    translate: 0 -8px;
+    scale: 0.97;
+}
+
+/* ---- value swaps -------------------------------------------------------- */
+
+/* A glyph or a number that has changed fades through rather than being
+ * replaced between frames. Short enough not to lag the thing it is reporting. */
+.swap-enter-active,
+.swap-leave-active {
+    transition: opacity 130ms ease, transform 130ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.swap-enter-from {
+    opacity: 0;
+    transform: translateY(-3px);
+}
+
+.swap-leave-to {
+    opacity: 0;
+    transform: translateY(3px);
+}
+
+/* ---- popout controls ---------------------------------------------------- */
+
+.popout .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+/* One switch shape, for the wifi radio and the bluetooth adapter. */
+.popout .toggle {
+    flex: none;
+    height: 22px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 130ms ease, color 130ms ease;
+}
+
+.popout .toggle:hover {
+    background: rgba(255, 255, 255, 0.11);
+    color: var(--text);
+}
+
+.popout .toggle.on {
+    background: rgba(255, 255, 255, 0.16);
+    color: var(--text);
+}
+
+.popout .toggle:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* Networks and paired devices. Capped rather than endless: a scan in a block
+ * of flats is forty entries and the panel has to stay a panel. */
+.popout .list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    /* The surface is 620px tall, so a scan of thirty networks fits without
+       anybody scrolling for the one they are on. */
+    max-height: 420px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    margin: 0 -6px;
+}
+
+.popout .list::-webkit-scrollbar {
+    display: none;
+}
+
+.popout .entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 30px;
+    padding: 0 8px;
+    border-radius: 7px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.popout .entry:hover {
+    background: rgba(255, 255, 255, 0.055);
+    color: var(--text);
+}
+
+.popout .entry.current {
+    background: var(--on);
+    box-shadow: inset 0 0 0 1px var(--on-edge);
+    color: var(--text);
+}
+
+.popout .entry .glyph {
+    font-size: 15px;
+    flex: none;
+}
+
+.popout .entry .label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.popout .entry .trailing {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+/* A network appearing or dropping out of range mid-scan slides rather than
+ * making the list jump under the pointer. */
+.entry-move,
+.entry-enter-active,
+.entry-leave-active {
+    transition: opacity 140ms ease, transform 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.entry-leave-active {
+    position: absolute;
+}
+
+.entry-enter-from,
+.entry-leave-to {
+    opacity: 0;
+    transform: translateY(-4px);
+}
+
+/* The password prompt, asked for in place. */
+.popout .ask {
+    display: flex;
+    gap: 6px;
+}
+
+.popout .field {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 999px;
+    outline: none;
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+}
+
+.popout .field::placeholder {
+    color: var(--text-faint);
+}
+
+.popout .detail.alert {
+    color: var(--alert);
+}
+
+/* The power profiles, as one control rather than three buttons. */
+.popout .segment {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin: 0 -6px;
+}
+
+.popout .option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 28px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.popout .option:hover {
+    background: rgba(255, 255, 255, 0.055);
+    color: var(--text);
+}
+
+.popout .option.on {
+    background: var(--on);
+    box-shadow: inset 0 0 0 1px var(--on-edge);
+    color: var(--text);
+}
+
+.popout .option .glyph {
+    font-size: 16px;
+    flex: none;
+}
+
+/* ---- media -------------------------------------------------------------- */
+
+.media {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 260px;
+    height: 26px;
+    padding: 0 9px;
+    border-radius: var(--pill-radius);
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 130ms ease, color 130ms ease;
+}
+
+.media.hovered {
+    background: rgba(255, 255, 255, 0.055);
+    color: var(--text);
+}
+
+.media .glyph {
+    font-size: 16px;
+    flex: none;
+}
+
+.media .label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---- visualiser --------------------------------------------------------- */
+
+/* Everything about how it looks is drawn in the canvas; all the stylesheet
+ * owns is where it sits. */
+.visualiser {
+    position: absolute;
+    inset: 0 0 auto 0;
+    display: block;
+    width: 100%;
+    /* The pill's own shape, stated rather than inherited: the radius lives on
+     * `.bar-face` now, and `inherit` here picked up the bar's — which has
+     * none — so the bands ran out past both ends. */
+    border-radius: 0 999px 999px 0;
+    pointer-events: none;
+    /* Under the bar's own content, over its background. */
+    z-index: 0;
+}
+
+/* Everything the bar draws sits above the spectrum — except a popout, which
+ * is `position: fixed`, and the pill's own surface, which is `position:
+ * absolute`. Both must stay that way, and this selector is specific enough to
+ * have overridden them: the tray menu came back into the flex row as an item
+ * several hundred pixels wide, and the pill's surface stopped being a layer
+ * at all, taking its border with it. */
+.bar > *:not(.visualiser):not(.popout):not(.bar-face) {
+    position: relative;
+    z-index: 1;
+}
+
+/* ---- tray --------------------------------------------------------------- */
+
+.tray {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex: none;
+}
+
+.tray-item .icon {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+    display: block;
+}
+
+/* An item asking for attention says so the same way the shield does. */
+.tray-item.attention .icon,
+.tray-item.attention .glyph {
+    animation: pulse 1.8s ease-in-out infinite;
+}
+
+.tray-item.open {
+    background: var(--on);
+    box-shadow: inset 0 0 0 1px var(--on-edge);
+}
+
+.tray-enter-active,
+.tray-leave-active {
+    transition: opacity 160ms ease, transform 220ms cubic-bezier(0.2, 0, 0, 1), width 220ms cubic-bezier(0.2, 0, 0, 1);
+    overflow: hidden;
+}
+
+.tray-enter-from,
+.tray-leave-to {
+    opacity: 0;
+    transform: scale(0.6);
+    width: 0;
+}
+
+/* ---- tray menus --------------------------------------------------------- */
+
+.popout.menu {
+    min-width: 200px;
+    max-width: 340px;
+    gap: 1px;
+    padding: 6px;
+}
+
+.popout.menu .entry.disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.popout.menu .entry.disabled:hover {
+    background: transparent;
+    color: var(--text-dim);
+}
+
+.popout.menu .entry.child {
+    padding-left: 22px;
+    font-size: 11.5px;
+}
+
+.popout.menu .divider {
+    height: 1px;
+    margin: 4px 2px;
+    background: rgba(255, 255, 255, 0.07);
+}
+
+/* ---- transport ---------------------------------------------------------- */
+
+.popout .transport {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.popout .control {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.popout .control:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.13);
+    color: var(--text);
+}
+
+.popout .control:active:not(:disabled) {
+    transform: scale(0.94);
+}
+
+.popout .control:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.popout .control.primary {
+    width: 34px;
+    height: 34px;
+    background: rgba(255, 255, 255, 0.16);
+    color: var(--text);
+}
+
+.popout .control .glyph {
+    font-size: 18px;
+}
+
+/* ---- sections ----------------------------------------------------------- */
+
+/* Related readouts share a trough. Three dials in one, the tray in another,
+ * the date in a third: the grouping is what turns a row of glyphs into a
+ * handful of things, each of which can be looked at on its own. */
+.section {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+    height: 26px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
+}
+
+.section.guards {
+    gap: 0;
+}
+
+/* Inside a section the pills lose their own trough: two nested rounded fills
+ * is one too many. They also take the section's shape — a squarish highlight
+ * inside a fully rounded trough leaves a sliver of background showing at each
+ * corner, which is what made the fill look like it had missed. */
+.section .pill,
+.section .stat,
+.section .tray-item {
+    height: 22px;
+    background: transparent;
+    box-shadow: none;
+    border-radius: 999px;
+}
+
+.section .pill.hovered,
+.section .stat.hovered,
+.section .tray-item.hovered {
+    background: rgba(255, 255, 255, 0.07);
+}
+
+/* Anything switched on inside a section fills the same shape as the hover,
+ * rather than a smaller rounded rectangle floating in the middle of it. */
+/* An open tray menu is a different thing from a mode being on: that one is
+ * the pointer's doing, so it keeps the filled shape. */
+.section .tray-item.open {
+    background: var(--on);
+    box-shadow: inset 0 0 0 1px var(--on-edge);
+    border-radius: 999px;
+}
+
+/* ---- usage rings -------------------------------------------------------- */
+
+.stat {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 999px;
+    transition: background 130ms ease;
+}
+
+.stat.hovered {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.ring {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.ring svg {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    /* Twelve o'clock, clockwise: the only direction anybody reads a dial. */
+    transform: rotate(-90deg);
+}
+
+.ring .track,
+.ring .fill {
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
+.ring .track {
+    stroke: rgba(255, 255, 255, 0.1);
+}
+
+.ring .fill {
+    stroke: var(--accent);
+    transition: stroke-dasharray 420ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ring .name {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    color: var(--text);
+}
+
+/* Wide enough for "100%" and never narrower: a reading that grows a digit
+ * used to push everything to its right along the bar. */
+.ring .value {
+    min-width: 34px;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-faint);
+}
+
+/* ---- the date section --------------------------------------------------- */
+
+.section.clock {
+    gap: 8px;
+    padding: 0 11px;
+    font-size: 12.5px;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.section.clock .glyph.accent {
+    font-size: 16px;
+    color: var(--accent);
+}
+
+.section.clock .date {
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
+/* The hairline between the date and the time, which is what makes them read
+ * as one thing said twice rather than two readouts crowding each other. */
+.section.clock .divider {
+    width: 1px;
+    height: 12px;
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.section.clock .time {
+    font-weight: 500;
+}
+
+/* ---- power profile dials ------------------------------------------------ */
+
+/* One choice, so one row of circles rather than a list of rows: the shape
+ * says "pick one of these", which a stack of buttons does not. */
+.popout .dials {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.045);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.popout .dial {
+    display: grid;
+    place-items: center;
+    flex: 1;
+    height: 34px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.popout .dial:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text);
+}
+
+.popout .dial:active {
+    transform: scale(0.94);
+}
+
+/* The chosen one is the only filled thing in the panel, which is what makes
+ * it readable at a glance. */
+.popout .dial.on {
+    background: var(--accent);
+    color: #1a0d0c;
+}
+
+.popout .dial .glyph {
+    font-size: 19px;
+}
+
+/* ---- mode switches ------------------------------------------------------ */
+
+.popout .switches {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0 -8px -2px;
+}
+
+.popout .switch-row {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    height: 38px;
+    padding: 0 10px;
+    border-radius: 10px;
+    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+    transition: background 120ms ease;
+}
+
+.popout .switch-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.popout .switch-row .glyph {
+    font-size: 18px;
+    flex: none;
+    color: var(--text-dim);
+}
+
+.popout .switch-row .label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A real switch, because a mode that changes how the machine behaves should
+ * look like something you flip rather than something you read. */
+.popout .switch {
+    position: relative;
+    flex: none;
+    width: 42px;
+    height: 24px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+    transition: background 180ms ease;
+}
+
+.popout .switch.on {
+    background: var(--accent);
+}
+
+.popout .switch .knob {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.55);
+    color: #15151a;
+    transition: transform 200ms cubic-bezier(0.2, 0, 0, 1), background 180ms ease;
+}
+
+.popout .switch.on .knob {
+    transform: translateX(18px);
+    background: #fff;
+}
+
+.popout .switch .knob .material-symbols-rounded {
+    font-size: 13px;
+}
+
+/* ---- popout furniture --------------------------------------------------- */
+
+/* A quiet count or section label, between a headline and a detail. */
+.popout .caption {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-top: 2px;
+}
+
+/* A full-width action, for the one thing a panel does rather than shows. */
+.popout .wide {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 30px;
+    border: 0;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 130ms ease, color 130ms ease;
+}
+
+.popout .wide:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--text);
+}
+
+.popout .wide:disabled {
+    cursor: default;
+    opacity: 0.7;
+}
+
+.popout .wide .glyph {
+    font-size: 16px;
+}
+
+.popout .wide .glyph.spinning {
+    animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* A destructive action inside a row: present, but never the thing the eye
+ * lands on first. */
+.popout .ghost {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-faint);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.popout .ghost:hover {
+    background: rgba(255, 138, 128, 0.18);
+    color: var(--alert);
+}
+
+.popout .ghost .glyph {
+    font-size: 14px;
+}
+
+/* The mode description keeps its space whether or not anything is hovered,
+ * so moving between switches does not resize the panel. */
+.popout .description {
+    min-height: 34px;
+    padding: 0 10px 2px;
+}
+
+/* ---- special workspaces ------------------------------------------------- */
+
+.section.specials {
+    gap: 0;
+    padding: 0 3px;
+}
+
+/* ---- warnings ----------------------------------------------------------- */
+
+/* The one thing in a popout that is allowed to be loud, because it is the one
+ * thing the machine is telling you rather than showing you. */
+.popout .warning {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 11px;
+    border-radius: 10px;
+    background: rgba(255, 138, 128, 0.15);
+    box-shadow: inset 0 0 0 1px rgba(255, 138, 128, 0.25);
+    color: var(--alert);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.popout .warning .glyph {
+    font-size: 17px;
+    flex: none;
+}
+
+/* ---- the logo as an endcap ---------------------------------------------- */
+
+/* The mark caps the left end at well over the bar's own height, centred on
+ * the strip so it overhangs both edges, and the row that follows tucks into
+ * the opening of the C rather than starting clear of it. That overlap is the
+ * whole idea: the logo is the end of the bar, not an icon sitting at one end
+ * of it.
+ */
+.logo.endcap {
+    position: absolute;
+    /* Placed against the screen, because it is a sibling of the bar rather
+     * than a child of it: flush to the left edge, and centred on the pill. */
+    left: 0;
+    top: calc(var(--float) + (var(--height) - var(--mark)) / 2);
+    width: calc(var(--mark-w) * var(--logo-scale, 1));
+    height: calc(var(--mark) * var(--logo-scale, 1));
+
+    /* Over the pill's background, so the C reads as the end of the bar
+     * rather than as something lying on top of it. */
+    z-index: 2;
+    background: none !important;
+    overflow: visible;
+}
+
+.logo.endcap svg,
+.logo.endcap .image {
+    /* Height drives it; the width follows the mark's own proportions. */
+    width: auto;
+    height: calc(var(--mark) * var(--logo-scale, 1));
+}
+
+/* Nothing about an endcap should light up a box behind it. */
+.logo.endcap:hover {
+    background: none;
+}

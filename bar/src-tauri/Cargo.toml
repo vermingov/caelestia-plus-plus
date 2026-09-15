@@ -1,0 +1,51 @@
+[package]
+name = "caelestia-bar"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "The Caelestia++ bar"
+
+[lib]
+name = "caelestia_bar_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# protocol-asset: tray icons are files anywhere on disk, and a webview can
+# only load them through Tauri's own scheme.
+tauri = { version = "2", features = ["protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# For `mallopt`: capping the allocator's arena count is worth tens of
+# megabytes here, and it has to be done in-process to survive any launcher.
+libc = "0.2"
+# A bar has to be a layer surface: it must reserve its own strip of the
+# screen, sit above tiled windows and never be alt-tabbed to. Without the
+# C library it falls back to an always-on-top window, which draws but does
+# not reserve.
+# The tray is a DBus protocol (StatusNotifierItem, and dbusmenu for the
+# menus), so it needs a DBus client. The blocking API, because the tray lives
+# on its own thread and an async runtime would earn nothing here.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+# Tray icons arrive as raw ARGB32 as often as they arrive as a theme name, and
+# a webview can only show one of those two.
+png = "0.17"
+# Reaching the webview's own settings. The version tracks what Tauri links,
+# so the WebView handed over by `with_webview` is the same type.
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+gtk = { version = "0.18", optional = true }
+gtk-layer-shell = { version = "0.8", features = ["v0_6"], optional = true }
+
+[features]
+default = []
+layer-shell = ["dep:gtk", "dep:gtk-layer-shell"]
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 4
+incremental = true
+panic = "abort"
+strip = true

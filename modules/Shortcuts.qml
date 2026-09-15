@@ -64,11 +64,28 @@ Scope {
         // qmllint enable unresolved-type
         name: "launcher"
         description: "Toggle launcher"
+        // The launcher is its own process now (launcher/, a Tauri app on an
+        // overlay layer surface). The shortcut still lives here because this
+        // is where the tap-versus-hold logic is: SUPER on its own opens it,
+        // SUPER as a modifier does not.
+        //
+        // The QML launcher is still in the tree and still works; it takes
+        // over whenever the binary is not installed.
         onPressed: root.launcherInterrupted = false
         onReleased: {
             if (!root.launcherInterrupted && !root.hasFullscreen) {
-                const screenState = ShellState.forActive();
-                screenState.launcher = !screenState.launcher;
+                // `ready` matters: the check for the binary is a process, and
+                // until it has answered `external` is false — which used to
+                // send the very first keypress of a session to the QML
+                // launcher. Nothing is lost by treating "not yet known" as
+                // external, because the socket send falls back to spawning
+                // the binary, which fails harmlessly if there is none.
+                if (Launcher.external || !Launcher.ready)
+                    Launcher.toggle();
+                else {
+                    const screenState = ShellState.forActive();
+                    screenState.launcher = !screenState.launcher;
+                }
             }
             root.launcherInterrupted = false;
         }

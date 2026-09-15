@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "caelestia-bar",
+  "version": "0.1.0",
+  "identifier": "gg.caelestia.bar",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "bar",
+        "title": "caelestia-bar",
+        "width": 1920,
+        "height": 620,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "visible": false,
+        "skipTaskbar": true,
+        "focus": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/.icons/**",
+          "$HOME/.local/share/icons/**",
+          "$HOME/.local/share/**",
+          "/usr/share/icons/**",
+          "/usr/share/pixmaps/**",
+          "/usr/local/share/icons/**",
+          "/usr/share/**",
+          "/usr/local/share/**",
+          "/opt/**",
+          "/var/lib/flatpak/exports/share/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": []
+  }
+}
