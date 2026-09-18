@@ -12,6 +12,7 @@
 //! to run.
 
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -217,7 +218,8 @@ pub fn watch(mut on_frame: impl FnMut(Vec<u8>, bool)) {
         // coming out of it". Without a target, pw-record takes the default
         // source instead, and the visualiser draws the microphone.
         let target = default_sink().unwrap_or_else(|| "0".to_string());
-        let Ok(mut recorder) = Command::new("pw-record")
+        let mut command = Command::new("pw-record");
+        command
             .args([
                 // Raw, or pw-record writes a container header first and every
                 // sample after it is read four bytes out of phase.
@@ -230,9 +232,24 @@ pub fn watch(mut on_frame: impl FnMut(Vec<u8>, bool)) {
                 "-",
             ])
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        else {
+            .stderr(Stdio::null());
+
+        // Dies with the bar, whatever the bar dies of. Nothing here runs when
+        // the bar is terminated, and a recorder left alone only finds out by
+        // writing to the closed pipe. One with nothing to write — no samples
+        // are reaching it — never finds out, and stays on the sink's monitor:
+        // one more for every restart. The signal follows the thread that
+        // started the child; this one runs for as long as the bar does.
+        //
+        // SAFETY: `prctl` is async-signal-safe and touches only the child.
+        unsafe {
+            command.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+
+        let Ok(mut recorder) = command.spawn() else {
             eprintln!("caelestia-bar: pw-record is not available, so no visualiser");
             return;
         };
