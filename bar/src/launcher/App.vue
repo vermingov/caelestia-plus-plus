@@ -33,15 +33,21 @@ const completion = computed(() => (isCalc.value ? "" : current.value?.completion
 // it may not do. The calculator is the exception — it shells out to qalc, so
 // it waits for a pause rather than spawning a process per character.
 let pending = null;
+// The query the list on screen answers, which is not always the one in the
+// field: the search for the last keystroke may still be on its way back.
+let answered = "";
 async function refresh() {
     const asked = query.value;
     const answer = await invoke("search", { query: asked });
     // A slower earlier request must not overwrite a newer one's results.
     if (asked !== query.value) return;
-    const sameMode = answer.mode === results.value.mode;
     results.value = answer;
+    answered = asked;
     document.documentElement.style.setProperty("--max-shown", answer.maxShown);
-    if (!sameMode || selected.value >= answer.entries.length) selected.value = 0;
+    // A new list is read from the top. The old position means nothing in it:
+    // every keystroke re-ranks, so row three is simply a different thing now,
+    // and the best match is the first one.
+    selected.value = 0;
 }
 
 watch(query, () => {
@@ -50,8 +56,10 @@ watch(query, () => {
     pending = setTimeout(refresh, calculating ? 90 : 0);
 });
 
+// Rows on their way out stay in the DOM until they have faded, ahead of the
+// ones replacing them, so counting them finds the wrong row for an index.
 function rowAt(index) {
-    return list.value?.querySelectorAll(".row, .tile")[index] ?? null;
+    return list.value?.querySelectorAll(":is(.row, .tile):not(.row-leave-active)")[index] ?? null;
 }
 
 // Placed against the current row's real box rather than a row count, so it is
@@ -74,17 +82,51 @@ function move(delta) {
 
 // Walking the list slides the highlight and scrolls smoothly; a new set of
 // results places the highlight without a journey across rows that are
-// themselves still moving.
-watch(selected, () => {
+// themselves still moving, and starts the list from its top again — it keeps
+// its scroll position otherwise, with the best match somewhere above it.
+watch([entries, selected], ([arrived], [shown]) => {
+    const replaced = arrived !== shown;
     nextTick(() => {
-        syncCursor(true);
-        rowAt(selected.value)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        syncCursor(!replaced);
+        if (replaced) list.value?.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        else rowAt(selected.value)?.scrollIntoView({ block: "nearest", inline: "nearest" });
     });
 });
 
-watch(entries, () => nextTick(() => syncCursor(false)));
+// A row comes to be under the pointer two ways: the pointer moved onto it, or
+// the list moved beneath a pointer that is standing still — every keystroke
+// reflows it, and the window itself opens under wherever the mouse was left.
+// WebKit reports the two identically. Selecting on both let a parked mouse
+// take the selection off the top match, and then scroll the list to follow
+// itself, which brought the next row under it and did it again. So a row
+// notes where the pointer was when it arrived, and hovering counts only once
+// that has changed.
+let pointerAt = null;
+
+function notePointer(event) {
+    pointerAt = { x: event.clientX, y: event.clientY };
+}
+
+function hover(event, index) {
+    const moved = pointerAt && (event.clientX !== pointerAt.x || event.clientY !== pointerAt.y);
+    notePointer(event);
+    if (moved) selected.value = index;
+}
+
+// A click names its own row: hovering no longer has to have selected it first.
+function pick(index) {
+    selected.value = index;
+    activate();
+}
 
 async function activate() {
+    // Enter can outrun the search it follows. Typed quickly, it arrives while
+    // the list is still the answer to an earlier keystroke, and the top of
+    // that list is not what was asked for.
+    if (answered !== query.value) {
+        clearTimeout(pending);
+        await refresh();
+    }
     if (!current.value) return;
     // A command can ask to lead somewhere rather than close — an
     // `autocomplete` action, or a calculation with nothing to copy yet.
@@ -214,8 +256,9 @@ onMounted(async () => {
     // frame is correct and nothing has to be waited for.
     await listen("launcher-closed", () => {
         query.value = "";
-        selected.value = 0;
         settleInstantly = true;
+        // Wherever the pointer is next time is where it was left, not a move.
+        pointerAt = null;
         refresh();
     });
 
@@ -225,7 +268,6 @@ onMounted(async () => {
     // for the picker, `>calc ` for the calculator.
     await listen("launcher-opened", event => {
         query.value = event.payload ?? "";
-        selected.value = 0;
         settleInstantly = true;
         refresh();
         focusField();
@@ -276,8 +318,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
                             :key="entry.id"
                             :entry="entry"
                             :current="index === selected"
-                            @mouseenter="selected = index"
-                            @click="activate"
+                            @mouseenter="notePointer"
+                            @mousemove="hover($event, index)"
+                            @click="pick(index)"
                         />
                     </TransitionGroup>
 
@@ -298,8 +341,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
                                 v-for="(entry, index) in entries"
                                 :key="entry.id || entry.name"
                                 :entry="entry"
-                                @mouseenter="selected = index"
-                                @click="activate"
+                                @mouseenter="notePointer"
+                                @mousemove="hover($event, index)"
+                                @click="pick(index)"
                             />
                         </TransitionGroup>
                     </div>
