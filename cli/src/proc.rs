@@ -4,8 +4,9 @@
 //! that it reaches `grim`, `fuzzel` or Hyprland in microseconds rather than
 //! after an interpreter start, not that it reimplements them.
 
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::io::{Read, Write};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Run a command and collect its standard output.
 pub fn capture(program: &str, args: &[&str]) -> Option<Vec<u8>> {
@@ -89,10 +90,53 @@ extern "C" {
 /// action the user picked when the call carried `--action`.
 pub fn notify(args: &[&str]) -> String {
     let mut full = vec!["-a", "caelestia++"];
+    let offers_actions = args.iter().any(|arg| arg.starts_with("--action"));
+    if offers_actions {
+        full.extend_from_slice(&["-t", ACTION_EXPIRY_MS]);
+    }
     full.extend_from_slice(args);
-    capture_text("notify-send", &full)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+
+    if !offers_actions {
+        return capture_text("notify-send", &full).map(|s| s.trim().to_string()).unwrap_or_default();
+    }
+
+    let Ok(child) = Command::new("notify-send").args(&full).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()
+    else {
+        return String::new();
+    };
+    wait_bounded(child, ACTION_WINDOW).unwrap_or_default().trim().to_string()
+}
+
+/// How long a notification that offers actions stays up, and how long its
+/// `notify-send` is waited for — a little longer, so a click at the last
+/// moment still lands.
+const ACTION_EXPIRY_MS: &str = "60000";
+const ACTION_WINDOW: Duration = Duration::from_secs(65);
+
+/// Waits for `child` until the deadline and hands back what it printed; past
+/// the deadline it is killed and reaped, and the answer is nothing.
+///
+/// `notify-send --action` only exits on a click or when the notification
+/// server says the notification closed, and a server that lets one expire
+/// without saying so leaves it waiting for good. This process is detached
+/// from the shell, so nothing else would ever collect either of them: every
+/// recording and every screenshot left a pair behind until the next reboot.
+fn wait_bounded(mut child: Child, window: Duration) -> Option<String> {
+    let deadline = Instant::now() + window;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut printed = String::new();
+    child.stdout.take()?.read_to_string(&mut printed).ok()?;
+    Some(printed)
 }
 
 pub fn close_notification(id: &str) {
@@ -168,5 +212,24 @@ mod tests {
         );
         assert_eq!(shell_join(&["it's".into()]), r#"'it'"'"'s'"#);
         assert_eq!(shell_join(&["".into()]), "''");
+    }
+
+    #[test]
+    fn a_child_that_outlives_the_window_is_killed_and_reaped() {
+        let child = Command::new("sleep").arg("30").stdout(Stdio::piped()).spawn().unwrap();
+        let pid = child.id();
+        let started = Instant::now();
+
+        assert_eq!(wait_bounded(child, Duration::from_millis(300)), None);
+
+        assert!(started.elapsed() >= Duration::from_millis(300), "waited out the window first");
+        assert!(started.elapsed() < Duration::from_secs(5), "then gave up promptly");
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists(), "no process left behind");
+    }
+
+    #[test]
+    fn a_child_that_answers_in_time_is_heard() {
+        let child = Command::new("echo").arg("watch").stdout(Stdio::piped()).spawn().unwrap();
+        assert_eq!(wait_bounded(child, Duration::from_secs(5)).as_deref().map(str::trim), Some("watch"));
     }
 }
