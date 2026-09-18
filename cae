@@ -19,6 +19,12 @@ SHELL_DIR=${CAELESTIA_SHELL_DIR:-$HOME/.config/quickshell/caelestia}
 PKG_CACHE=$HOME/.cache/caelestia/packages
 PACKAGES=(caelestia++-quickshell caelestia++-shell caelestia++-cli)
 
+# Our own installers' directory first. A PATH without it — common over SSH,
+# where only ~/.zshrc adds it — finds the packaged Python `caelestia` instead,
+# and that one starts the shell with this caller's environment rather than
+# handing the start to the compositor.
+PATH="${XDG_BIN_HOME:-$HOME/.local/bin}:$PATH"
+
 bold=$(tput bold 2>/dev/null || true)
 dim=$(tput dim 2>/dev/null || true)
 red=$(tput setaf 1 2>/dev/null || true)

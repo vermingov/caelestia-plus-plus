@@ -79,29 +79,67 @@ fn print_filtered(args: &[&str]) -> i32 {
 /// spends its life waiting.
 const ARENAS: &str = "narenas:4";
 
+/// The daemon, as a command line for the compositor to run.
+///
+/// The shell hands its environment to everything it starts: the bar, and
+/// through the bar's launcher every application. Started as a child of whoever
+/// asked, that environment is the caller's. Over SSH, to update someone else's
+/// machine, the caller has only what it exported by hand — the Wayland socket
+/// and the Hyprland signature, which is what the shell refuses to draw without.
+/// Nothing in the shell speaks X11, so the missing `DISPLAY` went unnoticed
+/// until Steam would not start from the launcher while starting fine from a
+/// terminal, and every restart after that ran from inside the old shell and
+/// inherited the gap, update after update. A terminal is no better a parent:
+/// its own variables, and any token in them, reach every application too.
+///
+/// Hyprland starts the shell at login, so a shell it starts now gets the
+/// environment it would have had then, whoever is asking. `env` carries the one
+/// variable that is ours to set, because nothing else of the caller's arrives.
+fn for_the_compositor(qs: &[String], malloc_conf: &str) -> String {
+    let mut command = vec!["env".to_string(), format!("MALLOC_CONF={malloc_conf}")];
+    command.extend_from_slice(qs);
+    crate::proc::shell_join(&command)
+}
+
 fn start(args: &Args) -> i32 {
-    let mut cmd = Command::new("qs");
-    cmd.args(["-c", "caelestia", "-n"]);
+    let mut qs: Vec<String> = ["qs", "-c", "caelestia", "-n"].map(String::from).to_vec();
+    if let Some(rules) = &args.log_rules {
+        qs.extend(["--log-rules".to_string(), rules.clone()]);
+    }
 
     // Set here rather than in the shell's own config: jemalloc reads this
     // once, before `main`, so a pragma inside the QML would be far too late.
     // Anything the caller already set wins, so this stays overridable.
-    if std::env::var_os("MALLOC_CONF").is_none() {
-        cmd.env("MALLOC_CONF", ARENAS);
-    }
-    if let Some(rules) = &args.log_rules {
-        cmd.args(["--log-rules", rules]);
-    }
+    let malloc_conf = std::env::var("MALLOC_CONF").unwrap_or_else(|_| ARENAS.to_string());
 
     if args.daemon {
-        // `qs -d` detaches itself, so waiting on it costs nothing and keeps
-        // its exit code meaningful when it fails to start at all.
-        cmd.arg("-d");
-        return cmd.status().ok().and_then(|s| s.code()).unwrap_or(1);
+        qs.push("-d".to_string());
+        return start_daemon(&qs, &malloc_conf);
+    }
+    follow(&qs, &malloc_conf)
+}
+
+fn from_here(qs: &[String], malloc_conf: &str) -> Command {
+    let mut cmd = Command::new(&qs[0]);
+    cmd.args(&qs[1..]).env("MALLOC_CONF", malloc_conf);
+    cmd
+}
+
+fn start_daemon(qs: &[String], malloc_conf: &str) -> i32 {
+    if crate::hypr::exec(&for_the_compositor(qs, malloc_conf)) {
+        return 0;
     }
 
-    // In the foreground the shell's log is ours to print, minus the noise.
-    let Ok(mut child) = cmd.stdout(Stdio::piped()).spawn() else {
+    // No Hyprland answered, so it is started from here after all. `qs -d`
+    // detaches itself, so waiting on it costs nothing and keeps its exit code
+    // meaningful when it fails to start at all.
+    from_here(qs, malloc_conf).status().ok().and_then(|s| s.code()).unwrap_or(1)
+}
+
+/// In the foreground the shell's log is ours to print, minus the noise — which
+/// only a child of this process can give us, so this one is started from here.
+fn follow(qs: &[String], malloc_conf: &str) -> i32 {
+    let Ok(mut child) = from_here(qs, malloc_conf).stdout(Stdio::piped()).spawn() else {
         eprintln!("caelestia: cannot start qs");
         return 1;
     };
@@ -136,5 +174,27 @@ mod tests {
         assert!(!keep(&noisy));
         assert!(keep("anything else the shell says"));
         assert!(keep(""));
+    }
+
+    fn words(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn the_compositor_is_handed_the_same_command_line_a_login_runs() {
+        let qs = words(&["qs", "-c", "caelestia", "-n", "-d"]);
+        assert_eq!(
+            for_the_compositor(&qs, ARENAS),
+            "env MALLOC_CONF=narenas:4 qs -c caelestia -n -d"
+        );
+    }
+
+    #[test]
+    fn log_rules_reach_the_compositor_as_one_word() {
+        let qs = words(&["qs", "-c", "caelestia", "-n", "--log-rules", "quickshell.*=true;qt.*=false", "-d"]);
+        assert_eq!(
+            for_the_compositor(&qs, "narenas:2,dirty_decay_ms:0"),
+            "env MALLOC_CONF=narenas:2,dirty_decay_ms:0 qs -c caelestia -n --log-rules 'quickshell.*=true;qt.*=false' -d"
+        );
     }
 }
