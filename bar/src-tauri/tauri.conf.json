@@ -37,7 +37,8 @@
           "/usr/share/**",
           "/usr/local/share/**",
           "/opt/**",
-          "/var/lib/flatpak/exports/share/**"
+          "/var/lib/flatpak/exports/share/**",
+          "/var/lib/flatpak/app/*/*/*/*/export/share/icons/**"
         ]
       }
     }

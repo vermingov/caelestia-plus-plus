@@ -69,7 +69,7 @@ impl Icons {
         }
         // An absolute path in the entry is already the answer.
         if name.starts_with('/') {
-            return Path::new(name).is_file().then(|| name.to_string());
+            return real_file(Path::new(name));
         }
         if let Some(hit) = self.cache.lock().ok()?.get(name) {
             return hit.clone();
@@ -110,13 +110,22 @@ impl Icons {
 }
 
 fn first_match(dir: &Path, name: &str) -> Option<String> {
-    for extension in ["png", "svg", "xpm"] {
-        let candidate = dir.join(format!("{name}.{extension}"));
-        if candidate.is_file() {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-    None
+    ["png", "svg", "xpm"].iter().find_map(|extension| real_file(&dir.join(format!("{name}.{extension}"))))
+}
+
+/// The file itself rather than a link to it, which is what the webview has
+/// to be given.
+///
+/// Icon themes alias one icon to another with relative symlinks —
+/// `org.xfce.thunar.svg -> system-file-manager.svg` — and Flatpak exports
+/// every icon as one. Tauri's asset scope reads such a link's target and
+/// tests it as written, against the bar's working directory, where it never
+/// exists; the bare name then matches no allowed pattern and the request is
+/// refused without a word. Every aliased icon drew as a broken image: Steam
+/// from Flatpak, and any app a theme files under another's name.
+fn real_file(path: &Path) -> Option<String> {
+    let real = std::fs::canonicalize(path).ok()?;
+    real.is_file().then(|| real.to_string_lossy().into_owned())
 }
 
 /// Last resort for themes that file icons somewhere unusual: two levels of
