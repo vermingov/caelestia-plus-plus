@@ -793,7 +793,16 @@ fn watch_hyprland(app: AppHandle) {
         // — and each one needs its own bar. The count is checked on every
         // change rather than only at startup.
         let mut outputs = hypr::monitors().len();
+        let mut view = None;
         hypr::watch(move |state| {
+            // Another workspace coming to the front is the person looking
+            // away, and the launcher cannot notice that for itself.
+            if view.as_ref().is_some_and(|before| *before != state.view) {
+                let app = app.clone();
+                let _ = app.clone().run_on_main_thread(move || launcher::close_if_open(&app));
+            }
+            view = Some(state.view.clone());
+
             let _ = app.emit("hypr", state);
 
             let now = hypr::monitors().len();

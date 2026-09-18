@@ -454,6 +454,20 @@ fn show_with(app: &AppHandle, query: &str) {
     }
 }
 
+/// Closes the launcher if it is up; nothing otherwise.
+///
+/// For when the view goes somewhere else underneath it. Losing focus is what
+/// normally closes it, but it holds the keyboard exclusively, so the
+/// compositor never takes focus off it: switch workspace with it open and it
+/// stays up over whatever is there — a game, fullscreen — still swallowing
+/// every key.
+pub fn close_if_open(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(WINDOW) else { return };
+    if window.is_visible().unwrap_or(false) {
+        hide(app);
+    }
+}
+
 pub fn toggle_with(app: &AppHandle, query: &str) {
     let Some(window) = app.get_webview_window("launcher") else { return };
     if window.is_visible().unwrap_or(false) {

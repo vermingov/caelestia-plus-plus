@@ -46,6 +46,9 @@ pub struct Keyboard {
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct State {
+    /// Not drawn — the rows below carry their own flags — but watched.
+    #[serde(skip)]
+    pub view: View,
     pub workspaces: Vec<Workspace>,
     /// The named ones, which are reached by name rather than by walking the
     /// row: a scratchpad, a music workspace, a monitor. Only those with
@@ -53,6 +56,18 @@ pub struct State {
     pub specials: Vec<Special>,
     pub active: Active,
     pub keyboard: Keyboard,
+}
+
+/// What is in front of the person: the focused workspace, and the special
+/// one pulled up over it, if any.
+///
+/// Read from the compositor's own answer rather than worked out from the rows:
+/// those leave out what the bar does not draw — a named workspace, a special
+/// one with nothing on it — and the view can go to either.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct View {
+    workspace: i64,
+    special: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
@@ -251,7 +266,13 @@ pub fn read_state() -> State {
         })
         .unwrap_or_default();
 
-    State { workspaces, specials, active, keyboard: read_keyboard() }
+    State {
+        view: View { workspace: focused_id, special: open_special },
+        workspaces,
+        specials,
+        active,
+        keyboard: read_keyboard(),
+    }
 }
 
 /// The main keyboard's layout and locks.
@@ -348,6 +369,9 @@ pub fn watch(mut on_change: impl FnMut(State)) {
         "workspace",
         "focusedmon",
         "activewindow",
+        // Usually rides along with a change of active window, but not while a
+        // layer surface holds the keyboard: then it is all there is.
+        "activespecial",
         "openwindow",
         "closewindow",
         "movewindow",
