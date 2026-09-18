@@ -22,6 +22,20 @@ Singleton {
     readonly property string wallsdir: Quickshell.env("CAELESTIA_WALLPAPERS_DIR") || absolutePath(GlobalConfig.paths.wallpaperDir)
     readonly property string recsdir: Quickshell.env("CAELESTIA_RECORDINGS_DIR") || `${videos}/Recordings`
     readonly property string libdir: Quickshell.env("CAELESTIA_LIB_DIR") || "/usr/lib/caelestia"
+    // Where the install scripts put the shell's own programs: the bar, the
+    // launcher, the tools.
+    readonly property string bin: Quickshell.env("XDG_BIN_HOME") || `${home}/.local/bin`
+
+    // A command that prints where `program` is, and fails when it is nowhere.
+    //
+    // `bin` is looked in before PATH, because PATH is whatever the session was
+    // handed. A login shell that only extends it in ~/.zshrc leaves the desktop
+    // without ~/.local/bin, so a shell started at login could not find a bar
+    // that was installed and working — while the same shell restarted from a
+    // terminal could, which is how that went unnoticed.
+    function locate(program: string): var {
+        return ["sh", "-c", 'p="$1/$2"; [ -x "$p" ] || p=$(command -v "$2") || exit 1; echo "$p"', "sh", bin, program];
+    }
 
     function toLocalFile(path: url): string {
         path = Qt.resolvedUrl(path);

@@ -3,6 +3,7 @@ pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.utils
 
 // Which launcher the shortcut opens.
 //
@@ -20,6 +21,8 @@ Singleton {
     id: root
 
     readonly property string binary: "caelestia-launcher"
+    // Where the check below found it; empty while it has not
+    property string executable
     readonly property string sockPath: `${Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"}/caelestia-launcher.sock`
 
     // True once the check below has answered, whichever way
@@ -43,7 +46,7 @@ Singleton {
         if (root.connected)
             sockLoader.item.write(line);
         else
-            Quickshell.execDetached([root.binary, `--${verb}`, query ?? ""]);
+            Quickshell.execDetached([root.executable, `--${verb}`, query ?? ""]);
     }
 
     function toggle(): void {
@@ -137,7 +140,11 @@ Singleton {
         id: check
 
         running: true
-        command: ["sh", "-c", `command -v ${root.binary} >/dev/null`]
+        command: Paths.locate(root.binary)
+
+        stdout: StdioCollector {
+            onStreamFinished: root.executable = text.trim()
+        }
 
         onExited: code => {
             root.installed = code === 0;

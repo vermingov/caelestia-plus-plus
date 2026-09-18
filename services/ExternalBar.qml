@@ -3,6 +3,7 @@ pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.utils
 
 // Which bar draws the strip along the top, and the shell's ownership of it.
 //
@@ -18,7 +19,7 @@ import Quickshell.Io
 // and after a reboot nothing started one at all, so the QML bar stood down
 // behind a bar that was not running and the screen had no bar on it.
 //
-// The switch is whether the binary is on PATH rather than a config key: the
+// The switch is whether the binary is installed rather than a config key: the
 // config doctor validates shell.json against the schema the plugin compiles
 // in, so a key it has never heard of would be offered up for deletion as a
 // typo. `bar/install.sh --uninstall` puts this one back in charge.
@@ -26,6 +27,8 @@ Singleton {
     id: root
 
     readonly property string binary: "caelestia-bar"
+    // Where the check below found it; empty while it has not
+    property string executable
 
     // True once the check below has answered, whichever way
     property bool ready: false
@@ -43,7 +46,11 @@ Singleton {
         id: check
 
         running: true
-        command: ["sh", "-c", `command -v ${root.binary} >/dev/null`]
+        command: Paths.locate(root.binary)
+
+        stdout: StdioCollector {
+            onStreamFinished: root.executable = text.trim()
+        }
 
         onExited: code => {
             root.installed = code === 0;
@@ -69,7 +76,7 @@ Singleton {
         id: bar
 
         running: root.installed
-        command: [root.binary]
+        command: [root.executable]
 
         // CAELESTIA_SHELL_MANAGED tells the bar the shell started it, which
         // is what makes it die with the shell. Run by hand it behaves as

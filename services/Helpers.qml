@@ -3,6 +3,7 @@ pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.utils
 
 // The small programs the shell shells out to.
 //
@@ -22,6 +23,8 @@ Singleton {
     id: root
 
     readonly property string binary: "caelestia-tools"
+    // Where the check below found it; empty while it has not
+    property string executable
 
     // True once the check below has answered, whichever way
     property bool ready: false
@@ -45,15 +48,36 @@ Singleton {
     function command(tool: string, args: var): var {
         const extra = args ?? [];
         if (root.has(tool))
-            return [root.binary, tool, ...extra];
+            return [root.executable, tool, ...extra];
         return ["python3", Quickshell.shellPath(`assets/${root.scripts[tool]}`), ...extra];
     }
 
+    // Found before it is asked anything. A program that cannot be started
+    // never reports having exited, so asking a binary that was not there for
+    // its list left `ready` false for good — and everything waiting on it,
+    // the scripts included, never ran.
     Process {
         running: true
+        command: Paths.locate(root.binary)
+
+        stdout: StdioCollector {
+            onStreamFinished: root.executable = text.trim()
+        }
+
+        onExited: code => {
+            if (code === 0)
+                list.running = true;
+            else
+                root.ready = true;
+        }
+    }
+
+    Process {
+        id: list
+
         // A binary too old to know `list` prints nothing and exits non-zero,
         // which reads as "no tools" and sends everything to the scripts.
-        command: [root.binary, "list"]
+        command: [root.executable, "list"]
 
         stdout: StdioCollector {
             onStreamFinished: {
