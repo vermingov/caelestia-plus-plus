@@ -69,14 +69,21 @@ fi
 echo ">> Building the bar"
 cargo build --release --manifest-path "$here/src-tauri/Cargo.toml" "${features[@]}"
 
-stop_running
-sleep 0.5
-
 mkdir -p "$(dirname "$target")"
 install -m755 "$here/src-tauri/target/release/caelestia-bar" "$target.new"
 mv -f "$target.new" "$target"
 install -m755 "$here/src-tauri/target/release/caelestia-launcher" "$client.new"
 mv -f "$client.new" "$client"
+
+# Stopped only once the new binary is where the old one was. The shell
+# respawns the bar six tenths of a second after it exits, and it used to be
+# stopped first: the respawn found the old file still in place, started that,
+# and the rename landed a moment later — so every install and every update
+# left the previous build running until something else restarted it. The
+# rename is atomic and the running bar keeps the file it was started from, so
+# swapping under it is safe; stop_running knows that process by its
+# "(deleted)" executable.
+stop_running
 
 mkdir -p "$state"
 rm -f "$optout"
