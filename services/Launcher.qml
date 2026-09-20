@@ -7,16 +7,17 @@ import qs.utils
 
 // Which launcher the shortcut opens.
 //
-// The launcher is its own process now — a Tauri app on an overlay layer
-// surface, in launcher/ — because a webview cannot live inside Quickshell.
-// The QML one is still in the tree and still works.
+// The launcher is a window of the bar's process — a webview on an overlay
+// layer surface, in bar/ — because a webview cannot live inside Quickshell.
+// The binary named here is the small client that asks the bar for it. The
+// QML one is still in the tree and still works, but is only built while it
+// is the one in use (modules/launcher/Wrapper.qml).
 //
 // The switch between them is whether the binary is installed, rather than a
 // config key: the shell's own config doctor validates shell.json against the
 // schema the plugin compiles in, so a key it has never heard of would be
-// offered up for deletion as a typo. `launcher/install.sh --uninstall` puts
-// the QML launcher back, and a checkout with no Rust toolchain never leaves
-// it.
+// offered up for deletion as a typo. `bar/install.sh --uninstall` puts the
+// QML launcher back, and a checkout with no Rust toolchain never leaves it.
 Singleton {
     id: root
 

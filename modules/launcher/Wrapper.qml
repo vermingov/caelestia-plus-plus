@@ -22,7 +22,11 @@ Item {
     // it — and two launchers answering one keypress is how the QML one kept
     // appearing. Everything below is left intact; uninstalling the other one
     // puts this back.
-    readonly property bool shouldBeActive: screenState.launcher && Config.launcher.enabled && !Shell.Launcher.external
+    //
+    // `ready` comes first: `external` reads false until the check for the
+    // other launcher has answered, and that is not the same as its absence.
+    readonly property bool inUse: Shell.Launcher.ready && !Shell.Launcher.external
+    readonly property bool shouldBeActive: screenState.launcher && Config.launcher.enabled && inUse
 
     readonly property real maxHeight: {
         let max = screen.height * 0.62;
@@ -72,8 +76,6 @@ Item {
         }
     ]
 
-    Component.onCompleted: Qt.callLater(() => Apps) // Load apps on init
-
     // Close eases out rather than snapping: FastEffects front-loads too
     // little of the fade, so the panel sat there and then vanished
     Behavior on offsetScale {
@@ -94,7 +96,13 @@ Item {
         // Loaded synchronously at startup: async incubation raced service
         // threads ("Cannot create children for a parent in a different
         // thread") and silently aborted, leaving the panel empty.
-        active: true
+        //
+        // Only while this is the launcher that opens. With the other one
+        // installed the tree and the app database behind it were built on
+        // every screen at every start, for a panel that could never show.
+        active: root.inUse
+
+        onLoaded: Qt.callLater(() => Apps) // Load apps with the tree, not on the first keystroke
 
         sourceComponent: Content {
             screenState: root.screenState
