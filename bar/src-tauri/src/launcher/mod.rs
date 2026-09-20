@@ -24,6 +24,7 @@ mod search;
 mod usage;
 mod variants;
 mod wallpapers;
+mod watch;
 
 use std::sync::Mutex;
 
@@ -560,7 +561,7 @@ pub use control::{already_running, send as send_control};
 /// between construction and the first `show()` — gtk-layer-shell has to get
 /// at a window before GTK realises it.
 pub fn setup(app: &AppHandle) {
-    let built = tauri::WebviewWindowBuilder::new(app, WINDOW, tauri::WebviewUrl::App("launcher.html".into()))
+    let builder = tauri::WebviewWindowBuilder::new(app, WINDOW, tauri::WebviewUrl::App("launcher.html".into()))
         .title("caelestia-launcher")
         .inner_size(1040.0, 900.0)
         .resizable(false)
@@ -569,10 +570,9 @@ pub fn setup(app: &AppHandle) {
         .shadow(false)
         .visible(false)
         .skip_taskbar(true)
-        .focused(true)
-        .build();
+        .focused(true);
 
-    let window = match built {
+    let window = match super::sharing_web_process(builder, app).build() {
         Ok(window) => window,
         Err(e) => {
             eprintln!("caelestia-bar: cannot open the launcher: {e}");
@@ -585,6 +585,10 @@ pub fn setup(app: &AppHandle) {
 
     app.manage(Mutex::new(Launcher::new()));
     control::listen(app.clone());
+
+    // From here on the app list follows the disk, so an app installed while
+    // the launcher is idle is there on the next open.
+    watch::applications(app.clone());
 
     // Clicking away dismisses it. A launcher that stays up after you have
     // looked somewhere else is a window, not a launcher.

@@ -63,6 +63,15 @@ impl Icons {
         Icons { roots: icon_roots(), themes, cache: Mutex::new(HashMap::new()) }
     }
 
+    /// Drops everything resolved so far. Called when the desktop entries
+    /// change: an install adds icon files too, and a name that resolved to
+    /// nothing a moment ago is exactly the name that now has a file.
+    pub fn forget(&self) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
+    }
+
     pub fn resolve(&self, name: &str) -> Option<String> {
         if name.is_empty() {
             return None;

@@ -2,8 +2,9 @@
 //!
 //! Everything here is plain file reading: the freedesktop spec says where the
 //! entries live and what a usable one looks like, and nothing else needs to
-//! be consulted. The list is built once at startup and refreshed when a
-//! directory changes, so opening the launcher never waits on the disk.
+//! be consulted. The list is built once at startup and rebuilt whenever one
+//! of those directories changes (see `watch`), so opening the launcher never
+//! waits on the disk and never shows yesterday's apps.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,7 +36,7 @@ pub struct App {
 /// `$XDG_DATA_DIRS` plus the user's own, in the order the spec resolves them:
 /// the first entry with a given id wins, so a user override shadows a system
 /// one of the same name.
-fn application_dirs() -> Vec<PathBuf> {
+pub fn application_dirs() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"));
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)

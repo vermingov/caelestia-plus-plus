@@ -37,6 +37,10 @@ png = "0.17"
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
 gtk = { version = "0.18", optional = true }
 gtk-layer-shell = { version = "0.8", features = ["v0_6"], optional = true }
+# Watching the desktop-entry directories for the launcher. Without it the app
+# list is only as fresh as the last time the launcher was closed, so an app
+# installed while it sat idle stayed invisible until the open after next.
+notify = { version = "7", default-features = false }
 
 [features]
 default = []

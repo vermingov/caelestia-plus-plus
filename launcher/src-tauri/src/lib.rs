@@ -23,6 +23,7 @@ mod search;
 mod usage;
 mod variants;
 mod wallpapers;
+mod watch;
 
 use std::sync::Mutex;
 
@@ -484,6 +485,10 @@ pub fn run() {
             app.manage(Mutex::new(Launcher::new()));
 
             control::listen(app.handle().clone());
+
+            // From here on the app list follows the disk, so an app installed
+            // while the launcher is idle is there on the next open.
+            watch::applications(app.handle().clone());
 
             // Clicking away dismisses it. A launcher that stays up after you
             // have looked somewhere else is a window, not a launcher.

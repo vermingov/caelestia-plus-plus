@@ -28,6 +28,10 @@ webkit2gtk = { version = "2.0", features = ["v2_40"] }
 # works everywhere and is what the build falls back to.
 gtk = { version = "0.18", optional = true }
 gtk-layer-shell = { version = "0.8", features = ["v0_6"], optional = true }
+# Watching the desktop-entry directories. Without it the app list is only as
+# fresh as the last time the launcher was closed, so an app installed while it
+# sat idle stayed invisible until the next open after that.
+notify = { version = "7", default-features = false }
 
 [features]
 default = []
