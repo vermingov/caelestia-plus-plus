@@ -12,6 +12,7 @@ mod hypr;
 mod icons;
 mod logo;
 mod media;
+mod notifs;
 #[cfg(feature = "layer-shell")]
 mod repaint;
 mod services;
@@ -491,6 +492,10 @@ pub fn start() {
         // The two guards push over their own sockets, so their state is
         // already current by the time anything asks for it.
         .manage(guards::Watcher::start())
+        // Brought up before the windows: it owns a bus name, and a desktop
+        // with no notification server for the first second of a session is a
+        // desktop that silently loses whatever was sent in it.
+        .manage(notifs::start())
         .manage(Mutex::new(Outputs::default()))
         // Which tab the panel was last asked for, so a window that has only
         // just loaded knows where it is meant to land.
@@ -529,6 +534,22 @@ pub fn start() {
             startup_set,
             startup_remove,
             startup_add,
+            notifs::commands::notifs,
+            notifs::commands::notifs_config,
+            notifs::commands::notifs_summary,
+            notifs::commands::notif_dismiss,
+            notifs::commands::notif_close,
+            notifs::commands::notif_close_app,
+            notifs::commands::notif_clear,
+            notifs::commands::notif_action,
+            notifs::commands::notif_dnd,
+            notifs::commands::notif_hold,
+            notifs::commands::notif_centre,
+            notifs::commands::notifs_reach,
+            notifs::commands::notifs_pointer,
+            notifs::commands::notif_open_link,
+            notifs::commands::notif_copy,
+            notifs::commands::notifs_log,
             guards_detail,
             guards_verdict,
             guards_set_rule,
@@ -562,6 +583,7 @@ pub fn start() {
         ])
         .setup(|app| {
             for (window, monitor) in open_bars(app.handle()) {
+                open_notifs_beside(app.handle(), &window, monitor.as_ref());
                 place(&window, monitor);
                 trim_webview(&window);
                 window.show()?;
@@ -580,6 +602,7 @@ pub fn start() {
             watch_config(app.handle().clone());
             watch_spectrum(app.handle().clone());
             watch_media(app.handle().clone());
+            watch_notifs(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -825,6 +848,32 @@ fn open_bars(app: &AppHandle) -> Vec<(WebviewWindow, Option<gtk::gdk::Monitor>)>
     bars
 }
 
+/// The notification surface for the output a bar is on.
+///
+/// Built here rather than on its own walk over the monitors so that the two
+/// can never disagree about which output is which: it is filed under the same
+/// output name the bar was, and that name is how the page knows whether the
+/// notification centre has been opened on its screen or on another.
+fn open_notifs_beside(app: &AppHandle, bar: &WebviewWindow, monitor: Option<&notifs::window::Monitor>) {
+    let Some(output) = app
+        .state::<Mutex<Outputs>>()
+        .lock()
+        .ok()
+        .and_then(|outputs| outputs.0.get(bar.label()).cloned())
+    else {
+        return;
+    };
+    let Some(window) = notifs::window::open(app, &output) else { return };
+    if let Ok(mut outputs) = app.state::<Mutex<Outputs>>().lock() {
+        outputs.0.insert(window.label().to_string(), output);
+    }
+    notifs::window::place(&window, monitor);
+    trim_webview(&window);
+    let _ = window.show();
+    // Again once it is mapped, for the reason the bars do it twice.
+    notifs::window::set_reach(&window, Vec::new());
+}
+
 /// Without layer shell there is one window and no way to place it, so there
 /// is one bar.
 #[cfg(not(feature = "layer-shell"))]
@@ -1013,6 +1062,31 @@ fn watch_config(app: AppHandle) {
             }
             last = now;
             let _ = app.emit("config", (logo::read(), logo::bar_config(), logo::layout()));
+        }
+    });
+}
+
+/// Notifications, pushed rather than polled.
+///
+/// The server calls back on whichever thread the change happened on — the
+/// bus thread for an arriving notification, a timer thread for one going off
+/// screen — and all this does is forward it to every window, which is what
+/// `emit` is for.
+fn watch_notifs(app: AppHandle) {
+    let server = app.state::<notifs::Notifs>().inner().clone();
+    server.on_change(move |feed| {
+        // The list is three hundred entries long and only the notification
+        // surfaces draw it. A bar wants a number for its bell, and sending it
+        // the lot on every change would be ninety kilobytes to say "four".
+        let summary = notifs::Summary::of(feed);
+        // `emit_to`, not `emit` on the window: every handle's `emit` reaches
+        // every listener in the app, whichever handle it was called on.
+        for label in app.webview_windows().into_keys() {
+            let _ = if label.starts_with("notifs-") {
+                app.emit_to(label.as_str(), "notifs", feed.clone())
+            } else {
+                app.emit_to(label.as_str(), "notifs-summary", summary.clone())
+            };
         }
     });
 }

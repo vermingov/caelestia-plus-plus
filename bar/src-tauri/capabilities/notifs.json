@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "notifs",
+  "description": "What the notification surfaces may call: they listen for the feed and nothing else. They draw text that strangers wrote, so they get none of the window permissions the bar's own windows have.",
+  "windows": [
+    "notifs-*"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}

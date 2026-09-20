@@ -49,6 +49,9 @@ const services = shallowRef({
 
 const tray = shallowRef([]);
 const media = shallowRef(null);
+// Only what the bell needs. The list itself goes to the notification
+// surfaces, which are the ones that draw it.
+const notifs = shallowRef({ unseen: 0, dnd: false, centre: "" });
 // The visualiser's frames, which arrive far more often than anything else on
 // the bar and are the one feed that is dropped rather than queued.
 const spectrum = shallowRef({ bars: [], live: false });
@@ -316,6 +319,7 @@ onMounted(async () => {
     await feed("services", value => (services.value = value));
     await feed("tray", value => (tray.value = value));
     await feed("media", value => (media.value = value));
+    await feed("notifs-summary", value => (notifs.value = value));
     // Settings changed underneath us: the mark, the entry list and the bar's
     // own options all come from files a person can edit while this is running.
     await listen("config", event => {
@@ -344,6 +348,9 @@ onMounted(async () => {
         }
         if (!pushed.has("media")) {
             media.value = playing;
+        }
+        if (!pushed.has("notifs-summary")) {
+            notifs.value = await invoke("notifs_summary");
         }
         // Says what this window was handed, which is the difference between
         // "the bar has no tray" and "the tray host found nothing". Discarded
@@ -408,6 +415,8 @@ onMounted(async () => {
                 :bluetooth="services.bluetooth"
                 :profile="services.power.profile"
                 :status="layout.status"
+                :notifs="notifs"
+                :output="output"
             />
             <Clock v-else-if="entry === 'clock'" />
             <PowerButton v-else-if="entry === 'power'" />

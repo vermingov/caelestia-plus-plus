@@ -21,6 +21,13 @@ client="$bindir/caelestia-launcher"
 state="${XDG_STATE_HOME:-$HOME/.local/state}/caelestia"
 stamp="$state/bar-built-from"
 optout="$state/bar-optout"
+# Says that the installed bar is one that serves notifications. The shell's
+# own server only stands down for a bar that has said so: during an update the
+# shell restarts into the new checkout first and this script runs afterwards,
+# and in between the bar on disk is still the old one, which serves nothing.
+# Standing down for that one would leave the desktop with no notification
+# server for as long as the build takes.
+serves_notifs="$state/bar-serves-notifs"
 
 stop_running() {
     local pid exe
@@ -48,7 +55,7 @@ stop_running() {
 
 if [[ ${1:-} == --uninstall ]]; then
     stop_running
-    rm -f "$target" "$client" "$stamp"
+    rm -f "$target" "$client" "$stamp" "$serves_notifs"
     mkdir -p "$state" && : > "$optout"
     echo "Removed $target and $client"
     echo "The shell's own bar and launcher are back in charge."
@@ -91,6 +98,7 @@ stop_running
 mkdir -p "$state"
 rm -f "$optout"
 git -C "$here/.." rev-parse HEAD 2>/dev/null > "$stamp" || rm -f "$stamp"
+: > "$serves_notifs"
 
 # Not started here. The shell owns the bar: it runs it as a child so the two
 # come and go together, and it respawns one that exits — which is exactly what

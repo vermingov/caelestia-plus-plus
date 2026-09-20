@@ -12,14 +12,21 @@ import { invoke } from "@tauri-apps/api/core";
  * So the compositor is asked instead. It is the one source that is never
  * wrong, and at this rate it is a single socket round trip.
  *
+ * `locate` is how the pointer is found. The default measures from the bar's
+ * own surface; a page drawn on a different one passes its own.
+ *
  * Returns a function that stops watching.
  */
-export function whenPointerLeaves(boxes, onLeave, { every = 160, slack = 6 } = {}) {
+export function whenPointerLeaves(
+    boxes,
+    onLeave,
+    { every = 160, slack = 6, locate = () => invoke("pointer") } = {}
+) {
     const timer = setInterval(async () => {
         const rects = boxes().filter(Boolean);
         if (!rects.length) return;
 
-        const position = await invoke("pointer");
+        const position = await locate();
         // No compositor to ask: the events are all there is, and they have
         // already had their chance.
         if (!position) return;

@@ -168,15 +168,32 @@ fn pixmap_uri(properties: &HashMap<String, OwnedValue>, key: &str) -> Option<Str
         rgba.extend_from_slice(&[pixel[1], pixel[2], pixel[3], pixel[0]]);
     }
 
+    png_data_uri(&rgba, width as u32, height as u32)
+}
+
+/// RGBA bytes as a PNG file's worth of bytes.
+///
+/// Shared with the notification server, which receives pictures on the bus in
+/// the same shape and writes them to its cache.
+pub fn png_bytes(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
+    if rgba.len() < (width as usize).checked_mul(height as usize)?.checked_mul(4)? {
+        return None;
+    }
     let mut png = Vec::new();
     {
-        let mut encoder = png::Encoder::new(Cursor::new(&mut png), width as u32, height as u32);
+        let mut encoder = png::Encoder::new(Cursor::new(&mut png), width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().ok()?;
-        writer.write_image_data(&rgba).ok()?;
+        writer.write_image_data(rgba).ok()?;
     }
-    Some(format!("data:image/png;base64,{}", base64(&png)))
+    Some(png)
+}
+
+/// The same, as something an `<img src>` will take directly. Right for a
+/// tray icon, which is tiny and sent once; wrong for anything sent often.
+fn png_data_uri(rgba: &[u8], width: u32, height: u32) -> Option<String> {
+    Some(format!("data:image/png;base64,{}", base64(&png_bytes(rgba, width, height)?)))
 }
 
 /// Base64, because pulling a crate in for thirty lines of table lookup is not

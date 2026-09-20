@@ -1,0 +1,94 @@
+[
+ {
+  "time": "2026-09-20T12:47:07.628Z",
+  "summary": "Build finished",
+  "body": "cargo build took 41 seconds",
+  "appIcon": "utilities-terminal",
+  "appName": "kitty",
+  "image": "",
+  "expireTimeout": -1,
+  "urgency": 1,
+  "resident": false,
+  "hasActionIcons": false,
+  "actions": [
+   {
+    "identifier": "default",
+    "text": " "
+   }
+  ]
+ },
+ {
+  "time": "2026-09-20T12:21:30.784Z",
+  "summary": "Screenshot taken",
+  "body": "Saved to Pictures/Screenshots",
+  "appIcon": "",
+  "appName": "caelestia",
+  "image": "",
+  "expireTimeout": 5000,
+  "urgency": 1,
+  "resident": false,
+  "hasActionIcons": false,
+  "actions": [
+   {
+    "identifier": "open",
+    "text": "Open"
+   },
+   {
+    "identifier": "copy",
+    "text": "Copy"
+   }
+  ]
+ },
+ {
+  "time": "2026-09-19T08:02:11.004Z",
+  "summary": "Battery low",
+  "body": "10% remaining",
+  "appIcon": "battery-caution",
+  "appName": "System",
+  "image": "",
+  "expireTimeout": 0,
+  "urgency": 2,
+  "resident": true,
+  "hasActionIcons": false,
+  "actions": []
+ },
+ {
+  "time": "2026-09-18T19:45:00.000Z",
+  "summary": "Download complete",
+  "body": "<b>archive.tar.zst</b> is ready",
+  "appIcon": "firefox",
+  "appName": "Firefox",
+  "image": "",
+  "expireTimeout": -1,
+  "urgency": 1,
+  "resident": false,
+  "hasActionIcons": false,
+  "actions": []
+ },
+ {
+  "time": "2026-09-18T07:30:00.500Z",
+  "summary": "Update available",
+  "body": "12 packages can be upgraded",
+  "appIcon": "system-software-update",
+  "appName": "Updates",
+  "image": "",
+  "expireTimeout": -1,
+  "urgency": 0,
+  "resident": false,
+  "hasActionIcons": false,
+  "actions": []
+ },
+ {
+  "time": "2026-09-17T22:10:42.120Z",
+  "summary": "Now playing",
+  "body": "A song by somebody",
+  "appIcon": "",
+  "appName": "Music",
+  "image": "/tmp/cover-art.png",
+  "expireTimeout": 3000,
+  "urgency": 0,
+  "resident": false,
+  "hasActionIcons": false,
+  "actions": []
+ }
+]

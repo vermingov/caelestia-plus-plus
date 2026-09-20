@@ -108,6 +108,52 @@ pub fn cursor() -> Option<(i32, i32)> {
     Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
 }
 
+/// Whether the window in front of the person is fullscreen.
+///
+/// Notifications ask this: a toast over a film or a game is an interruption
+/// of a different order from one over a text editor, and the setting that
+/// governs it is about exactly this case.
+///
+/// Hyprland reports 0 for a normal window, 1 for maximised and 2 for real
+/// fullscreen. Maximised is still a window with a bar above it, so only 2 and
+/// up count — which is the line the shell drew too.
+pub fn fullscreen_focused() -> bool {
+    let Some(reply) = request("j/activewindow") else { return false };
+    let Ok(window) = serde_json::from_str::<serde_json::Value>(&reply) else { return false };
+    window.get("fullscreen").and_then(serde_json::Value::as_i64).is_some_and(|mode| mode > 1)
+}
+
+/// The output with the focus, by name.
+pub fn focused_monitor() -> Option<String> {
+    let reply = request("j/monitors")?;
+    serde_json::from_str::<Vec<serde_json::Value>>(&reply)
+        .ok()?
+        .into_iter()
+        .find(|monitor| monitor.get("focused").and_then(serde_json::Value::as_bool) == Some(true))
+        .and_then(|monitor| monitor.get("name").and_then(serde_json::Value::as_str).map(str::to_string))
+}
+
+/// Where a layer surface sits on one particular output. The plain
+/// `layer_origin` takes the first it finds, which is only right for a surface
+/// there is one of; the notification surfaces come one per output, all under
+/// the same namespace.
+pub fn layer_origin_on(output: &str, namespace: &str) -> Option<(i32, i32)> {
+    let reply = request("j/layers")?;
+    let outputs: serde_json::Value = serde_json::from_str(&reply).ok()?;
+    let levels = outputs.get(output)?.get("levels")?.as_object()?;
+    levels
+        .values()
+        .filter_map(serde_json::Value::as_array)
+        .flatten()
+        .find(|layer| layer.get("namespace").and_then(serde_json::Value::as_str) == Some(namespace))
+        .and_then(|layer| {
+            Some((
+                layer.get("x").and_then(serde_json::Value::as_i64)? as i32,
+                layer.get("y").and_then(serde_json::Value::as_i64)? as i32,
+            ))
+        })
+}
+
 /// Where a layer surface of ours sits on the screen, so a position inside the
 /// page can be compared with one outside it.
 pub fn layer_origin(namespace: &str) -> Option<(i32, i32)> {

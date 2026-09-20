@@ -2,8 +2,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { computed, inject } from "vue";
 
+import NotifsButton from "./NotifsButton.vue";
+
 const props = defineProps({
     snapshot: { type: Object, required: true },
+    notifs: { type: Object, default: () => ({ unseen: 0, dnd: false, centre: "" }) },
+    output: { type: String, default: "" },
     keyboard: { type: Object, default: () => ({ layout: "", capsLock: false, numLock: false }) },
     bluetooth: { type: Object, default: () => ({ powered: false, connected: 0 }) },
     // The power profile, which stands in for the battery slot on a machine
@@ -124,6 +128,8 @@ const batteryClass = computed(() => {
 
     <!-- The readouts, in the order the shell's own row has them. -->
     <div class="section">
+        <NotifsButton :notifs="notifs" :output="output" />
+
         <div
             v-if="status.showMicrophone && microphone"
             class="pill button icon-only"

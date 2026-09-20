@@ -318,6 +318,98 @@ pub fn bar_config() -> BarConfig {
     }
 }
 
+/// The notification options from shell.json, with the shell's own defaults.
+///
+/// Read per notification rather than cached: it changes when somebody moves a
+/// slider in the settings, and a bar that had to restart to notice would be a
+/// worse bar than the QML one it replaced.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotifsConfig {
+    /// Toasts leave the screen when their time is up. Off, they stay until
+    /// somebody dismisses them, except over a fullscreen window, where
+    /// nothing is allowed to sit for ever. Either way the notification itself
+    /// stays in the list: this is about the toast, not the history.
+    pub expire: bool,
+    /// Whether anything is shown over a fullscreen window at all.
+    pub fullscreen: bool,
+    /// Milliseconds a toast stays up when the sender does not say.
+    pub default_expire_timeout: u64,
+    /// The same, over a fullscreen window: shorter, because it is covering
+    /// something somebody is watching.
+    pub fullscreen_expire_timeout: u64,
+    /// How many of a group are shown before it collapses.
+    pub group_preview_num: i64,
+    /// Notifications open with their body already unfolded.
+    pub open_expanded: bool,
+    /// A click on a toast with exactly one action presses that action.
+    pub action_on_click: bool,
+    /// How far across its own width something has to be dragged before
+    /// letting go throws it away.
+    pub clear_threshold: f64,
+    /// How far up or down a drag has to go, in pixels, to fold or unfold.
+    pub expand_threshold: f64,
+}
+
+impl Default for NotifsConfig {
+    fn default() -> NotifsConfig {
+        // The plugin's own defaults (notifsconfig.hpp), so that a shell.json
+        // that says nothing about notifications means the same thing to this
+        // server as it did to the shell's.
+        NotifsConfig {
+            expire: true,
+            fullscreen: true,
+            default_expire_timeout: 5000,
+            fullscreen_expire_timeout: 2000,
+            group_preview_num: 3,
+            open_expanded: false,
+            action_on_click: false,
+            clear_threshold: 0.3,
+            expand_threshold: 20.0,
+        }
+    }
+}
+
+pub fn notifs_config() -> NotifsConfig {
+    let config = config_dir().map(|dir| json(dir.join("shell.json"))).unwrap_or(serde_json::Value::Null);
+    let fallback = NotifsConfig::default();
+    let Some(notifs) = config.get("notifs") else { return fallback };
+
+    let flag = |key: &str, default: bool| -> bool {
+        notifs.get(key).and_then(serde_json::Value::as_bool).unwrap_or(default)
+    };
+    let number = |key: &str, default: u64| -> u64 {
+        notifs.get(key).and_then(serde_json::Value::as_u64).unwrap_or(default)
+    };
+
+    NotifsConfig {
+        expire: flag("expire", fallback.expire),
+        // Spelled as a word in the config — "off" or "on" — because it was a
+        // three-way setting once and the shell still writes it that way.
+        fullscreen: notifs
+            .get("fullscreen")
+            .and_then(serde_json::Value::as_str)
+            .map(|mode| mode != "off")
+            .unwrap_or(fallback.fullscreen),
+        default_expire_timeout: number("defaultExpireTimeout", fallback.default_expire_timeout),
+        fullscreen_expire_timeout: number("fullscreenExpireTimeout", fallback.fullscreen_expire_timeout),
+        group_preview_num: notifs
+            .get("groupPreviewNum")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(fallback.group_preview_num),
+        open_expanded: flag("openExpanded", fallback.open_expanded),
+        action_on_click: flag("actionOnClick", fallback.action_on_click),
+        clear_threshold: notifs
+            .get("clearThreshold")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(fallback.clear_threshold),
+        expand_threshold: notifs
+            .get("expandThreshold")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(fallback.expand_threshold),
+    }
+}
+
 pub fn read() -> Logo {
     let prefs = state_dir().map(|dir| json(dir.join("prefs.json"))).unwrap_or(serde_json::Value::Null);
     let config = config_dir().map(|dir| json(dir.join("shell.json"))).unwrap_or(serde_json::Value::Null);

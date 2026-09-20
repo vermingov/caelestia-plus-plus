@@ -1,0 +1,678 @@
+/* Notifications: the toasts, and the centre they collect in.
+ *
+ * Drawn the way the bar's popouts are, because that is what they are: panes
+ * of the same near-black glass with the same single lit rim. The surface is
+ * not blurred by the compositor, so the panes are as dense as the bar's.
+ *
+ * Colour appears in exactly one case, a critical notification, which is the
+ * one thing here that is allowed to raise its voice.
+ */
+
+:root {
+    --pane: linear-gradient(160deg, var(--body-top) 0%, var(--body) 60%);
+    --pane-shadow:
+        0 18px 40px -12px rgba(0, 0, 0, 0.75),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.055),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.07);
+
+    /* Arriving decelerates into place; leaving accelerates out of it. */
+    --arrive: cubic-bezier(0.05, 0.7, 0.1, 1);
+    --leave: cubic-bezier(0.3, 0, 0.8, 0.15);
+    --settle: cubic-bezier(0.2, 0, 0, 1);
+
+    --off-screen: calc(100% + 28px);
+}
+
+/* ---- the corner that opens the centre ----------------------------------- */
+
+.corner {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 2px;
+    height: 140px;
+}
+
+/* ---- toasts -------------------------------------------------------------- */
+
+.stack {
+    position: fixed;
+    top: 6px;
+    right: 12px;
+    width: 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.toast {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 10px 12px 14px;
+    border-radius: var(--radius);
+    background: var(--pane);
+    box-shadow: var(--pane-shadow);
+    /* Follows the finger exactly while it is held, and settles when let go. */
+    transform: translateX(var(--pull, 0px));
+    transition: transform 320ms var(--settle);
+    touch-action: none;
+}
+
+.toast.dragging {
+    transition: none;
+    cursor: grabbing;
+}
+
+.toast.critical {
+    box-shadow:
+        0 18px 40px -12px rgba(0, 0, 0, 0.75),
+        inset 0 0 0 1px rgba(255, 84, 73, 0.32),
+        inset 0 1px 0 0 rgba(255, 138, 128, 0.18);
+}
+
+.toast-enter-active {
+    transition:
+        transform 420ms var(--arrive),
+        opacity 220ms ease-out;
+}
+
+.toast-enter-from {
+    transform: translateX(var(--off-screen));
+    opacity: 0;
+}
+
+/* Taken out of the flow as it goes, so the ones below close the gap while it
+ * is still on its way out rather than after. */
+.toast-leave-active {
+    position: absolute;
+    width: 100%;
+    transition:
+        transform 260ms var(--leave),
+        opacity 200ms ease-in;
+}
+
+.toast-leave-to {
+    /* Off the side it was thrown towards; see `exit` in Toast.vue. */
+    transform: translateX(var(--exit, var(--off-screen)));
+    opacity: 0;
+}
+
+.toast-move {
+    transition: transform 380ms var(--settle);
+}
+
+.content {
+    flex: 1;
+    min-width: 0;
+    /* Lines the first row of text up with the middle of the avatar when the
+     * toast is a single line tall. */
+    padding-top: 2px;
+}
+
+.headline {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+
+.headline .summary {
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.toast.expanded .headline .summary {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.time {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.sender-name {
+    padding-bottom: 2px;
+    font-size: 11px;
+    color: var(--text-faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.preview {
+    padding-top: 2px;
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---- folding ------------------------------------------------------------- */
+
+/* A row of a grid can be animated between nothing and its content's height,
+ * which a plain `height: auto` cannot. Everything that unfolds here does it
+ * this way, so nothing has to be measured. */
+.fold {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition:
+        grid-template-rows 320ms var(--settle),
+        opacity 160ms ease;
+}
+
+.fold.open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transition:
+        grid-template-rows 320ms var(--settle),
+        opacity 220ms ease 60ms;
+}
+
+.fold-inner {
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ---- the body ------------------------------------------------------------ */
+
+.body {
+    max-height: 220px;
+    padding-top: 5px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-dim);
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+}
+
+.body::-webkit-scrollbar {
+    display: none;
+}
+
+.body a {
+    color: var(--text);
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 255, 255, 0.3);
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.body a:hover {
+    text-decoration-color: currentColor;
+}
+
+.body .bold {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.body .italic {
+    font-style: italic;
+}
+
+.body .underline {
+    text-decoration: underline;
+}
+
+/* ---- buttons ------------------------------------------------------------- */
+
+.actions {
+    display: flex;
+    gap: 6px;
+    padding-top: 10px;
+}
+
+.round,
+.actions .label,
+.chevron,
+.count {
+    border: 0;
+    font: inherit;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition:
+        background 120ms ease,
+        color 120ms ease,
+        transform 120ms ease;
+}
+
+.round {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.round .material-symbols-rounded {
+    font-size: 16px;
+}
+
+.actions .label {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.round:hover,
+.actions .label:hover,
+.count:hover {
+    background: rgba(255, 255, 255, 0.13);
+    color: var(--text);
+}
+
+.round:active,
+.actions .label:active,
+.chevron:active,
+.count:active {
+    transform: scale(0.95);
+}
+
+/* Switched on, said with the fill the bar uses for anything that is on. */
+.round.on {
+    background: rgba(255, 255, 255, 0.16);
+    color: var(--text);
+}
+
+.chevron {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    background: transparent;
+}
+
+.chevron:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+}
+
+.chevron .material-symbols-rounded,
+.count .material-symbols-rounded {
+    font-size: 18px;
+    transition: transform 320ms var(--settle);
+}
+
+.toast.expanded .chevron .material-symbols-rounded,
+.group.expanded .count .material-symbols-rounded {
+    transform: rotate(180deg);
+}
+
+/* ---- the avatar ---------------------------------------------------------- */
+
+.avatar {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-dim);
+}
+
+.avatar.low {
+    background: rgba(255, 255, 255, 0.045);
+    color: var(--text-faint);
+}
+
+.avatar.critical {
+    background: rgba(255, 84, 73, 0.16);
+    color: var(--alert);
+}
+
+.avatar .picture {
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+    object-fit: cover;
+}
+
+.avatar .icon {
+    width: 60%;
+    height: 60%;
+    object-fit: contain;
+}
+
+.avatar .glyph {
+    font-size: 19px;
+}
+
+/* Drawn black and meant to be recoloured by a toolkit that is not here. */
+.avatar .symbolic {
+    filter: brightness(0) invert(0.85);
+}
+
+.avatar .sender {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    display: grid;
+    place-items: center;
+    width: 17px;
+    height: 17px;
+    border-radius: 999px;
+    background: #1b1b1f;
+    /* A ring of the pane's own colour, so it reads as cut out of the picture
+     * rather than stuck on top of it. */
+    box-shadow: 0 0 0 1.5px rgba(16, 16, 19, 0.95);
+}
+
+.avatar .sender img {
+    width: 11px;
+    height: 11px;
+    object-fit: contain;
+}
+
+.avatar .ring {
+    position: absolute;
+    inset: -3px;
+    width: calc(100% + 6px);
+    height: calc(100% + 6px);
+    transform: rotate(-90deg);
+    pointer-events: none;
+}
+
+.avatar .ring circle {
+    fill: none;
+    stroke: var(--text);
+    stroke-width: 2;
+    stroke-linecap: round;
+    transition: stroke-dasharray 320ms var(--settle);
+}
+
+.avatar.small {
+    width: 28px;
+    height: 28px;
+}
+
+.avatar.small .glyph {
+    font-size: 15px;
+}
+
+/* ---- more than fit -------------------------------------------------------- */
+
+.waiting {
+    align-self: flex-end;
+    padding: 4px 11px;
+    border-radius: 999px;
+    background: var(--body);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    font-size: 11.5px;
+    color: var(--text-dim);
+}
+
+/* ---- the centre ---------------------------------------------------------- */
+
+.centre {
+    position: fixed;
+    top: 6px;
+    right: 12px;
+    bottom: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 420px;
+    padding: 16px 16px 10px;
+    border-radius: 14px;
+    background: var(--pane);
+    box-shadow: var(--pane-shadow);
+}
+
+.centre-enter-active {
+    transition:
+        transform 400ms var(--arrive),
+        opacity 200ms ease-out;
+}
+
+.centre-leave-active {
+    transition:
+        transform 240ms var(--leave),
+        opacity 180ms ease-in;
+}
+
+.centre-enter-from,
+.centre-leave-to {
+    transform: translateX(var(--off-screen));
+    opacity: 0;
+}
+
+.centre-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+}
+
+.centre-head h1 {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+}
+
+.note {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-faint);
+}
+
+.empty {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    color: var(--text-faint);
+}
+
+.groups {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    /* Room for a row to be pulled sideways without the scroller clipping it
+     * against the text. */
+    margin: 0 -8px;
+    padding: 2px 8px 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+
+.groups::-webkit-scrollbar {
+    display: none;
+}
+
+/* ---- one application's notifications -------------------------------------- */
+
+.group-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transform: translateX(var(--pull, 0px));
+    transition: transform 320ms var(--settle);
+    touch-action: none;
+}
+
+.group-head.dragging,
+.row.dragging {
+    transition: none;
+    cursor: grabbing;
+}
+
+.group-head .app {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.count {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex: none;
+    height: 22px;
+    padding: 0 3px 0 9px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+.rows {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    /* Under the name rather than under the avatar, so a group reads as one
+     * thing with a face and the rows as what it said. */
+    padding: 3px 0 0 38px;
+}
+
+.row {
+    margin-left: -8px;
+    padding: 3px 8px;
+    border-radius: 9px;
+    transform: translateX(var(--pull, 0px));
+    transition:
+        transform 320ms var(--settle),
+        background 220ms ease,
+        padding 320ms var(--settle),
+        margin 320ms var(--settle);
+    touch-action: none;
+}
+
+/* Unfolded, each one gets ground of its own: there are several bodies in a
+ * column now, and where one ends has to be visible. */
+.row.expanded {
+    margin-bottom: 5px;
+    padding: 9px 10px 10px;
+    background: rgba(255, 255, 255, 0.045);
+}
+
+.row .line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    font-size: 12.5px;
+}
+
+.row .summary {
+    flex: none;
+    max-width: 62%;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.row.expanded .summary {
+    flex: 1;
+    max-width: none;
+    font-weight: 500;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.row.critical .summary {
+    color: var(--alert);
+}
+
+.row .excerpt {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.row-enter-active,
+.row-leave-active,
+.group-enter-active,
+.group-leave-active {
+    transition:
+        opacity 200ms ease,
+        transform 280ms var(--settle);
+}
+
+.row-enter-from,
+.row-leave-to,
+.group-enter-from,
+.group-leave-to {
+    opacity: 0;
+    transform: translateX(28px);
+}
+
+.row-leave-active,
+.group-leave-active {
+    position: absolute;
+    right: 0;
+}
+
+.row-leave-active {
+    left: 38px;
+}
+
+.group-leave-active {
+    left: 8px;
+    right: 8px;
+}
+
+.row-move,
+.group-move {
+    transition: transform 320ms var(--settle);
+}
+
+/* ---- for anyone who has asked for less of it ------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+    .toast,
+    .toast-enter-active,
+    .toast-leave-active,
+    .toast-move,
+    .centre-enter-active,
+    .centre-leave-active,
+    .fold,
+    .fold.open,
+    .row,
+    .row-move,
+    .group-move,
+    .group-head {
+        transition-duration: 1ms;
+    }
+}

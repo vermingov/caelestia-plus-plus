@@ -31,6 +31,7 @@
           "$HOME/.icons/**",
           "$HOME/.local/share/icons/**",
           "$HOME/.local/share/**",
+          "$CACHE/caelestia/imagecache/**",
           "/usr/share/icons/**",
           "/usr/share/pixmaps/**",
           "/usr/local/share/icons/**",

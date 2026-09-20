@@ -14,13 +14,15 @@ export default defineConfig({
     build: {
         target: "esnext",
         emptyOutDir: true,
-        // Three pages, because the bar, the panel and the launcher are three
-        // windows with nothing in common but the stylesheet.
+        // Four pages, because the bar, the panel, the launcher and the
+        // notifications are four windows with nothing in common but the
+        // stylesheet.
         rollupOptions: {
             input: {
                 main: fileURLToPath(new URL("index.html", import.meta.url)),
                 panel: fileURLToPath(new URL("panel.html", import.meta.url)),
-                launcher: fileURLToPath(new URL("launcher.html", import.meta.url))
+                launcher: fileURLToPath(new URL("launcher.html", import.meta.url)),
+                notifs: fileURLToPath(new URL("notifs.html", import.meta.url))
             }
         }
     }
