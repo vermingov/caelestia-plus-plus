@@ -69,21 +69,37 @@ const TICK: Duration = Duration::from_secs(1);
 /// could change.
 const SLOW_TICK: Duration = Duration::from_secs(5);
 
+/// Why nearly every command below says `(async)`.
+///
+/// Tauri runs a synchronous command on the main thread — the same thread the
+/// GTK main loop and the webview's compositor live on. Every one of these
+/// asks something outside the process: a hyprctl round trip, `nmcli`,
+/// `bluetoothctl`, a DBus call to a tray app. `pointer` alone runs five times
+/// a second for as long as the pointer is over a popout, and `wifi_join`
+/// blocks until the association finishes or gives up.
+///
+/// On the main thread that is not slow, it is *frozen*: no frame, no hover,
+/// no click, for as long as the other program takes. `(async)` puts the
+/// command on the async runtime instead, where blocking costs a worker thread
+/// and nothing anybody can see. Only the handful that build, show or measure
+/// a window stay synchronous, because those genuinely have to be on the
+/// thread that owns the window.
+
 /// Which mark the bar wears. Read on demand: it changes when a person edits
 /// their config, not on a tick.
-#[tauri::command]
+#[tauri::command(async)]
 fn logo() -> logo::Logo {
     logo::read()
 }
 
 /// The bar's own options, read from shell.json.
-#[tauri::command]
+#[tauri::command(async)]
 fn bar_config() -> logo::BarConfig {
     logo::bar_config()
 }
 
 /// What the bar is made of and in what order, which is the user's config.
-#[tauri::command]
+#[tauri::command(async)]
 fn layout() -> logo::Layout {
     logo::layout()
 }
@@ -94,7 +110,7 @@ fn layout() -> logo::Layout {
 /// the events and the hover state that would normally answer that are both
 /// unreliable once the pointer crosses out of the surface's input region.
 /// Returns nothing when the compositor cannot be asked.
-#[tauri::command]
+#[tauri::command(async)]
 fn pointer() -> Option<(i32, i32)> {
     let (x, y) = hypr::cursor()?;
     let (left, top) = surface_origin();
@@ -127,7 +143,7 @@ fn surface_origin() -> (i32, i32) {
     cache.0
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn state() -> hypr::State {
     hypr::read_state()
 }
@@ -137,34 +153,34 @@ fn state() -> hypr::State {
 /// Each of them only emits on a change, and their first change happens while
 /// the webview is still starting — so a front end that has just subscribed
 /// asks once rather than waiting for the next one.
-#[tauri::command]
+#[tauri::command(async)]
 fn snapshot(
     watcher: tauri::State<'_, guards::Watcher>,
 ) -> (Vec<tray::Item>, services::Snapshot, Option<media::NowPlaying>) {
     (tray::items(), services::read(watcher.read()), media::now())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn focus_workspace(id: i64) {
     hypr::dispatch(&format!("workspace {id}"));
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn toggle_special(name: String) {
     hypr::toggle_special(&name);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn cycle_workspace(forward: bool) {
     hypr::dispatch(if forward { "workspace r+1" } else { "workspace r-1" });
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn volume(delta: i64) {
     volume::nudge(delta);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn volume_to(level: i64) {
     volume::set(level);
 }
@@ -202,70 +218,70 @@ pub struct Rect {
     pub height: i32,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn mute() {
     volume::toggle_mute();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn mic_mute() {
     volume::toggle_microphone();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn mic_to(level: i64) {
     volume::set_microphone(level);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn media_control(action: String) {
     media::control(&action);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn tray_activate(key: String, x: i32, y: i32) {
     tray::activate(&key, x, y);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn tray_secondary(key: String, x: i32, y: i32) {
     tray::secondary_activate(&key, x, y);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn tray_menu(key: String) -> Vec<tray::MenuEntry> {
     tray::menu(&key)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn tray_click(key: String, id: i32) {
     tray::click(&key, id);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn brightness(delta: i64) {
     system::nudge_brightness(delta);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn brightness_to(level: i64) {
     system::set_brightness(level);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn power_profile(profile: String) {
     services::set_power_profile(&profile);
 }
 
 /// Opens the shell's security centre on whichever tab is asking.
-#[tauri::command]
+#[tauri::command(async)]
 fn dynamic_profile(on: bool) {
     services::set_dynamic(on);
 }
 
 /// Opens the shell's nexus, which is where its detached panels live — the
 /// "open settings" the shell's own popouts offer.
-#[tauri::command]
+#[tauri::command(async)]
 fn open_settings() {
     services::ipc("nexus", "open", &[]);
 }
@@ -290,32 +306,32 @@ fn panel_tab(tab: tauri::State<'_, Mutex<String>>) -> String {
     tab.lock().map(|tab| tab.clone()).unwrap_or_default()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn startup_list() -> Vec<startup::Entry> {
     startup::scan()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn startup_set(source: String, key: String, enabled: bool) {
     startup::set_enabled(&source, &key, enabled);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn startup_remove(source: String, key: String) {
     startup::remove(&source, &key);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn startup_add(name: String, exec: String) {
     startup::add(&name, &exec);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn guards_detail(watcher: tauri::State<'_, guards::Watcher>) -> Vec<guards::Detail> {
     watcher.detail()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn guards_verdict(
     which: String,
     id: i64,
@@ -326,7 +342,7 @@ fn guards_verdict(
     watcher.verdict(&which, id, &action, remember);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn guards_set_rule(
     which: String,
     exe: String,
@@ -337,12 +353,12 @@ fn guards_set_rule(
     watcher.set_rule(&which, &exe, &action, &name);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn guards_delete_rule(which: String, exe: String, watcher: tauri::State<'_, guards::Watcher>) {
     watcher.delete_rule(&which, &exe);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn guards_set_enabled(which: String, enabled: bool, watcher: tauri::State<'_, guards::Watcher>) {
     watcher.set_enabled(&which, enabled);
 }
@@ -350,7 +366,7 @@ fn guards_set_enabled(which: String, enabled: bool, watcher: tauri::State<'_, gu
 /// Flips one feature mode by id, through the shell's own hub — the modes it
 /// owns persist to disk and some install a privileged half on first use, none
 /// of which belongs in a bar.
-#[tauri::command]
+#[tauri::command(async)]
 fn feature_toggle(id: String) {
     services::ipc("features", "toggle", &[&id]);
 }
@@ -361,77 +377,77 @@ fn features_menu(app: AppHandle) {
 }
 
 /// The session menu is one of the shell's drawers, not a thing of ours.
-#[tauri::command]
+#[tauri::command(async)]
 fn session() {
     services::ipc("drawers", "toggle", &["session"]);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn wifi_list() -> Vec<services::Wifi> {
     services::networks()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn wifi_join(ssid: String, password: String) -> Result<(), String> {
     services::join(&ssid, &password)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn wifi_radio(on: bool) {
     services::set_wifi(on);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn wifi_rescan() {
     services::rescan();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn ethernet_list() -> Vec<services::Ethernet> {
     services::ethernet()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn ethernet_set(interface: String, connect: bool) {
     services::set_ethernet(&interface, connect);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn bluetooth_discover(on: bool) {
     services::set_discovering(on);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn bluetooth_forget(address: String) {
     services::forget_device(&address);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn audio_nodes() -> (Vec<services::AudioNode>, Vec<services::AudioNode>) {
     (services::sinks(), services::sources())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn audio_default(kind: String, name: String) {
     services::set_default_node(&kind, &name);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn bed_mode() {
     services::toggle_bed_mode();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn bluetooth_devices() -> Vec<services::Device> {
     services::devices()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn bluetooth_radio(on: bool) {
     services::set_bluetooth(on);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn bluetooth_connect(address: String, connect: bool) {
     services::connect_device(&address, connect);
 }
@@ -463,7 +479,7 @@ fn diag(window: WebviewWindow, message: String) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn run(command: String) {
     let _ = std::process::Command::new("sh")
         .args(["-c", &format!("setsid -f {command} >/dev/null 2>&1")])
