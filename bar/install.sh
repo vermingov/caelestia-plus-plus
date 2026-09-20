@@ -39,7 +39,10 @@ stop_running() {
     # The visualiser's recorder is a child, and killing its parent does not
     # always take it with it — an orphan left holding the sink monitor is a
     # process per install that nothing will ever clean up.
-    pkill -x pw-record 2>/dev/null || true
+    #
+    # By the command line the bar starts it with, old form and new: a bare
+    # `pkill -x pw-record` also ends whatever else is being recorded.
+    pkill -f '^pw-record --raw .*--channels=1 --format=f32 --latency=20ms -$' 2>/dev/null || true
     rm -f "${XDG_RUNTIME_DIR:-/tmp}/caelestia-launcher.sock"
 }
 
