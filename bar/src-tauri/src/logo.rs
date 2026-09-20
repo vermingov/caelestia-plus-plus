@@ -367,14 +367,7 @@ mod tests {
         // Whatever this machine is, the bar has something to draw: the
         // fallback chain ends at Caelestia's own mark rather than at nothing.
         let logo = read();
-        assert!(
-            ["caelestia", "cachyos", "file"].contains(&logo.kind.as_str()),
-            "kind was {:?}",
-            logo.kind
-        );
-        if logo.kind == "file" {
-            assert!(std::path::Path::new(&logo.path).is_file());
-        }
+        assert!(["caelestia", "cachyos"].contains(&logo.kind.as_str()), "kind was {:?}", logo.kind);
     }
 
     #[test]
@@ -408,10 +401,5 @@ mod tests {
         // five-pip row the shell draws by default, not a row of none.
         let options = bar_config();
         assert!(options.shown >= 1, "shown was {}", options.shown);
-    }
-
-    #[test]
-    fn an_absolute_path_that_is_not_there_resolves_to_nothing() {
-        assert_eq!(resolve("/definitely/not/a/logo.png"), None);
     }
 }

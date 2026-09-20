@@ -104,7 +104,7 @@ mod tests {
         config.launcher.actions = vec![risky, normal];
 
         // Counted by name: the list also carries the built-in mode entries.
-        let offers = |config: &super::config::Config, name: &str| {
+        let offers = |config: &Config, name: &str| {
             config.usable_actions().iter().any(|a| a.name == name)
         };
 

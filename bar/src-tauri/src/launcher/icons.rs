@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn resolves_icons_for_the_apps_on_this_machine() {
         let icons = Icons::new();
-        let apps = super::apps::load();
+        let apps = crate::launcher::apps::load();
         let named: Vec<_> = apps.iter().filter(|a| !a.icon.is_empty()).collect();
         assert!(!named.is_empty(), "no app declares an icon");
 
