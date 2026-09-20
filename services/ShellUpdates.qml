@@ -235,8 +235,6 @@ qs --version >/dev/null 2>&1 || { echo QS_BROKEN; exit 8; }`]
             return;
         }
         job = queue.shift();
-        if (job.slow)
-            Toaster.toast(qsTr("Building %1").arg(job.label ?? job.name), qsTr("A new version needs it rebuilt — this takes a few minutes"), "update");
         buildProc.running = true;
     }
 
@@ -293,9 +291,19 @@ if [ "$(cat "$stamp" 2>/dev/null)" = "$tree" ]; then
 fi
 
 mkdir -p '${root.stampDir}'
+echo BUILDING
 "$install" >/dev/null 2>&1 || exit 1
-printf '%s' "$tree" > "$stamp"
-echo BUILT`]
+printf '%s' "$tree" > "$stamp"`]
+
+        // Announced from the script, which is the first to know that a build
+        // is needed at all. Announced before it ran, every start of the shell
+        // promised a few minutes of building that the stamp then skipped.
+        stdout: SplitParser {
+            onRead: line => {
+                if (line === "BUILDING" && root.job?.slow)
+                    Toaster.toast(qsTr("Building %1").arg(root.job.label ?? root.job.name), qsTr("A new version needs it rebuilt — this takes a few minutes"), "update");
+            }
+        }
 
         onExited: code => {
             if (code !== 0)
