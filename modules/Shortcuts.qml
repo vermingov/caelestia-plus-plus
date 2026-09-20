@@ -107,6 +107,13 @@ Scope {
         onPressed: {
             if (root.hasFullscreen)
                 return;
+            // The bar's notification centre, while the bar is the one
+            // drawing it. Asked for directly rather than through the flag
+            // below, because the flag can only ever open it.
+            if (Notifs.external) {
+                Notifs.toggleCentre();
+                return;
+            }
             const screenState = ShellState.forActive();
             screenState.sidebar = !screenState.sidebar;
         }

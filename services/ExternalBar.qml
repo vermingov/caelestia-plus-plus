@@ -35,11 +35,33 @@ Singleton {
     readonly property alias external: root.installed
     property bool installed: false
 
+    // Whether the installed bar is one that serves notifications, which its
+    // installer records. Not the same question as whether a bar is installed:
+    // an update restarts the shell into the new checkout before it rebuilds
+    // the bar, so for a few minutes the bar on disk is the previous build.
+    // The shell's own server keeps serving until that build has been replaced.
+    property bool servesNotifs
+    // True once that has been answered, whichever way
+    property bool notifsKnown
+
     // Asked again after anything installs or removes the binary, because the
-    // check below runs once and a shell that learned the answer at startup
+    // checks below run once and a shell that learned the answers at startup
     // would keep both this and the other one on screen until it restarted.
     function recheck(): void {
         check.running = true;
+        notifsCheck.running = true;
+    }
+
+    Process {
+        id: notifsCheck
+
+        running: true
+        command: ["test", "-e", `${Paths.state}/bar-serves-notifs`]
+
+        onExited: code => {
+            root.servesNotifs = code === 0;
+            root.notifsKnown = true;
+        }
     }
 
     Process {
