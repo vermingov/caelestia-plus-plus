@@ -3,6 +3,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { inject, onUnmounted, ref } from "vue";
 
 import { whenPointerLeaves } from "../leaving.js";
+import { closed, opens } from "../overhang.js";
 
 defineProps({
     items: { type: Array, default: () => [] }
@@ -140,7 +141,7 @@ function place() {
 
     <!-- The item's own menu, drawn here rather than by the application: an
          X11 menu window has nowhere to go on a layer surface. -->
-    <Transition name="popout">
+    <Transition name="popout" @before-enter="opens" @after-leave="closed">
         <div
             v-if="menu.entries.length"
             ref="panel"

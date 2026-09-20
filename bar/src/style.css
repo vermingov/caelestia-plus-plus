@@ -1156,9 +1156,13 @@ body,
     stroke: rgba(255, 255, 255, 0.1);
 }
 
+/* No transition on the reading. The dials are fed once a second, so easing
+ * each one for 420ms kept the page animating at sixty frames a second for
+ * nearly half of every second, forever — and every frame is a repaint of the
+ * whole surface in two processes. That was eight percent of a core spent on a
+ * few pixels of arc travel on an 18px dial. */
 .ring .fill {
     stroke: var(--accent);
-    transition: stroke-dasharray 420ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .ring .name {

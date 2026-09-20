@@ -2,6 +2,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { computed, ref, watch } from "vue";
 
+import { closed, opens } from "../overhang.js";
+
 const props = defineProps({
     playing: { type: Object, default: null },
     // Which item is being hovered, "" for none.
@@ -283,7 +285,7 @@ function place() {
 </script>
 
 <template>
-    <Transition name="popout">
+    <Transition name="popout" @before-enter="opens" @after-leave="closed">
         <div
             v-if="id"
             ref="panel"

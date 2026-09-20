@@ -7,8 +7,9 @@ const props = defineProps({
     value: { type: Number, default: 0 }
 });
 
-// A circle drawn as a stroked arc: the dash pattern is the reading, so the
-// only thing that animates is one number and the browser composites the rest.
+// A circle drawn as a stroked arc: the dash pattern is the reading, so a new
+// value is one attribute changing and one frame painted. It is deliberately
+// not eased; see `.ring .fill` in the stylesheet for what that cost.
 const RADIUS = 7;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 

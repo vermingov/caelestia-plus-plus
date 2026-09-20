@@ -5,20 +5,24 @@
 //! workspaces, then what is focused, then a spacer, then the readouts and the
 //! clock — because that layout is not what was wrong with it.
 
+mod children;
 mod guards;
 pub mod launcher;
 mod hypr;
 mod icons;
 mod logo;
 mod media;
+#[cfg(feature = "layer-shell")]
+mod repaint;
 mod services;
 mod spectrum;
 mod startup;
 mod system;
 mod tray;
+mod volume;
 
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -39,6 +43,11 @@ const FLOAT: i32 = 12;
 
 /// What the compositor is asked to keep clear.
 const HEIGHT: i32 = PILL + FLOAT;
+
+/// Wider than any output. Regions built with it are intersected with the
+/// surface, whose width is decided by the anchors rather than here.
+#[cfg(feature = "layer-shell")]
+const ANY_WIDTH: i32 = 10_000;
 
 /// How tall the *surface* is. Popouts are drawn inside it, so it has to be
 /// tall enough for the largest of them without their having to scroll. It is
@@ -152,12 +161,12 @@ fn cycle_workspace(forward: bool) {
 
 #[tauri::command]
 fn volume(delta: i64) {
-    system::set_volume(delta);
+    volume::nudge(delta);
 }
 
 #[tauri::command]
 fn volume_to(level: i64) {
-    system::set_volume_to(level);
+    volume::set(level);
 }
 
 /// What of the surface accepts the pointer.
@@ -173,6 +182,17 @@ fn reach(popout: Option<Rect>, window: tauri::WebviewWindow) {
     set_reach(&window, popout);
 }
 
+/// Whether the page is drawing anything below the strip: a popout, a tray
+/// menu, either of them on its way in or out.
+///
+/// Not the same thing as `reach`, which ends when the pointer can no longer
+/// use a popout. That is when it starts to leave, and it is still being drawn
+/// for as long as leaving takes.
+#[tauri::command]
+fn overhang(open: bool, window: tauri::WebviewWindow) {
+    set_overhang(&window, open);
+}
+
 /// A popout's box in surface coordinates, as the front end measured it.
 #[derive(Clone, Copy, serde::Deserialize)]
 pub struct Rect {
@@ -184,17 +204,17 @@ pub struct Rect {
 
 #[tauri::command]
 fn mute() {
-    system::toggle_mute();
+    volume::toggle_mute();
 }
 
 #[tauri::command]
 fn mic_mute() {
-    system::toggle_microphone();
+    volume::toggle_microphone();
 }
 
 #[tauri::command]
 fn mic_to(level: i64) {
-    system::set_microphone_to(level);
+    volume::set_microphone(level);
 }
 
 #[tauri::command]
@@ -452,7 +472,6 @@ fn run(command: String) {
 
 pub fn start() {
     tauri::Builder::default()
-        .manage(Mutex::new(system::Sampler::new()))
         // The two guards push over their own sockets, so their state is
         // already current by the time anything asks for it.
         .manage(guards::Watcher::start())
@@ -516,6 +535,7 @@ pub fn start() {
             bluetooth_radio,
             bluetooth_connect,
             reach,
+            overhang,
             toggle_launcher,
             run,
             diag,
@@ -592,6 +612,34 @@ fn trim_webview(window: &WebviewWindow) {
     });
 }
 
+/// Puts a window that is about to be built in the first bar's web process.
+///
+/// WebKit gives every view a web process of its own unless it is told the
+/// view is related to one it already has. The launcher and the panel are
+/// hidden for nearly all of a session, and each was most of a hundred
+/// megabytes of process kept alive to be hidden in.
+///
+/// Main thread only, which is where windows are built. The view is a GTK
+/// object and cannot be handed between threads, so it is left in a slot on
+/// this one — and `with_webview` only runs before it returns when it is called
+/// from the thread it would otherwise have posted to.
+fn sharing_web_process<'a>(
+    builder: tauri::WebviewWindowBuilder<'a, tauri::Wry, AppHandle>,
+    app: &AppHandle,
+) -> tauri::WebviewWindowBuilder<'a, tauri::Wry, AppHandle> {
+    thread_local! {
+        static FIRST: std::cell::RefCell<Option<webkit2gtk::WebView>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    let Some(bar) = app.get_webview_window("bar") else { return builder };
+    let _ = bar.with_webview(|webview| FIRST.with(|first| *first.borrow_mut() = Some(webview.inner())));
+    match FIRST.with(|first| first.borrow_mut().take()) {
+        Some(view) => builder.with_related_view(view),
+        None => builder,
+    }
+}
+
 /// The panel's window label.
 const PANEL: &str = "panel";
 
@@ -619,7 +667,7 @@ fn open_panel(app: &AppHandle, tab: &str) {
         return;
     }
 
-    let built = tauri::WebviewWindowBuilder::new(app, PANEL, tauri::WebviewUrl::App("panel.html".into()))
+    let builder = tauri::WebviewWindowBuilder::new(app, PANEL, tauri::WebviewUrl::App("panel.html".into()))
         .title("caelestia-panel")
         .inner_size(1920.0, 1080.0)
         .resizable(true)
@@ -627,8 +675,8 @@ fn open_panel(app: &AppHandle, tab: &str) {
         .transparent(true)
         .shadow(false)
         .visible(false)
-        .skip_taskbar(true)
-        .build();
+        .skip_taskbar(true);
+    let built = sharing_web_process(builder, app).build();
 
     match built {
         Ok(panel) => {
@@ -703,7 +751,7 @@ fn open_bars(app: &AppHandle) -> Vec<(WebviewWindow, Option<gtk::gdk::Monitor>)>
         let window = match app.get_webview_window(&label) {
             Some(window) => window,
             None => {
-                let built = tauri::WebviewWindowBuilder::new(
+                let builder = tauri::WebviewWindowBuilder::new(
                     app,
                     &label,
                     tauri::WebviewUrl::App("index.html".into()),
@@ -732,10 +780,9 @@ fn open_bars(app: &AppHandle) -> Vec<(WebviewWindow, Option<gtk::gdk::Monitor>)>
                             payload.url()
                         );
                     }
-                })
-                .build();
+                });
 
-                match built {
+                match sharing_web_process(builder, app).build() {
                     Ok(window) => window,
                     Err(e) => {
                         eprintln!("caelestia-bar: cannot open a bar for {name}: {e}");
@@ -862,22 +909,50 @@ fn rebuild_bars(app: &AppHandle) {
     });
 }
 
+/// The readouts, once a second, and the volume the moment it moves.
 fn sample_system(app: AppHandle) {
+    let (moved, moves) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut last = None;
+        volume::watch(|levels| {
+            let _ = moved.send(levels);
+        });
+    });
+
+    std::thread::spawn(move || {
+        let mut sampler = system::Sampler::new();
+        let mut levels = volume::Levels::default();
+        let mut shown: Option<system::Snapshot> = None;
+        let mut due = Instant::now() + TICK;
+
         loop {
-            std::thread::sleep(TICK);
-            let sampler = app.state::<Mutex<system::Sampler>>();
-            let Ok(mut sampler) = sampler.lock() else { continue };
-            let snapshot = sampler.sample();
-            drop(sampler);
+            let snapshot = match moves.recv_timeout(due.saturating_duration_since(Instant::now())) {
+                // Only the volume is new, and the rest stays as it was read:
+                // a CPU percentage averaged over the moment since a volume
+                // key was pressed is noise.
+                Ok(now) => {
+                    levels = now;
+                    let Some(shown) = &shown else { continue };
+                    system::Snapshot {
+                        volume: levels.volume.clone(),
+                        microphone: levels.microphone.clone(),
+                        ..shown.clone()
+                    }
+                }
+                Err(_) => {
+                    // A watcher that has gone lands here at once rather than
+                    // on time, and must not turn the tick into a spin.
+                    std::thread::sleep(due.saturating_duration_since(Instant::now()));
+                    due = Instant::now() + TICK;
+                    sampler.sample(&levels)
+                }
+            };
 
             // Nothing to draw differently, nothing to wake the webview for.
             // At rest this is most of the ticks.
-            if last.as_ref() == Some(&snapshot) {
+            if shown.as_ref() == Some(&snapshot) {
                 continue;
             }
-            last = Some(snapshot.clone());
+            shown = Some(snapshot.clone());
             let _ = app.emit("system", snapshot);
         }
     });
@@ -996,6 +1071,7 @@ fn place(window: &WebviewWindow, monitor: Option<gtk::gdk::Monitor>) {
     // placeholder, because anchoring to both side edges overrides it.
     gtk_window.set_default_size(1920, SURFACE);
     clip_input(&gtk_window, None);
+    repaint::begin(&gtk_window);
 }
 
 /// Limits the surface's input region to the top `height` pixels of it.
@@ -1007,9 +1083,7 @@ fn clip_input(gtk_window: &gtk::ApplicationWindow, popout: Option<Rect>) {
     use gtk::cairo::{RectangleInt, Region};
     use gtk::prelude::*;
 
-    // Wider than any output: the region is intersected with the surface, and
-    // the width is decided by the anchors rather than here.
-    let region = Region::create_rectangle(&RectangleInt::new(0, 0, 10_000, HEIGHT));
+    let region = Region::create_rectangle(&RectangleInt::new(0, 0, ANY_WIDTH, HEIGHT));
     if let Some(rect) = popout {
         region.union_rectangle(&RectangleInt::new(
             rect.x.max(0),
@@ -1037,6 +1111,22 @@ fn set_reach(window: &tauri::WebviewWindow, popout: Option<Rect>) {
 /// ordinary one and is already only as big as itself.
 #[cfg(not(feature = "layer-shell"))]
 fn set_reach(_window: &tauri::WebviewWindow, _popout: Option<Rect>) {}
+
+/// Tells the surface how much of itself a frame has to repaint, on the GTK
+/// thread for the same reason as `set_reach`.
+#[cfg(feature = "layer-shell")]
+fn set_overhang(window: &tauri::WebviewWindow, open: bool) {
+    let window = window.clone();
+    let _ = window.clone().run_on_main_thread(move || {
+        if let Ok(gtk_window) = window.gtk_window() {
+            repaint::follow(&gtk_window, open);
+        }
+    });
+}
+
+/// And nothing below the strip to leave unpainted either.
+#[cfg(not(feature = "layer-shell"))]
+fn set_overhang(_window: &tauri::WebviewWindow, _open: bool) {}
 
 #[cfg(not(feature = "layer-shell"))]
 fn place(window: &WebviewWindow, _monitor: Option<()>) {

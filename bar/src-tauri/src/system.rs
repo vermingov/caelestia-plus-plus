@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::volume::{Levels, Volume};
+
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -40,14 +42,6 @@ pub struct Battery {
     /// Minutes until full, or until empty when running on it. None while the
     /// draw is too small or too erratic to divide by.
     pub minutes: Option<i64>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Volume {
-    /// 0–100, which may exceed 100 where the sink allows it.
-    pub level: i64,
-    pub muted: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
@@ -226,60 +220,6 @@ fn wifi_strength(interface: &str) -> i64 {
         .unwrap_or(100)
 }
 
-/// PipeWire's volume, via wpctl.
-///
-/// The one thing here that is not a file. PipeWire's own API needs a event
-/// loop of its own to be worth using, and this runs once a second against a
-/// binary that exits immediately.
-fn read_volume() -> Option<Volume> {
-    read_node("@DEFAULT_AUDIO_SINK@")
-}
-
-fn read_microphone() -> Option<Volume> {
-    read_node("@DEFAULT_AUDIO_SOURCE@")
-}
-
-fn read_node(node: &str) -> Option<Volume> {
-    let output = std::process::Command::new("wpctl").args(["get-volume", node]).output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    // "Volume: 0.42" or "Volume: 0.42 [MUTED]"
-    let level = text.split_whitespace().nth(1)?.parse::<f64>().ok()?;
-    Some(Volume { level: (level * 100.0).round() as i64, muted: text.contains("MUTED") })
-}
-
-pub fn set_volume(delta: i64) {
-    let sign = if delta >= 0 { "+" } else { "-" };
-    let _ = std::process::Command::new("wpctl")
-        .args(["set-volume", "-l", "1.5", "@DEFAULT_AUDIO_SINK@", &format!("{}%{sign}", delta.abs())])
-        .status();
-}
-
-/// Sets the volume outright, for the popout's slider. Capped at 100: the
-/// headroom above it is for the wheel, where asking for it is deliberate.
-pub fn set_volume_to(level: i64) {
-    let _ = std::process::Command::new("wpctl")
-        .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{}%", level.clamp(0, 100))])
-        .status();
-}
-
-pub fn toggle_mute() {
-    let _ = std::process::Command::new("wpctl")
-        .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
-        .status();
-}
-
-pub fn toggle_microphone() {
-    let _ = std::process::Command::new("wpctl")
-        .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
-        .status();
-}
-
-pub fn set_microphone_to(level: i64) {
-    let _ = std::process::Command::new("wpctl")
-        .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", &format!("{}%", level.clamp(0, 100))])
-        .status();
-}
-
 /// Holds the previous CPU reading so usage can be a rate rather than an
 /// all-time average.
 #[derive(Default)]
@@ -292,7 +232,9 @@ impl Sampler {
         Sampler { previous: read_cpu_times() }
     }
 
-    pub fn sample(&mut self) -> Snapshot {
+    /// Everything here is read now except `levels`, which PipeWire reports
+    /// as they change and the caller is holding the latest of.
+    pub fn sample(&mut self, levels: &Levels) -> Snapshot {
         let now = read_cpu_times();
         let busy = now.busy.saturating_sub(self.previous.busy) as f64;
         let total = now.total.saturating_sub(self.previous.total) as f64;
@@ -305,8 +247,8 @@ impl Sampler {
             memory_used_gb: used,
             memory_total_gb: total_gb,
             battery: read_battery(),
-            volume: read_volume(),
-            microphone: read_microphone(),
+            volume: levels.volume.clone(),
+            microphone: levels.microphone.clone(),
             brightness: read_brightness(),
             gpu: read_gpu(),
             network: read_network(),
@@ -323,7 +265,7 @@ mod tests {
         let mut sampler = Sampler::new();
         // Two samples back to back can legitimately be 0%; the point is that
         // it is never nonsense.
-        let snapshot = sampler.sample();
+        let snapshot = sampler.sample(&Levels::default());
         assert!((0.0..=100.0).contains(&snapshot.cpu), "cpu was {}", snapshot.cpu);
     }
 

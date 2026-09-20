@@ -11,10 +11,11 @@
 //! in a linear algebra stack to do it would cost more to build than it saves
 //! to run.
 
-use std::io::Read;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::io::{ErrorKind, Read};
+use std::process::{ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
+
+use crate::children;
 
 /// Power of two, and the only one that matters: 1024 samples at 44.1kHz is a
 /// 23ms window, which is short enough to feel immediate and long enough to
@@ -44,6 +45,16 @@ const MAX_FPS: u64 = 15;
 /// reads as flickering rather than as sound.
 const ATTACK: f32 = 0.45;
 const DECAY: f32 = 0.12;
+
+/// How long the recorder may write nothing before whatever was playing is
+/// taken to have stopped. Its buffers are 20ms apart, so this is several
+/// missing in a row rather than one arriving late.
+const STALL: Duration = Duration::from_millis(120);
+
+/// How long one window lasts. Once the recorder has stalled, silence is fed
+/// to the analyser at this pace, so the bars fall exactly as fast as they
+/// would have if the silence had been recorded.
+const WINDOW_TIME: Duration = Duration::from_micros(WINDOW as u64 * 1_000_000 / RATE as u64);
 
 /// The twiddle factors for one window size, computed once.
 ///
@@ -186,17 +197,6 @@ impl Analyser {
     }
 }
 
-/// The node id of whatever the session manager currently calls the default
-/// sink. Re-read on every reconnect, so changing outputs picks the new one up.
-fn default_sink() -> Option<String> {
-    let output = Command::new("wpctl").args(["inspect", "@DEFAULT_AUDIO_SINK@"]).output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    // "id 56, type PipeWire:Interface:Node"
-    let first = text.lines().next()?;
-    let id = first.strip_prefix("id ")?.split(',').next()?;
-    id.parse::<u32>().ok().map(|id| id.to_string())
-}
-
 /// Quantises a frame to bytes.
 ///
 /// The levels cross an IPC boundary as JSON thirty times a second, and a
@@ -204,6 +204,161 @@ fn default_sink() -> Option<String> {
 /// 16px tall there are not 256 distinguishable heights, let alone 2^24.
 fn quantise(bars: [f32; BARS]) -> Vec<u8> {
     bars.iter().map(|level| (level.clamp(0.0, 1.0) * 255.0) as u8).collect()
+}
+
+/// The recorder, ready to start.
+fn recorder() -> Command {
+    let mut command = Command::new("pw-record");
+    command
+        .args([
+            // Raw, or pw-record writes a container header first and every
+            // sample after it is read four bytes out of phase.
+            "--raw",
+            // `stream.capture.sink` is how PipeWire spells "monitor what is
+            // coming out of the default sink", and leaving the target to the
+            // session manager is what makes it *stay* the default sink: the
+            // stream is moved when the default changes. Naming a target here
+            // pins it instead — and `--target` takes a serial, not the id
+            // `wpctl` prints, so a pinned one that stopped matching fell back
+            // to the default source and the bars drew the microphone.
+            //
+            // Passive, so the capture alone never keeps the sink running.
+            // With nothing playing the sink suspends, the recorder writes
+            // nothing, and this thread sleeps in `poll` instead of analysing
+            // forty-three windows of silence a second, all day.
+            "--properties={ stream.capture.sink=true node.passive=true node.name=caelestia-visualiser }",
+            "--rate=44100",
+            "--channels=1",
+            "--format=f32",
+            "--latency=20ms",
+            "-",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    // An orphaned recorder stays on the sink's monitor for good.
+    children::bind_to_parent(&mut command);
+    command
+}
+
+/// What came of waiting for the next window.
+enum Next {
+    Window,
+    /// Nothing arrived in time: whatever was playing has stopped.
+    Stalled,
+    /// The recorder is gone.
+    Closed,
+}
+
+/// The recorder's output, a window at a time.
+///
+/// The capture is passive, so when the music stops the samples simply stop
+/// coming, often part-way through a window. A plain `read_exact` would sit on
+/// that half window until the next song, with the bars frozen wherever the
+/// last one left them.
+struct Windows {
+    stdout: ChildStdout,
+    raw: Vec<u8>,
+    filled: usize,
+}
+
+impl Windows {
+    fn new(stdout: ChildStdout) -> Windows {
+        Windows { stdout, raw: vec![0; WINDOW * 4], filled: 0 }
+    }
+
+    /// Waits for the rest of the current window, giving up once the recorder
+    /// has written nothing for `patience`. Without one it waits for as long
+    /// as it takes. What had already arrived is kept for the next call.
+    fn next(&mut self, patience: Option<Duration>) -> Next {
+        while self.filled < self.raw.len() {
+            if !children::readable(&self.stdout, patience) {
+                return Next::Stalled;
+            }
+            match self.stdout.read(&mut self.raw[self.filled..]) {
+                Ok(0) => return Next::Closed,
+                Ok(count) => self.filled += count,
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(_) => return Next::Closed,
+            }
+        }
+        self.filled = 0;
+        Next::Window
+    }
+
+    /// The window `next` last completed, as samples.
+    fn decode(&self, samples: &mut [f32]) {
+        for (sample, bytes) in samples.iter_mut().zip(self.raw.chunks_exact(4)) {
+            *sample = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        }
+    }
+}
+
+/// How long to wait for the next window before treating it as silence.
+fn patience(showing: bool, stalled: bool) -> Option<Duration> {
+    match (showing, stalled) {
+        // With the bars down there is nothing left to animate, so nothing to
+        // wake up for until sound comes back.
+        (false, _) => None,
+        (true, false) => Some(STALL),
+        (true, true) => Some(WINDOW_TIME),
+    }
+}
+
+/// Decides, window by window, what the front end is told.
+struct Feed {
+    analyser: Analyser,
+    /// Whether the bars are up, which is whether anything on screen can move.
+    showing: bool,
+    /// The last frame handed over.
+    shown: Vec<u8>,
+    last_sent: Option<Instant>,
+}
+
+impl Feed {
+    fn new() -> Feed {
+        Feed { analyser: Analyser::new(), showing: false, shown: Vec::new(), last_sent: None }
+    }
+
+    /// The frame this window is worth, if it is worth one: the bars, and
+    /// whether they are live.
+    fn window(&mut self, samples: &[f32]) -> Option<(Vec<u8>, bool)> {
+        let peak = samples.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+
+        // Silence with the bars already down. Something else can keep the
+        // sink running with nothing audible on it, and there is no reason to
+        // transform a window that cannot change the picture.
+        if peak < FLOOR && !self.showing {
+            return None;
+        }
+
+        let bars = self.analyser.frame(samples);
+        if peak < FLOOR && bars.iter().all(|level| *level < 0.01) {
+            // One last frame to put the bars down, then nothing until
+            // something plays again.
+            self.showing = false;
+            self.shown.clear();
+            return Some((vec![0; BARS], false));
+        }
+        self.showing = true;
+
+        // Analysed every window regardless — the smoothing depends on it —
+        // but only handed over at the rate anybody can see.
+        let interval = Duration::from_millis(1000 / MAX_FPS);
+        if self.last_sent.is_some_and(|sent| sent.elapsed() < interval) {
+            return None;
+        }
+
+        // A held note quantises to the bytes it had a frame ago, and a frame
+        // that draws the same picture is a whole-surface repaint for nothing.
+        let frame = quantise(bars);
+        if frame == self.shown {
+            return None;
+        }
+        self.last_sent = Some(Instant::now());
+        self.shown.clone_from(&frame);
+        Some((frame, true))
+    }
 }
 
 /// Records the default sink's monitor and calls `on_frame` with each frame of
@@ -214,88 +369,39 @@ fn quantise(bars: [f32; BARS]) -> Vec<u8> {
 /// desktop costs one sleeping process and no repaints at all.
 pub fn watch(mut on_frame: impl FnMut(Vec<u8>, bool)) {
     loop {
-        // Recording *from a sink* is how PipeWire spells "monitor what is
-        // coming out of it". Without a target, pw-record takes the default
-        // source instead, and the visualiser draws the microphone.
-        let target = default_sink().unwrap_or_else(|| "0".to_string());
-        let mut command = Command::new("pw-record");
-        command
-            .args([
-                // Raw, or pw-record writes a container header first and every
-                // sample after it is read four bytes out of phase.
-                "--raw",
-                &format!("--target={target}"),
-                "--rate=44100",
-                "--channels=1",
-                "--format=f32",
-                "--latency=20ms",
-                "-",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-
-        // Dies with the bar, whatever the bar dies of. Nothing here runs when
-        // the bar is terminated, and a recorder left alone only finds out by
-        // writing to the closed pipe. One with nothing to write — no samples
-        // are reaching it — never finds out, and stays on the sink's monitor:
-        // one more for every restart. The signal follows the thread that
-        // started the child; this one runs for as long as the bar does.
-        //
-        // SAFETY: `prctl` is async-signal-safe and touches only the child.
-        unsafe {
-            command.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                Ok(())
-            });
-        }
-
-        let Ok(mut recorder) = command.spawn() else {
+        let Ok(mut recorder) = recorder().spawn() else {
             eprintln!("caelestia-bar: pw-record is not available, so no visualiser");
             return;
         };
+        let Some(stdout) = recorder.stdout.take() else { return };
 
-        let Some(mut stdout) = recorder.stdout.take() else { return };
-        let mut analyser = Analyser::new();
-        let mut raw = vec![0u8; WINDOW * 4];
+        let mut windows = Windows::new(stdout);
+        let mut feed = Feed::new();
         let mut samples = vec![0.0f32; WINDOW];
-        let mut quiet_since: Option<Instant> = None;
-        let mut draining = true;
-        let interval = Duration::from_millis(1000 / MAX_FPS);
-        let mut last_sent = Instant::now() - interval;
+        let mut stalled = false;
 
-        while stdout.read_exact(&mut raw).is_ok() {
-            for (sample, bytes) in samples.iter_mut().zip(raw.chunks_exact(4)) {
-                *sample = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-            }
-
-            let peak = samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
-            let bars = analyser.frame(&samples);
-            let settled = bars.iter().all(|level| *level < 0.01);
-
-            if peak < FLOOR && settled {
-                // One last frame to put the bars down, then nothing until
-                // something plays again.
-                if draining {
-                    draining = false;
-                    on_frame(vec![0; BARS], false);
+        loop {
+            match windows.next(patience(feed.showing, stalled)) {
+                Next::Window => {
+                    stalled = false;
+                    windows.decode(&mut samples);
                 }
-                quiet_since.get_or_insert_with(Instant::now);
-                continue;
+                // The bars are still up and the music is gone: silence, at
+                // the pace it would have been recorded, until they are down.
+                Next::Stalled => {
+                    stalled = true;
+                    samples.fill(0.0);
+                }
+                Next::Closed => break,
             }
 
-            quiet_since = None;
-            draining = true;
-
-            // Analysed every window regardless — the smoothing depends on it —
-            // but only handed over at the rate anybody can see.
-            if last_sent.elapsed() >= interval {
-                last_sent = Instant::now();
-                on_frame(quantise(bars), true);
+            if let Some((bars, live)) = feed.window(&samples) {
+                on_frame(bars, live);
             }
         }
 
-        // pw-record exits when the default sink changes underneath it; that
-        // is a reconnect, not a failure.
+        // The recorder follows the default sink by itself, so it only exits
+        // when PipeWire does; that is a reconnect, not a failure.
         let _ = recorder.wait();
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -305,15 +411,20 @@ pub fn watch(mut on_frame: impl FnMut(Vec<u8>, bool)) {
 mod tests {
     use super::*;
 
+    /// One window of a 1kHz tone at half scale.
+    fn tone() -> Vec<f32> {
+        (0..WINDOW)
+            .map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / RATE).sin() * 0.5)
+            .collect()
+    }
+
     /// A pure tone should light the band that contains it and leave the rest
     /// alone. This is the whole contract: if the transform or the banding is
     /// wrong, the bars are decorative noise rather than the music.
     #[test]
     fn a_tone_lands_in_one_band() {
         let mut analyser = Analyser::new();
-        let tone: Vec<f32> = (0..WINDOW)
-            .map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / RATE).sin() * 0.5)
-            .collect();
+        let tone = tone();
 
         // Several frames, because the smoothing means one frame only gets
         // part of the way there.
@@ -382,5 +493,49 @@ mod tests {
         for pair in edges.windows(2) {
             assert!(pair[1] >= pair[0], "band edges went backwards: {pair:?}");
         }
+    }
+
+    /// When the music stops the bars have to come down, and the front end has
+    /// to be told so exactly once: a second "down" is a repaint for nothing,
+    /// and none at all leaves the last chord on the bar until the next song.
+    #[test]
+    fn the_bars_are_put_down_once() {
+        let mut feed = Feed::new();
+        assert!(matches!(feed.window(&tone()), Some((_, true))), "sound was not shown");
+
+        let silence = vec![0.0; WINDOW];
+        let downs: Vec<Vec<u8>> = (0..400)
+            .filter_map(|_| feed.window(&silence))
+            .filter(|(_, live)| !live)
+            .map(|(bars, _)| bars)
+            .collect();
+
+        assert_eq!(downs.len(), 1, "the bars were put down {} times", downs.len());
+        assert!(downs[0].iter().all(|level| *level == 0));
+    }
+
+    #[test]
+    fn silence_on_a_quiet_bar_says_nothing() {
+        let mut feed = Feed::new();
+        let silence = vec![0.0; WINDOW];
+        assert!((0..100).all(|_| feed.window(&silence).is_none()));
+    }
+
+    #[test]
+    fn a_frame_that_draws_the_same_picture_is_not_sent() {
+        let mut feed = Feed::new();
+        let tone = tone();
+        // Long enough for the smoothing to stop moving.
+        for _ in 0..400 {
+            feed.window(&tone);
+        }
+
+        // The rate limit is about time, not about content: lift it, so what
+        // is left is only whether the frame differs. The first of these may
+        // or may not be sent, depending on how long the loop above took.
+        feed.last_sent = None;
+        feed.window(&tone);
+        feed.last_sent = None;
+        assert!(feed.window(&tone).is_none(), "an identical frame was sent again");
     }
 }

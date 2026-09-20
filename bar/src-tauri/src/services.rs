@@ -7,10 +7,16 @@
 //! shell's own panels from disagreeing about what is switched on.
 //!
 //! This is the slow tick. Everything in `system` is a file read; everything
-//! here costs a process, so it runs every few seconds rather than every one,
-//! and only when something is actually listening.
+//! here is a question put to somebody else — the system bus for what is
+//! polled, a process for what a person asks for by opening a popout — so it
+//! runs every few seconds rather than every one.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use serde::Serialize;
+use zbus::blocking::{Connection, Proxy};
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 use crate::guards::Guards;
 
@@ -124,33 +130,52 @@ fn is_missing(reply: &str) -> bool {
 
 // ---- power profiles ------------------------------------------------------
 
-fn read_power() -> Power {
-    let profile = output("powerprofilesctl", &["get"]).unwrap_or_default();
-    let listing = output("powerprofilesctl", &["list"]).unwrap_or_default();
+/// The profile daemon's name on the system bus, and its interface's. The
+/// older of the two it goes by, because every version answers to it.
+const PROFILES: &str = "net.hadess.PowerProfiles";
+const PROFILES_PATH: &str = "/net/hadess/PowerProfiles";
 
-    // `list` marks the active one with a `*` and indents the rest; the names
-    // are the only part of it the bar wants.
-    let available = listing
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim_start_matches(['*', ' ']);
-            line.strip_suffix(':').map(str::to_string)
-        })
-        .collect();
+/// The system bus, connected once and kept: a connection is a socket and a
+/// thread of zbus's own, which is too much to make and drop on every tick.
+fn system_bus() -> Option<&'static Connection> {
+    static BUS: OnceLock<Option<Connection>> = OnceLock::new();
+    BUS.get_or_init(|| Connection::system().ok()).as_ref()
+}
 
-    // "Degraded: <reason>" sits under whichever profile is affected, and says
-    // "no" when nothing is wrong.
-    let degraded = listing
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("Degraded:").map(str::trim))
-        .filter(|reason| !reason.is_empty() && *reason != "no")
+fn profile_daemon() -> Option<Proxy<'static>> {
+    Proxy::new(system_bus()?, PROFILES, PROFILES_PATH, "org.freedesktop.DBus.Properties").ok()
+}
+
+/// The names in the daemon's `Profiles`, which is a list of dicts.
+///
+/// Listed from the thriftiest up and shown from the fastest down: the order
+/// `powerprofilesctl` prints, and the one the dials were laid out in.
+fn profile_names(listed: &OwnedValue) -> Vec<String> {
+    Vec::<HashMap<String, OwnedValue>>::try_from(listed.clone())
         .unwrap_or_default()
-        .to_string();
+        .iter()
+        .rev()
+        .filter_map(|profile| String::try_from(profile.get("Profile")?.clone()).ok())
+        .collect()
+}
+
+/// Asked over the bus rather than through `powerprofilesctl`, which is a
+/// Python script and only a client of this same interface. Two of them every
+/// five seconds was a tenth of a second of CPU each: the most expensive thing
+/// the bar did at rest.
+fn read_power() -> Power {
+    let daemon: HashMap<String, OwnedValue> = profile_daemon()
+        .and_then(|daemon| daemon.call("GetAll", &(PROFILES,)).ok())
+        .unwrap_or_default();
+    let text = |key: &str| {
+        daemon.get(key).and_then(|value| String::try_from(value.clone()).ok()).unwrap_or_default()
+    };
 
     Power {
-        profile,
-        available,
-        degraded,
+        profile: text("ActiveProfile"),
+        available: daemon.get("Profiles").map(profile_names).unwrap_or_default(),
+        // The reason alone, and nothing at all when there is none.
+        degraded: text("PerformanceDegraded"),
         dynamic: flag_file("dynamic").unwrap_or(false),
         dynamic_tier: state_dir()
             .and_then(|dir| std::fs::read_to_string(dir.join("dynamic-tier")).ok())
@@ -173,7 +198,8 @@ pub fn set_dynamic(on: bool) {
 }
 
 pub fn set_power_profile(profile: &str) {
-    let _ = std::process::Command::new("powerprofilesctl").args(["set", profile]).status();
+    let Some(daemon) = profile_daemon() else { return };
+    let _ = daemon.call::<_, _, ()>("Set", &(PROFILES, "ActiveProfile", Value::from(profile)));
 }
 
 // ---- the guards ----------------------------------------------------------
@@ -249,14 +275,39 @@ fn json_state(name: &str) -> Option<serde_json::Value> {
 
 // ---- bluetooth -----------------------------------------------------------
 
+/// Everything BlueZ has, adapters and devices alike: by object path, then by
+/// interface, then by property.
+type BluezObjects = HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
+
+/// Whether an object's boolean property is there and set.
+fn is_set(properties: &HashMap<String, OwnedValue>, name: &str) -> bool {
+    properties.get(name).and_then(|value| bool::try_from(value.clone()).ok()).unwrap_or(false)
+}
+
+/// The adapter's state and how many devices are connected, from the one call
+/// `bluetoothctl` makes itself — which leaves the tick starting no processes
+/// at all.
 fn read_bluetooth() -> Bluetooth {
-    let show = output("bluetoothctl", &["show"]).unwrap_or_default();
-    let flag = |name: &str| show.lines().any(|line| line.trim() == format!("{name}: yes"));
-    let connected = output("bluetoothctl", &["devices", "Connected"])
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| line.starts_with("Device "))
+    let objects: BluezObjects = system_bus()
+        .and_then(|bus| Proxy::new(bus, "org.bluez", "/", "org.freedesktop.DBus.ObjectManager").ok())
+        .and_then(|bluez| bluez.call("GetManagedObjects", &()).ok())
+        .unwrap_or_default();
+
+    // The lowest path is `hci0`, which is the one `bluetoothctl` calls the
+    // default; a map has no first of its own.
+    let adapter = objects
+        .iter()
+        .filter_map(|(path, interfaces)| Some((path.as_str(), interfaces.get("org.bluez.Adapter1")?)))
+        .min_by_key(|(path, _)| *path)
+        .map(|(_, adapter)| adapter);
+    let flag = |name: &str| adapter.is_some_and(|adapter| is_set(adapter, name));
+
+    let connected = objects
+        .values()
+        .filter_map(|interfaces| interfaces.get("org.bluez.Device1"))
+        .filter(|device| is_set(device, "Connected"))
         .count() as i64;
+
     Bluetooth { powered: flag("Powered"), connected, discovering: flag("Discovering") }
 }
 
@@ -457,14 +508,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_healthy_machine_reports_no_degradation() {
-        // The field says "no" rather than being absent, so a naive read of it
-        // would put "no" on the bar as if it were a reason.
-        assert_eq!(read_power().degraded, "");
+    fn profiles_are_shown_fastest_first() {
+        let profile = |name: &'static str| {
+            HashMap::from([("Profile", Value::from(name)), ("CpuDriver", Value::from("amd_pstate"))])
+        };
+        let listed = Value::from(vec![profile("power-saver"), profile("balanced"), profile("performance")]);
+        let listed = OwnedValue::try_from(listed).expect("no file descriptors in it");
+
+        assert_eq!(profile_names(&listed), ["performance", "balanced", "power-saver"]);
     }
 
-
-
+    #[test]
+    fn a_profile_list_of_the_wrong_shape_is_an_empty_one() {
+        let listed = OwnedValue::try_from(Value::from("balanced")).expect("a plain string");
+        assert!(profile_names(&listed).is_empty());
+    }
 
     #[test]
     fn features_are_read_as_switches() {

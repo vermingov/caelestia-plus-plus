@@ -49,17 +49,20 @@ function draw() {
     // fence posts, and a single unmirrored sweep leaves half the bar dead.
     const pitch = BAND + GAP;
     const bands = Math.floor(width.value / pitch);
-    const cycle = props.bars.length * 2;
+    const levels = props.bars;
+    const cycle = levels.length * 2;
 
     for (let i = 0; i < bands; i++) {
         // Walk the spectrum out and back, so bass meets bass where the
         // pattern repeats rather than cutting from treble to bass.
         const step = i % cycle;
-        const level = props.bars[step < props.bars.length ? step : cycle - 1 - step] / 255;
+        const level = levels[step < levels.length ? step : cycle - 1 - step] / 255;
         const height = Math.max(1, level * HEIGHT * 0.75);
-        context.beginPath();
-        context.roundRect(i * pitch, HEIGHT - height, BAND, height, 1);
-        context.fill();
+        // Plain rectangles, not rounded ones. A radius of one on a band two
+        // pixels wide softens a single row nobody can see, and building and
+        // filling a path per band cost the web process over a third more than
+        // four hundred rectangles the canvas can batch.
+        context.fillRect(i * pitch, HEIGHT - height, BAND, height);
     }
 }
 
