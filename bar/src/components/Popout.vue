@@ -226,9 +226,15 @@ const remaining = computed(() => {
 
 // Charging is a state, not a duration: the bar has no business guessing at
 // hours remaining from a single capacity reading.
+//
+// Plugged in and not charging is its own state and has to be said out loud.
+// A laptop held at a charge threshold, or on a USB-C supply too weak to
+// charge it, sits there for hours — and "On battery" is simply untrue while
+// the cable is in.
 const batteryLabel = computed(() => {
     if (!battery.value) return "";
-    return battery.value.charging ? "Charging" : "On battery";
+    if (battery.value.charging) return "Charging";
+    return battery.value.onMains ? "Plugged in, not charging" : "On battery";
 });
 
 // Spelled out in full here, because the bar itself only has room for the

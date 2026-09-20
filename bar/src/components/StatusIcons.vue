@@ -64,6 +64,9 @@ const bluetoothGlyph = computed(() => {
 const batteryGlyph = computed(() => {
     if (!battery.value) return profileGlyph.value;
     if (battery.value.charging) return "battery_charging_full";
+    // Plugged in but not taking charge: the level still matters, but the
+    // plug is the thing to say, because nothing is draining.
+    if (battery.value.onMains) return "power";
     const level = battery.value.level;
     if (level > 90) return "battery_full";
     if (level > 60) return "battery_5_bar";
@@ -89,6 +92,10 @@ const profileGlyph = computed(() => {
 // bar that has earned a colour.
 const batteryClass = computed(() => {
     if (!battery.value || battery.value.charging) return "";
+    // A low battery on mains is not an emergency — it is a battery being
+    // filled, or one the firmware has decided not to fill. Either way the red
+    // alert belongs to a machine that is actually running itself flat.
+    if (battery.value.onMains) return "";
     if (battery.value.level <= 10) return "alert";
     if (battery.value.level <= 25) return "warn";
     return "";

@@ -38,7 +38,14 @@ pub struct Snapshot {
 pub struct Battery {
     /// 0–100.
     pub level: i64,
+    /// Actually taking charge right now.
     pub charging: bool,
+    /// A charger is plugged in, which is not the same question. A laptop
+    /// held at a charge threshold, or fed by a USB-C supply too weak to
+    /// charge it, sits at `Not charging` with the cable in — and calling that
+    /// "on battery" is how the bar came to show a red low-battery alert on a
+    /// machine that was plugged in.
+    pub on_mains: bool,
     /// Minutes until full, or until empty when running on it. None while the
     /// draw is too small or too erratic to divide by.
     pub minutes: Option<i64>,
@@ -145,11 +152,34 @@ fn read_gpu() -> Option<f64> {
 }
 
 fn first_battery() -> Option<PathBuf> {
-    fs::read_dir("/sys/class/power_supply")
+    let mut batteries: Vec<PathBuf> = fs::read_dir("/sys/class/power_supply")
         .ok()?
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .find(|p| fs::read_to_string(p.join("type")).is_ok_and(|t| t.trim() == "Battery"))
+        .filter(|p| fs::read_to_string(p.join("type")).is_ok_and(|t| t.trim() == "Battery"))
+        .collect();
+    // `read_dir` returns whatever order the filesystem feels like. On a
+    // machine with two batteries that means the bar reads a different one
+    // between ticks, so the percentage jumps between them.
+    batteries.sort();
+    batteries.into_iter().next()
+}
+
+/// Whether a charger is plugged in.
+///
+/// The mains supply is its own device in sysfs, separate from the battery.
+/// USB-C power delivery shows up here too — a dock or a phone charger is a
+/// `USB` supply that is online — and for "is it plugged in" those count.
+fn on_mains() -> bool {
+    let Ok(entries) = fs::read_dir("/sys/class/power_supply") else { return false };
+    entries.filter_map(Result::ok).any(|entry| {
+        let path = entry.path();
+        let kind = fs::read_to_string(path.join("type")).unwrap_or_default();
+        if !matches!(kind.trim(), "Mains" | "USB" | "USB_PD" | "USB_PD_DRP") {
+            return false;
+        }
+        fs::read_to_string(path.join("online")).is_ok_and(|online| online.trim() == "1")
+    })
 }
 
 fn read_battery() -> Option<Battery> {
@@ -157,7 +187,7 @@ fn read_battery() -> Option<Battery> {
     let level = fs::read_to_string(path.join("capacity")).ok()?.trim().parse().ok()?;
     let status = fs::read_to_string(path.join("status")).unwrap_or_default();
     let charging = matches!(status.trim(), "Charging" | "Full");
-    Some(Battery { level, charging, minutes: remaining(&path, charging) })
+    Some(Battery { level, charging, on_mains: on_mains(), minutes: remaining(&path, charging) })
 }
 
 /// Minutes left, from the charge counters.
@@ -318,5 +348,23 @@ mod tests {
         // The helper closure returns 0 for anything absent, which is what
         // keeps a kernel without MemAvailable from panicking.
         assert!(std::path::Path::new("/proc/meminfo").exists());
+    }
+
+    /// Whatever this machine has, the two answers have to agree with sysfs:
+    /// a battery that reports `Charging` cannot be running on nothing.
+    #[test]
+    fn charging_implies_a_charger_is_plugged_in() {
+        let Some(battery) = read_battery() else { return };
+        if battery.charging {
+            assert!(battery.on_mains, "the battery is charging but nothing is reported online");
+        }
+    }
+
+    /// The point of the field: plugged in and not charging is a real state,
+    /// and it must not read as "on battery".
+    #[test]
+    fn mains_is_read_independently_of_the_charge_status() {
+        let Some(battery) = read_battery() else { return };
+        assert_eq!(battery.on_mains, on_mains(), "the snapshot disagrees with sysfs");
     }
 }
