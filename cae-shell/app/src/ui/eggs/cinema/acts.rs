@@ -75,19 +75,33 @@ pub fn paint(stage: &Stage, window: &mut Window, cx: &mut App) {
 
 /// Motes drifting up, all the way through.
 fn sparks(stage: &Stage, window: &mut Window) {
-    let clock = (stage.now % 7000) as f32 / 7000.;
-    for index in 0..28 {
-        // Where each one lives and how far ahead it is, rolled once and the
-        // same every time the egg plays: a dice roll per frame would boil.
-        let lane = wander(index, 1);
-        let drift = wander(index, 2);
-        let at = (clock + drift) % 1.;
-        let x = lane * stage.width + (at * 12.6 + drift * 9.).sin() * 14.;
-        let y = stage.height * (1. - at);
-        let size = 3. + (index % 3) as f32 * 2.;
-        let colour = if index % 4 == 0 { 0x7d9bff } else { INK };
-        let alpha = (at * std::f32::consts::PI).sin() * 0.7 * stage.reveal * stage.fading;
-        paint::disc(window, &stage.cam, x + size / 2., y + size / 2., size / 2., 1., shade(colour, alpha));
+    // Three planes rather than one. The far ones are small, slow, dim and
+    // barely move across; the near ones are large, quick and wander. It is
+    // the same loop three times over with different numbers, which is all
+    // depth ever is, and the reason the old one read as a flat sheet of
+    // motes is that every one of them was the same distance away.
+    const PLANES: [(usize, u128, f32, f32, f32); 3] =
+        [(34, 11_000, 0.55, 0.26, 5.), (24, 7_000, 1.0, 0.55, 14.), (12, 4_600, 1.7, 0.85, 26.)];
+
+    for (plane, &(count, period, size, strength, wobble)) in PLANES.iter().enumerate() {
+        let clock = (stage.now % period) as f32 / period as f32;
+        let salt = plane as u32 * 977;
+        for index in 0..count {
+            let lane = wander(index + plane * 71, 1 + salt);
+            let drift = wander(index + plane * 71, 2 + salt);
+            let at = (clock + drift) % 1.;
+            let x = lane * stage.width + (at * 12.6 + drift * 9.).sin() * wobble;
+            let y = stage.height * (1. - at);
+            let radius = (1.4 + (index % 3) as f32 * 0.9) * size;
+            let colour = if index % 4 == 0 { 0x7d9bff } else { INK };
+            let alpha = (at * std::f32::consts::PI).sin() * 0.7 * strength * stage.reveal * stage.fading;
+            // The near ones carry a little of their own light, which is what
+            // stops a bright mote looking like a sticker of a bright mote.
+            if plane == 2 {
+                paint::glow(window, &stage.cam, x, y, radius * 4.5, colour, alpha * 0.5);
+            }
+            paint::disc(window, &stage.cam, x, y, radius, 1., shade(colour, alpha));
+        }
     }
 }
 

@@ -300,6 +300,16 @@ fn furniture(stage: &Stage, window: &mut Window) {
         0.,
         paint::down(shade(0x000000, 0.), shade(0x000000, 0.4 * dim)),
     );
+    // The sides as well, which the old one never had: a picture darkened top
+    // and bottom only is a picture in a letterbox, and one darkened all round
+    // is a picture through a lens.
+    let side = width * 0.16;
+    for (x, from, to) in [(0., 0.34, 0.), (width - side, 0., 0.34)] {
+        paint::rect(window, &still, (x, 0., side, height), 0.,
+            paint::across(shade(0x000000, from * dim), shade(0x000000, to * dim)));
+    }
+
+    grain(stage, window, &still);
 
     // Bars that slide in from off the screen as the picture arrives.
     let bar = height * 0.085;
@@ -309,6 +319,37 @@ fn furniture(stage: &Stage, window: &mut Window) {
     let flash = stage.flash();
     if flash > 0. {
         paint::rect(window, &still, (0., 0., width, height), 0., shade(0xffffff, flash * stage.fading));
+    }
+}
+
+/// Film grain, over everything and under nothing.
+///
+/// The QML had none: a thousand moving specks meant a thousand `Rectangle`s
+/// or a shader, and neither was worth it there. Here it is a thousand paths
+/// in one paint, worked out from the frame number, so it costs a loop and
+/// nothing is kept between frames. It is most of what separates "shapes
+/// drawn on a screen" from "something filmed".
+fn grain(stage: &Stage, window: &mut Window, still: &Cam) {
+    const SPECKS: usize = 900;
+    // A new scatter roughly every other frame: grain that changes every
+    // frame at sixty fizzes, and grain that never changes is dirt on the
+    // lens.
+    let roll = (stage.now / 33) as u32;
+    let strength = 0.055 * stage.reveal * stage.fading;
+
+    for speck in 0..SPECKS {
+        let seed = (speck as u32).wrapping_mul(2_246_822_519).wrapping_add(roll.wrapping_mul(2_654_435_761));
+        let mut state = seed | 1;
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let x = (state % 10_000) as f32 / 10_000. * stage.width;
+        state ^= state << 7;
+        let y = ((state >> 3) % 10_000) as f32 / 10_000. * stage.height;
+        let bright = ((state >> 11) % 1_000) as f32 / 1_000.;
+        // Mostly dark, occasionally a bright one, as film is.
+        let (colour, alpha) = if bright > 0.82 { (0xffffff, strength * 1.5) } else { (0x000000, strength) };
+        paint::rect(window, still, (x, y, 1.6, 1.6), 0., shade(colour, alpha * bright.max(0.35)));
     }
 }
 

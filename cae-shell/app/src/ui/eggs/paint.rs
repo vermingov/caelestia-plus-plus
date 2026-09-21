@@ -185,7 +185,12 @@ pub fn rect_edge(window: &mut Window, cam: &Cam, (x, y, w, h): (f32, f32, f32, f
     }
 }
 
-/// Top to bottom, which is the only way any of these gradients run.
+/// Left to right, for the darkness down the sides of the picture.
+pub fn across(left: Hsla, right: Hsla) -> Background {
+    linear_gradient(90., linear_color_stop(left, 0.), linear_color_stop(right, 1.))
+}
+
+/// Top to bottom, which is the way most of these gradients run.
 pub fn down(top: Hsla, bottom: Hsla) -> Background {
     linear_gradient(180., linear_color_stop(top, 0.), linear_color_stop(bottom, 1.))
 }
