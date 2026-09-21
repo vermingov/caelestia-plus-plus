@@ -59,6 +59,14 @@ pub struct State {
     /// The outputs whose desktop can be seen, by name. What moves on a
     /// desktop has no reason to while something is lying on it.
     pub desktops: Vec<String>,
+    /// The outputs showing a window that has taken the whole screen, by name.
+    ///
+    /// Not the same question as whether the desktop can be seen: an ordinary
+    /// tiled window covers the desktop too, and nothing minds appearing over
+    /// one of those. Fullscreen is a person asking for the screen itself,
+    /// and what the launcher reads to stay out of it.
+    #[serde(skip)]
+    pub fullscreen: Vec<String>,
 }
 
 /// What is in front of the person: the focused workspace, and the special
@@ -322,6 +330,9 @@ pub fn read_state() -> State {
         request(question).and_then(|reply| serde_json::from_str(&reply).ok()).unwrap_or_default()
     };
     let monitors = list("j/monitors");
+    // Asked once and used twice: which desktops are in view, and which
+    // screens a window has taken whole.
+    let clients = list("j/clients");
 
     // Whatever special workspace the focused monitor has pulled up, so the
     // row can show which one is open rather than just which exist.
@@ -399,7 +410,8 @@ pub fn read_state() -> State {
         specials,
         active,
         keyboard: read_keyboard(),
-        desktops: seen_desktops(&monitors, &list("j/clients")),
+        desktops: seen_desktops(&monitors, &clients),
+        fullscreen: screens_taken_whole(&monitors, &clients),
     }
 }
 
@@ -407,6 +419,30 @@ pub fn read_state() -> State {
 /// workspace each is showing, or on the special one pulled up over it, that is
 /// tiled or fullscreen. Floating windows leave most of a desktop in view,
 /// which is the line the shell it came from drew too.
+/// The outputs showing a fullscreen window, by name.
+///
+/// A window counts while it is mapped and not hidden, on the workspace that
+/// output is showing or on the special one pulled up over it — the same
+/// reckoning of what is in front of somebody that `seen_desktops` uses.
+fn screens_taken_whole(monitors: &[serde_json::Value], clients: &[serde_json::Value]) -> Vec<String> {
+    let id_of = |owner: &serde_json::Value, workspace: &str| owner.get(workspace).and_then(|w| w.get("id")).and_then(serde_json::Value::as_i64);
+    let whole = |client: &&serde_json::Value| {
+        let flag = |name: &str| client.get(name).and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let fullscreen = client.get("fullscreen").and_then(serde_json::Value::as_i64).unwrap_or(0) > 0;
+        flag("mapped") && !flag("hidden") && fullscreen
+    };
+    let taken: Vec<i64> = clients.iter().filter(whole).filter_map(|client| id_of(client, "workspace")).collect();
+
+    monitors
+        .iter()
+        .filter(|monitor| {
+            let showing = [id_of(monitor, "activeWorkspace"), id_of(monitor, "specialWorkspace")];
+            showing.into_iter().flatten().any(|id| taken.contains(&id))
+        })
+        .filter_map(|monitor| monitor.get("name").and_then(serde_json::Value::as_str).map(str::to_string))
+        .collect()
+}
+
 fn seen_desktops(monitors: &[serde_json::Value], clients: &[serde_json::Value]) -> Vec<String> {
     let id_of = |owner: &serde_json::Value, workspace: &str| owner.get(workspace).and_then(|w| w.get("id")).and_then(serde_json::Value::as_i64);
     let covers = |client: &&serde_json::Value| {
@@ -610,6 +646,30 @@ mod tests {
 
     fn window(workspace: i64, floating: bool, fullscreen: i64) -> serde_json::Value {
         serde_json::json!({ "workspace": { "id": workspace }, "floating": floating, "fullscreen": fullscreen, "mapped": true, "hidden": false })
+    }
+
+    #[test]
+    fn only_a_window_filling_the_screen_counts_as_taking_it() {
+        let monitors = [monitor("eDP-1", 1, 0), monitor("DP-2", 4, 0)];
+        assert_eq!(screens_taken_whole(&monitors, &[]), [] as [&str; 0]);
+
+        // The distinction the launcher turns on: a tiled window covers the
+        // desktop but is not somebody asking for the screen.
+        assert_eq!(screens_taken_whole(&monitors, &[window(1, false, 0)]), [] as [&str; 0]);
+        assert_eq!(screens_taken_whole(&monitors, &[window(1, false, 2)]), ["eDP-1"]);
+        // A fullscreen window is counted whether or not it floats.
+        assert_eq!(screens_taken_whole(&monitors, &[window(4, true, 1)]), ["DP-2"]);
+        // One screen taken says nothing about the other.
+        assert_eq!(screens_taken_whole(&monitors, &[window(4, false, 2)]), ["DP-2"]);
+
+        // On a special workspace pulled up over the one in front.
+        let pulled_up = [monitor("eDP-1", 1, -98)];
+        assert_eq!(screens_taken_whole(&pulled_up, &[window(-98, false, 2)]), ["eDP-1"]);
+
+        // Not yet mapped, or hidden behind another: neither is on screen.
+        let unmapped = serde_json::json!({ "workspace": { "id": 1 }, "floating": false, "fullscreen": 2, "mapped": false, "hidden": false });
+        let hidden = serde_json::json!({ "workspace": { "id": 1 }, "floating": false, "fullscreen": 2, "mapped": true, "hidden": true });
+        assert_eq!(screens_taken_whole(&monitors, &[unmapped, hidden]), [] as [&str; 0]);
     }
 
     #[test]

@@ -111,6 +111,13 @@ impl Launchers {
                 if now != view {
                     view = now;
                     launchers.answer(Ask::Hide, cx);
+                    return;
+                }
+                // Switching to a workspace that has a window filling it is
+                // the same thing as one going fullscreen underneath: either
+                // way the screen is spoken for, and the launcher goes.
+                if launchers.open.is_some() && taken_whole(cx) {
+                    launchers.answer(Ask::Hide, cx);
                 }
             })
             .detach();
@@ -142,7 +149,15 @@ impl Launchers {
                 }
                 self.open = Some(window);
             }
-            (Ask::Show(query) | Ask::Toggle(query), None) => self.open = self.show(query, cx),
+            (Ask::Show(query) | Ask::Toggle(query), None) => {
+                // A window that has taken the whole screen is somebody
+                // asking for the screen itself. The launcher is exclusive
+                // about the keyboard, so opening over a game takes the keys
+                // out of it as well as covering it.
+                if !taken_whole(cx) {
+                    self.open = self.show(query, cx);
+                }
+            }
             (Ask::Hide | Ask::Toggle(_), Some(window)) => {
                 let _ = window.update(cx, |_, window, _| window.remove_window());
                 self.refresh(cx);
@@ -267,3 +282,22 @@ fn listen(asks: UnboundedSender<Ask>) {
         });
     }
 }
+
+/// Whether the screen the launcher would open on has a window filling it.
+///
+/// The screen it would open on, not any screen: a game on the second monitor
+/// is no reason to refuse the launcher on the first. Read from the feed the
+/// shell already keeps, so this costs nothing and is as fresh as the last
+/// compositor event.
+fn taken_whole(cx: &mut App) -> bool {
+    let Some(feeds) = cx.try_global::<Feeds>().cloned() else { return false };
+    let full = feeds.hypr.read(cx).value.fullscreen.clone();
+    if full.is_empty() {
+        return false;
+    }
+    let Some(focused) = screen::focused_display(cx) else { return false };
+    screen::outputs(cx)
+        .into_iter()
+        .any(|(name, display)| display == focused && full.contains(&name))
+}
+
