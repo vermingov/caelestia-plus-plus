@@ -241,8 +241,12 @@ impl Picker {
         // means "the window under the pointer". The picker appeared and shot
         // whatever was beneath the cursor in the same instant, which is the
         // freeze never being seen at all.
-        let Some(from) = self.from.take() else { return };
+        let Some(from) = self.from.take() else {
+            log::debug!("picker: release with no press, ignored");
+            return;
+        };
         let big_enough = |region: &Bounds<Pixels>| region.size.width > px(A_SPECK) && region.size.height > px(A_SPECK);
+        log::debug!("picker: taken, from {from:?} to {at:?}");
         let Some(region) = Some(between(from, at)).filter(big_enough).or_else(|| self.window_under(at)) else {
             return done(window, cx);
         };
@@ -344,11 +348,15 @@ impl Render for Picker {
                 track_focus={&self.focus}
                 on_action={|_: &Cancel, window: &mut Window, cx: &mut App| done(window, cx)}
                 onMouseDown={(MouseButton::Left, cx.listener(|picker: &mut Picker, event: &MouseDownEvent, _, cx| {
+                    log::debug!("picker: press at {:?}, clicks {}", event.position, event.click_count);
                     picker.from = Some(event.position);
                     picker.moved(event.position, cx);
                 }))}
                 onMouseMove={cx.listener(|picker: &mut Picker, event: &MouseMoveEvent, _, cx| picker.moved(event.position, cx))}
-                onMouseUp={(MouseButton::Left, cx.listener(|picker: &mut Picker, event: &MouseUpEvent, window, cx| picker.taken(event.position, window, cx)))}
+                onMouseUp={(MouseButton::Left, cx.listener(|picker: &mut Picker, event: &MouseUpEvent, window, cx| {
+                    log::debug!("picker: release at {:?}, pressed {:?}", event.position, picker.from);
+                    picker.taken(event.position, window, cx)
+                }))}
                 // The other button is "never mind", as Escape is.
                 onMouseUp={(MouseButton::Right, |_, window: &mut Window, cx: &mut App| done(window, cx))}
             >
