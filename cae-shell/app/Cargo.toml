@@ -28,6 +28,7 @@ gpui-rsx = "0.7"
 # Carrying a backend thread's result to the thread that draws.
 futures = "0.3"
 libc.workspace = true
+log = "0.4"
 # What a setting is, between the file it is kept in and the row that shows it.
 serde_json.workspace = true
 # GPUI names a Wayland output only through a UUID made from its name, so the

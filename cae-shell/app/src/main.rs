@@ -15,6 +15,7 @@ mod battery;
 mod feeds;
 mod idle;
 mod ours;
+mod say;
 mod setup;
 mod theme;
 mod ui;
@@ -110,6 +111,7 @@ fn main() {
         std::process::exit(1);
     }
 
+    say::start();
     tame_the_heap();
     die_with_the_shell();
 

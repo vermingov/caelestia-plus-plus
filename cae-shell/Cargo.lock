@@ -723,6 +723,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "libc",
+ "log",
  "lyon",
  "raw-window-handle",
  "serde_json",
