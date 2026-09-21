@@ -345,7 +345,9 @@ run_migrations() {
         if eval "$run"; then
             [[ -n $after ]] && step "$after"
         else
-            warn "${label:-$name} did not finish; the machine is as it was"
+            # Not "the machine is as it was": only the step knows what it
+            # managed before it stopped, and it has just said so above.
+            warn "${label:-$name} did not finish — see what it said; 'cae migrate' tries again"
         fi
     done
 }

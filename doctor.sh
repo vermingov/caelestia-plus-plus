@@ -48,7 +48,13 @@ else
     else
         fail "qs binary does not start ($(timeout 20 qs --version 2>&1 | head -1 | cut -c1-120)) — fix: sudo bash $sd/system/quickshell/install.sh"
     fi
-    warn "Quickshell still starts the shell — hand it over with: cae migrate"
+    # Told not to start Quickshell, with no unit to start anything else: the
+    # session has nothing in it and will not say so until the next login.
+    if grep -qE '^[[:space:]]*-- cae starts from cae-shell\.service now' "$HOME/.config/hypr/hyprland/execs.lua" 2>/dev/null; then
+        fail "the session starts NOTHING: Quickshell is commented out of execs.lua and cae-shell.service is not enabled — the next login comes up empty. Fix: cae migrate, or python3 $sd/cae-shell/standalone.py --undo to put Quickshell back"
+    else
+        warn "Quickshell still starts the shell — hand it over with: cae migrate"
+    fi
 fi
 
 echo "--- environment"

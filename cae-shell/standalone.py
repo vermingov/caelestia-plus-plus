@@ -138,6 +138,26 @@ def hand_over():
     sys.exit("standalone: look at `journalctl --user -u cae-shell` before trying again")
 
 
+def put_back():
+    """Restores the kept copies and disables the unit. Returns how many.
+
+    The unit goes too, or the next session would start cae twice: once from
+    systemd and once from the line just put back.
+    """
+    restored = 0
+    for path in files():
+        kept = path.with_suffix(path.suffix + KEPT)
+        if not kept.is_file():
+            print(f"{path.name}: no copy kept, left alone")
+            continue
+        shutil.move(kept, path)
+        print(f"{path.name}: put back")
+        restored += 1
+    subprocess.run(["systemctl", "--user", "disable", UNIT], capture_output=True, check=False)
+    print(f"{UNIT}: disabled")
+    return restored
+
+
 def main():
     asked = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     asked.add_argument("--apply", action="store_true", help="make the changes")
@@ -147,39 +167,35 @@ def main():
     args.apply = args.apply or args.now
 
     if args.undo:
-        for path in files():
-            kept = path.with_suffix(path.suffix + KEPT)
-            if not kept.is_file():
-                print(f"{path.name}: no copy kept, left alone")
-                continue
-            shutil.move(kept, path)
-            print(f"{path.name}: put back")
-        # The unit goes too, or the next session would start cae twice: once
-        # from systemd and once from the line just put back.
-        subprocess.run(["systemctl", "--user", "disable", "cae-shell.service"], capture_output=True, check=False)
-        print("cae-shell.service: disabled")
+        put_back()
         print("\nReload Hyprland, or log in again, for it to take.")
         return
 
-    total = 0
+    # Worked out and shown before anything is written. What the session is
+    # told to start has to be installed first — see below — so this pass only
+    # reads.
+    planned, total = [], 0
     for path in files():
-        text = path.read_text()
-        after, notes = changed(text)
+        after, notes = changed(path.read_text())
         total += len(notes)
         print(f"\n{path.name}: {len(notes)} lines")
         for number, was, now in notes:
             print(f"  {number:>4}  - {was.strip()}")
             print(f"        + {now.strip()}")
-        if args.apply and notes:
-            kept = path.with_suffix(path.suffix + KEPT)
-            if not kept.exists():
-                shutil.copy2(path, kept)
-            path.write_text(after)
+        if notes:
+            planned.append((path, after))
 
-    if not total and not unit_enabled():
+    # Switched-over files with no unit to start anything is the state an
+    # earlier version could leave behind, and it is the one that costs a
+    # login: the session has been told not to start Quickshell and nothing
+    # has been put in its place. Finish it if the unit will install, and put
+    # Quickshell back if it will not — never leave it standing.
+    half_done = not total and not unit_enabled()
+    if half_done:
         print(f"\nThe files are switched over but {UNIT} is not enabled — half done.")
+        print("A desktop in this state comes up empty at the next login.")
         if not args.apply:
-            print("`--apply` finishes it.")
+            print("`--apply` finishes it, or puts Quickshell back if it cannot.")
             return
         total = -1  # nothing in the files to change, but the unit still wants installing
 
@@ -194,11 +210,40 @@ def main():
         return
 
     # The unit and the commented-out line have to move together: either on
-    # its own is a session with no shell in it, or two.
+    # its own is a session with no shell in it, or two. So the unit goes
+    # first and the files are only written once it is there — a shell that
+    # will not build used to leave the session told not to start Quickshell
+    # and nothing put in its place, which is a desktop that comes up empty at
+    # the next login and says nothing about why.
     print("\ncae-shell.service:")
     started = subprocess.run(["bash", str(HERE / "install.sh"), "--standalone"], check=False)
     if started.returncode != 0:
-        sys.exit("standalone: the unit could not be installed; run --undo to put the files back")
+        if not half_done:
+            sys.exit("standalone: the unit could not be installed, so the session was left alone.\n"
+                     "           Nothing needs putting back. Fix the build and run this again.")
+        # Already half moved before this run, and the shell still will not
+        # build: put Quickshell back rather than leave a desktop that comes
+        # up empty.
+        restored = put_back()
+        sys.exit(f"standalone: the unit could not be installed, and the session was already\n"
+                 f"           half moved. Quickshell starts it again ({restored} file(s) put back).\n"
+                 f"           Fix the build and run this again.")
+
+    written = []
+    try:
+        for path, after in planned:
+            kept = path.with_suffix(path.suffix + KEPT)
+            if not kept.exists():
+                shutil.copy2(path, kept)
+            path.write_text(after)
+            written.append(path)
+    except OSError as trouble:
+        for path in written:
+            kept = path.with_suffix(path.suffix + KEPT)
+            if kept.is_file():
+                shutil.copy2(kept, path)
+        subprocess.run(["systemctl", "--user", "disable", UNIT], capture_output=True, check=False)
+        sys.exit(f"standalone: {trouble}\n           The session was put back as it was.")
 
     if args.now:
         hand_over()
