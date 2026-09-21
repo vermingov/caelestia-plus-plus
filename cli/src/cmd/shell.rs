@@ -5,7 +5,8 @@
 //! word `qs`, and this is on the path of every IPC call the bar's own
 //! keybinds make.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 
 pub struct Args {
@@ -39,6 +40,15 @@ pub fn run(args: &Args) -> i32 {
         return print_filtered(&call);
     }
     start(args)
+}
+
+/// Says `words` at the door of the shell that is running, and says whether
+/// anything was listening. cae answers here; the QML shell has no door and
+/// is asked over its own IPC instead.
+pub fn knock(words: &[&str]) -> bool {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(|| std::path::PathBuf::from("/tmp"), std::path::PathBuf::from);
+    let Ok(mut door) = UnixStream::connect(runtime.join("caelestia-shell.sock")) else { return false };
+    door.write_all(format!("{}\n", words.join(" ")).as_bytes()).is_ok()
 }
 
 fn qs(args: &[&str]) -> Option<String> {

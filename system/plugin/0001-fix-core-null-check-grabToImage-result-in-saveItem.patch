@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Caelestia++ <caelestia-plus-plus@users.noreply.github.com>
+Date: Fri, 18 Sep 2026 21:37:51 +0200
+Subject: [PATCH] fix(core): null-check grabToImage result in saveItem
+
+grabToImage() returns a null result when the item's window is hidden or
+otherwise not renderable, as it is during notification teardown. Connecting
+to it printed "invalid nullptr parameter" and dropped the callback without
+a word to the caller.
+
+Port of upstream 07eab4a7, which does not apply to this pin as it is.
+---
+ plugin/src/Caelestia/cutils.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/plugin/src/Caelestia/cutils.cpp b/plugin/src/Caelestia/cutils.cpp
+index 42d7570..e014f94 100644
+--- a/plugin/src/Caelestia/cutils.cpp
++++ b/plugin/src/Caelestia/cutils.cpp
+@@ -58,6 +58,10 @@ void CUtils::saveItem(QQuickItem* target, const QUrl& path, const QRect& rect, Q
+     }
+ 
+     const QSharedPointer<const QQuickItemGrabResult> grabResult = target->grabToImage();
++    if (!grabResult) {
++        qCWarning(lcCUtils) << "saveItem: failed to grab" << target;
++        return;
++    }
+ 
+     QObject::connect(grabResult.data(), &QQuickItemGrabResult::ready, this,
+         [grabResult, scaledRect, path, onSaved, onFailed, this]() {

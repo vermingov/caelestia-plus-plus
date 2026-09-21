@@ -48,7 +48,13 @@ Singleton {
         return `${guard(Protection.connected, Protection.enabled, qsTr("Protection"))} · ${guard(Firewall.connected, Firewall.enabled, qsTr("Firewall"))}`;
     }
 
+    // Opens it on a page, in the external bar where that is the one drawing
+    // it and here otherwise.
     function open(which: string): void {
+        if (ExternalBar.hasSecurity) {
+            ExternalBar.ask(["security", which || root.tab]);
+            return;
+        }
         if (which)
             root.tab = which;
         root.panelOpen = true;
@@ -59,8 +65,13 @@ Singleton {
 
         // NB: never name an IPC function "show" — it collides with the qs CLI
         // `ipc show` subcommand and never invokes.
-        function togglePanel(): void { root.panelOpen = !root.panelOpen; }
-        function openPanel(): void { root.panelOpen = true; }
+        function togglePanel(): void {
+            if (ExternalBar.hasSecurity)
+                root.open("");
+            else
+                root.panelOpen = !root.panelOpen;
+        }
+        function openPanel(): void { root.open(""); }
         function closePanel(): void { root.panelOpen = false; }
         function openTab(which: string): void { root.open(which); }
     }

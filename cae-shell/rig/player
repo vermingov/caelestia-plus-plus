@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""A player that plays nothing, for the rig.
+
+The media page wants a track with a length, a position that moves and a cover,
+and the only players on the machine are the ones somebody is listening to. This
+is one on the rig's own bus: it says it is playing a well-known song, counts
+the seconds, and answers the four buttons and a seek.
+
+    rig/player [TITLE] [ARTIST] [SECONDS]
+"""
+import sys
+import time
+
+import dbus
+import dbus.mainloop.glib
+import dbus.service
+from gi.repository import GLib
+
+PLAYER = "org.mpris.MediaPlayer2.Player"
+ROOT = "org.mpris.MediaPlayer2"
+PROPERTIES = "org.freedesktop.DBus.Properties"
+
+
+class Player(dbus.service.Object):
+    def __init__(self, bus, title, artist, seconds):
+        name = dbus.service.BusName("org.mpris.MediaPlayer2.rig", bus)
+        super().__init__(name, "/org/mpris/MediaPlayer2")
+        self.title, self.artist, self.length = title, artist, seconds * 1_000_000
+        self.playing, self.offset, self.since = True, 0, time.monotonic()
+
+    def position(self):
+        played = int((time.monotonic() - self.since) * 1_000_000) if self.playing else 0
+        return min(self.offset + played, self.length)
+
+    def metadata(self):
+        return dbus.Dictionary({
+            "mpris:trackid": dbus.ObjectPath("/rig/track/1"),
+            "mpris:length": dbus.Int64(self.length),
+            "xesam:title": self.title,
+            "xesam:artist": dbus.Array([self.artist], signature="s"),
+            "xesam:album": "A Night at the Opera",
+        }, signature="sv")
+
+    def all(self, interface):
+        if interface == ROOT:
+            return {"Identity": "Rig player"}
+        return {
+            "PlaybackStatus": "Playing" if self.playing else "Paused",
+            "Metadata": self.metadata(),
+            "Position": dbus.Int64(self.position()),
+            "CanGoNext": True, "CanGoPrevious": True, "CanSeek": True, "CanPlay": True, "CanPause": True,
+        }
+
+    @dbus.service.method(PROPERTIES, in_signature="s", out_signature="a{sv}")
+    def GetAll(self, interface):
+        return self.all(interface)
+
+    @dbus.service.method(PROPERTIES, in_signature="ss", out_signature="v")
+    def Get(self, interface, name):
+        return self.all(interface)[name]
+
+    @dbus.service.method(PLAYER)
+    def PlayPause(self):
+        self.offset, self.since, self.playing = self.position(), time.monotonic(), not self.playing
+        print("PlayPause ->", "playing" if self.playing else "paused", flush=True)
+
+    @dbus.service.method(PLAYER)
+    def Next(self):
+        print("Next", flush=True)
+
+    @dbus.service.method(PLAYER)
+    def Previous(self):
+        self.offset, self.since = 0, time.monotonic()
+        print("Previous", flush=True)
+
+    @dbus.service.method(PLAYER, in_signature="ox")
+    def SetPosition(self, track, position):
+        self.offset, self.since = int(position), time.monotonic()
+        print("SetPosition", track, int(position) // 1_000_000, "s", flush=True)
+
+
+def main():
+    title = sys.argv[1] if len(sys.argv) > 1 else "Bohemian Rhapsody"
+    artist = sys.argv[2] if len(sys.argv) > 2 else "Queen"
+    seconds = int(sys.argv[3]) if len(sys.argv) > 3 else 354
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    Player(dbus.SessionBus(), title, artist, seconds)
+    GLib.MainLoop().run()
+
+
+if __name__ == "__main__":
+    main()

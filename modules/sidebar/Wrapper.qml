@@ -4,6 +4,7 @@ import QtQuick
 import Caelestia
 import Caelestia.Config
 import qs.components
+import qs.services
 
 Item {
     id: root
@@ -11,7 +12,9 @@ Item {
     required property ScreenState screenState
     readonly property Props props: Props {}
 
-    readonly property bool shouldBeActive: screenState.sidebar && Config.sidebar.enabled
+    // Not while the external bar draws its own notification centre: the two
+    // are the same list, out of the same edge.
+    readonly property bool shouldBeActive: screenState.sidebar && Config.sidebar.enabled && !Notifs.external
     property real offsetScale: shouldBeActive ? 0 : 1
 
     visible: offsetScale < 1

@@ -28,16 +28,27 @@ else
     fail "no git checkout at $sd"
 fi
 
+# Which shell this machine runs. cae draws the desktop by itself now; a
+# machine that has not been handed over yet still has Quickshell starting it,
+# and nearly everything below is asked differently of the two.
+cae_unit=cae-shell.service
+standalone() { systemctl --user is-enabled --quiet "$cae_unit" 2>/dev/null; }
+
 echo "--- stack"
 pass "$(hyprctl version 2>/dev/null | head -1 || echo 'hyprctl unavailable')"
-pass "quickshell binary: $(pacman -Qo /usr/bin/qs 2>/dev/null || echo 'unknown owner')"
-pass "qt: $(pacman -Q qt6-base qt6-declarative qt6-wayland 2>/dev/null | tr '\n' ' ')"
-# A prebuilt quickshell stops loading after a Qt patch release moves private
-# symbols; the running shell survives on the old libraries, the next login does not
-if timeout 20 qs --version >/dev/null 2>&1; then
-    pass "qs binary starts: $(timeout 20 qs --version 2>/dev/null | head -1)"
+if standalone; then
+    pass "the session is cae's own ($cae_unit); Quickshell is not in it"
 else
-    fail "qs binary does not start ($(timeout 20 qs --version 2>&1 | head -1 | cut -c1-120)) — fix: sudo bash $sd/system/quickshell/install.sh"
+    pass "quickshell binary: $(pacman -Qo /usr/bin/qs 2>/dev/null || echo 'unknown owner')"
+    pass "qt: $(pacman -Q qt6-base qt6-declarative qt6-wayland 2>/dev/null | tr '\n' ' ')"
+    # A prebuilt quickshell stops loading after a Qt patch release moves private
+    # symbols; the running shell survives on the old libraries, the next login does not
+    if timeout 20 qs --version >/dev/null 2>&1; then
+        pass "qs binary starts: $(timeout 20 qs --version 2>/dev/null | head -1)"
+    else
+        fail "qs binary does not start ($(timeout 20 qs --version 2>&1 | head -1 | cut -c1-120)) — fix: sudo bash $sd/system/quickshell/install.sh"
+    fi
+    warn "Quickshell still starts the shell — hand it over with: cae migrate"
 fi
 
 echo "--- environment"
@@ -47,7 +58,18 @@ command -v powerprofilesctl >/dev/null 2>&1 && pass "power-profiles-daemon insta
     || warn "no ~/.face — dashboard avatar shows placeholder (click it in the dashboard to set one)"
 
 echo "--- shell process"
-if pgrep -f 'qs -c caelestia' >/dev/null; then
+if standalone; then
+    if systemctl --user is-active --quiet "$cae_unit"; then
+        pass "cae running ($(systemctl --user show -p MainPID --value "$cae_unit"))"
+    else
+        fail "cae not running — start with: systemctl --user start $cae_unit"
+    fi
+    if hyprctl layers 2>/dev/null | grep -q 'caelestia-bar'; then
+        pass "a bar is on the screen"
+    else
+        fail "nothing is drawing a bar — see: journalctl --user -u $cae_unit"
+    fi
+elif pgrep -f 'qs -c caelestia' >/dev/null; then
     pass "shell running"
 else
     fail "shell not running — start with: caelestia shell -d"
@@ -62,14 +84,22 @@ try:
 except Exception as e:
     print("WARN  could not parse monitors:", e)'
 
-echo "--- popouts per screen (hover the wifi/bluetooth icons on EACH monitor first for best data)"
-for name in $(hyprctl monitors -j 2>/dev/null | python3 -c 'import json,sys; print(" ".join(m["name"] for m in json.load(sys.stdin)))'); do
-    out=$(qs -c caelestia ipc call "popouts-$name" state 2>&1)
-    case $out in
-        '{'*) pass "popouts-$name: $out" ;;
-        *)    fail "popouts-$name: $out" ;;
-    esac
-done
+if standalone; then
+    # cae keeps no popout state to ask for; what it draws is on the screen,
+    # and the screen is what the compositor will happily list.
+    echo "--- surfaces"
+    hyprctl layers 2>/dev/null | grep -oE 'namespace: caelestia-[a-z-]+' | sort | uniq -c \
+        | while read -r count namespace; do pass "${namespace#namespace: } x$count"; done
+else
+    echo "--- popouts per screen (hover the wifi/bluetooth icons on EACH monitor first for best data)"
+    for name in $(hyprctl monitors -j 2>/dev/null | python3 -c 'import json,sys; print(" ".join(m["name"] for m in json.load(sys.stdin)))'); do
+        out=$(qs -c caelestia ipc call "popouts-$name" state 2>&1)
+        case $out in
+            '{'*) pass "popouts-$name: $out" ;;
+            *)    fail "popouts-$name: $out" ;;
+        esac
+    done
+fi
 
 echo "--- hyprland layer rules touching the shell"
 found=0
@@ -95,9 +125,18 @@ else
         fail "/dev/input not readable"
     fi
 fi
-if pgrep -f "penis-egg-watch" >/dev/null; then pass "egg watcher running"; else fail "egg watcher not running (shell spawns it at startup — restart the shell)"; fi
+if pgrep -f "penis-egg-watch" >/dev/null || pgrep -f "egg-watch" >/dev/null; then pass "egg watcher running"; else fail "egg watcher not running (the shell starts it — restart the shell)"; fi
 command -v python3 >/dev/null && pass "python3 present" || fail "python3 missing"
-if qs -c caelestia ipc show 2>/dev/null | grep -q "target easterEgg"; then
+if standalone; then
+    # cae answers at its door rather than over Quickshell's IPC. The door
+    # being there is the whole of the question: it is the running shell that
+    # opens it, and every verb goes through it.
+    if [[ -S ${XDG_RUNTIME_DIR:-/tmp}/caelestia-shell.sock ]]; then
+        pass "cae's door is open (egg reachable as: cae-shell egg)"
+    else
+        fail "cae's door is not there — the shell is not running"
+    fi
+elif qs -c caelestia ipc show 2>/dev/null | grep -q "target easterEgg"; then
     pass "easterEgg IPC target registered"
 else
     fail "easterEgg IPC target missing from the running shell"
@@ -105,11 +144,17 @@ fi
 [[ -f $HOME/.config/quickshell/caelestia/assets/penis-egg-watch.py ]] \
     && pass "watcher script present in checkout" || fail "watcher script missing from checkout"
 if [[ ${1:-} == --pop ]]; then
-    echo ":: popping the egg via IPC (watch the bottom of your screen)"
-    qs -c caelestia ipc call easterEgg pop
+    echo ":: popping the egg (watch the bottom of your screen)"
+    if standalone; then cae-shell egg; else qs -c caelestia ipc call easterEgg pop; fi
 fi
 
 echo "--- recent shell log (errors/warnings after your hovers land here)"
+if standalone; then
+    journalctl --user -u "$cae_unit" -n 200 --no-pager 2>/dev/null \
+        | grep -iE "error|warn" | grep -viE "dbus|upower|StatusNotifier" | tail -25
+    echo "(from journalctl --user -u $cae_unit)"
+    exit 0
+fi
 logdir=$(ls -td /run/user/*/quickshell/by-id/*/ 2>/dev/null | head -1)
 if [[ -n $logdir && -f $logdir/log.log ]]; then
     grep -iE "error|warn" "$logdir/log.log" 2>/dev/null \

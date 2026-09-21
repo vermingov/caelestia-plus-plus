@@ -1,0 +1,53 @@
+[package]
+name = "cae"
+description = "The Caelestia++ shell: bar, launcher, notifications and the rest, drawn with GPUI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Not `cae`: that name is the command that updates and restarts all of this,
+# and its bare form is a full update. A shell installed over it would turn the
+# one into the other. `cae preview` and, in time, `cae restart` run this.
+[[bin]]
+name = "cae-shell"
+path = "src/main.rs"
+
+[dependencies]
+cae-core = { path = "../core" }
+
+# GPUI is not on crates.io in the shape gpui-rsx targets, so it comes from
+# Zed's repository. Pinned to one commit: a moving git dependency is a build
+# that breaks on somebody else's machine the day upstream renames something.
+# Wayland only: this is a layer-shell client, and the X11 backend would be a
+# few hundred crates compiled for a platform it cannot run on.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "0eda770", default-features = false, features = ["wayland"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "0eda770", features = ["wayland"] }
+# The markup. A proc macro and nothing else: it expands to GPUI builder calls
+# at compile time and is not in the binary at all.
+gpui-rsx = "0.7"
+# Carrying a backend thread's result to the thread that draws.
+futures = "0.3"
+libc.workspace = true
+# What a setting is, between the file it is kept in and the row that shows it.
+serde_json.workspace = true
+# GPUI names a Wayland output only through a UUID made from its name, so the
+# same UUID is what finds the output Hyprland calls "eDP-1".
+uuid = { version = "1", features = ["v5"] }
+# Only for the name of one type: GPUI re-exports the stroke options its paths
+# take but not the cap style inside them, and a dial wants round ends. The
+# version GPUI itself uses, so it is the same type and compiles nothing new.
+lyon = "1.0"
+# The desktop's background is a shader or a picture the size of the screen,
+# neither of which is GPUI's to draw, so it has a Wayland surface of its own
+# and draws on it with wgpu. All of these are what GPUI is built on already,
+# at the versions it uses: nothing new is compiled.
+wgpu = "29"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+raw-window-handle = "0.6"
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# Where one character ends and the next begins, which in text a person typed
+# is not where one byte or one code point does. Already built for GPUI.
+unicode-segmentation = "1"

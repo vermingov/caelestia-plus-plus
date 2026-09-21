@@ -101,13 +101,21 @@ def desktop_is_focused():
     return cursor_workspace_is_empty()
 
 
+# What each one is called at cae's door, which is asked first: cae draws
+# these now where it is installed, and the QML shell where it is not.
+DOOR_VERBS = {"easterEgg": "egg", "israelEgg": "cinema"}
+
+
 def pop_egg(target):
-    # Never let a hung/missing qs kill the watcher — nothing restarts it
-    try:
-        subprocess.run(["qs", "-c", "caelestia", "ipc", "call", target, "pop"],
-                       capture_output=True, timeout=5)
-    except (subprocess.SubprocessError, OSError):
-        pass
+    # Never let a hung or missing shell kill the watcher — nothing restarts it
+    asks = [["cae-shell", DOOR_VERBS[target]],
+            ["qs", "-c", "caelestia", "ipc", "call", target, "pop"]]
+    for ask in asks:
+        try:
+            if subprocess.run(ask, capture_output=True, timeout=5).returncode == 0:
+                return
+        except (subprocess.SubprocessError, OSError):
+            continue
 
 
 def matched_target(recent):

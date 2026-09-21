@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Caelestia++ <caelestia-plus-plus@users.noreply.github.com>
+Date: Fri, 18 Sep 2026 21:37:51 +0200
+Subject: [PATCH] fix(requests): stop sending Connection: close
+
+Connection-specific headers are forbidden in HTTP/2 (RFC 7540 8.1.2.2). Qt
+up to 6.11.1 dropped this one when it negotiated h2; 6.11.2 forwards it,
+ipinfo, nominatim and open-meteo reset the stream, and every Requests.get
+ends in "HTTP/2 protocol error". There was no connection to keep alive
+here in the first place.
+---
+ plugin/src/Caelestia/requests.cpp | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/plugin/src/Caelestia/requests.cpp b/plugin/src/Caelestia/requests.cpp
+index 862dea7..b4dd999 100644
+--- a/plugin/src/Caelestia/requests.cpp
++++ b/plugin/src/Caelestia/requests.cpp
+@@ -26,7 +26,6 @@ void Requests::get(const QUrl& url, QJSValue onSuccess, QJSValue onError, QJSVal
+     request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
+     request.setRawHeader("Cache-Control", "no-cache, no-store");
+     request.setRawHeader("Pragma", "no-cache");
+-    request.setRawHeader("Connection", "close");
+ 
+     if (headers.isObject()) {
+         QJSValueIterator it(headers);

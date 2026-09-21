@@ -6,6 +6,7 @@ import QtMultimedia
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import qs.services
 
 // Desktop easter egg: `qs -c caelestia ipc call israelEgg pop` plays
 // israel.mp3 at 80% volume under a fullscreen five-act cinematic -
@@ -20,6 +21,10 @@ import Quickshell.Wayland
 Scope {
     id: root
 
+    // cae plays this one now; while it does, this whole thing stays where
+    // it is and never starts.
+    readonly property bool active: !ExternalBar.hasCinema
+
     // 0 idle, 1 star act, 2 flag act, 3 tank act, 4 portrait act,
     // 5 awakening act, 6 fading out
     property int phase: 0
@@ -28,7 +33,7 @@ Scope {
         target: "israelEgg"
 
         function pop(): void {
-            if (root.phase === 0)
+            if (root.active && root.phase === 0)
                 root.phase = 1;
         }
     }

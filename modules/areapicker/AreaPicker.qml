@@ -8,6 +8,8 @@ import qs.components.misc
 import qs.services
 
 Scope {
+    id: picker
+
     LazyLoader {
         id: root
 
@@ -47,87 +49,82 @@ Scope {
         }
     }
 
+    // Opens it, here or in the external bar where that is the one with a
+    // picker: two pickers over the same screen would each take a shot of the
+    // other.
+    function open(freeze: bool, clip: bool): void {
+        if (ExternalBar.hasPicker) {
+            ExternalBar.ask(["picker", ...(freeze ? ["freeze"] : []), ...(clip ? ["clip"] : [])]);
+            return;
+        }
+        root.freeze = freeze;
+        root.closing = false;
+        root.clipboardOnly = clip;
+        root.activeAsync = true;
+    }
+
     IpcHandler {
         function open(): void {
-            root.freeze = false;
-            root.closing = false;
-            root.clipboardOnly = false;
-            root.activeAsync = true;
+            picker.open(false, false);
         }
 
         function openFreeze(): void {
-            root.freeze = true;
-            root.closing = false;
-            root.clipboardOnly = false;
-            root.activeAsync = true;
+            picker.open(true, false);
         }
 
         function openClip(): void {
-            root.freeze = false;
-            root.closing = false;
-            root.clipboardOnly = true;
-            root.activeAsync = true;
+            picker.open(false, true);
         }
 
         function openFreezeClip(): void {
-            root.freeze = true;
-            root.closing = false;
-            root.clipboardOnly = true;
-            root.activeAsync = true;
+            picker.open(true, true);
         }
 
         target: "picker"
     }
 
+    // The four ways in, each of which the external bar's own picker takes
+    // over when it has one. `open` below is what does the handing over.
+    component Shot: CustomShortcut {
+        required property bool freeze
+        required property bool clip
+
+        onPressed: picker.open(freeze, clip)
+    }
+
     // qmllint disable unresolved-type
-    CustomShortcut {
+    Shot {
         // qmllint enable unresolved-type
         name: "screenshot"
         description: "Open screenshot tool"
-        onPressed: {
-            root.freeze = false;
-            root.closing = false;
-            root.clipboardOnly = false;
-            root.activeAsync = true;
-        }
+        freeze: false
+        clip: false
     }
 
     // qmllint disable unresolved-type
-    CustomShortcut {
+    Shot {
         // qmllint enable unresolved-type
         name: "screenshotFreeze"
         description: "Open screenshot tool (freeze mode)"
-        onPressed: {
-            root.freeze = true;
-            root.closing = false;
-            root.clipboardOnly = false;
-            root.activeAsync = true;
-        }
+        freeze: true
+        clip: false
     }
 
     // qmllint disable unresolved-type
-    CustomShortcut {
+    Shot {
         // qmllint enable unresolved-type
         name: "screenshotClip"
         description: "Open screenshot tool (clipboard)"
-        onPressed: {
-            root.freeze = false;
-            root.closing = false;
-            root.clipboardOnly = true;
-            root.activeAsync = true;
-        }
+        freeze: false
+        clip: true
     }
 
     // qmllint disable unresolved-type
-    CustomShortcut {
+    Shot {
         // qmllint enable unresolved-type
         name: "screenshotFreezeClip"
         description: "Open screenshot tool (freeze mode, clipboard)"
-        onPressed: {
-            root.freeze = true;
-            root.closing = false;
-            root.clipboardOnly = true;
-            root.activeAsync = true;
-        }
+        freeze: true
+        clip: true
     }
 }

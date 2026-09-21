@@ -14,21 +14,23 @@
 //! costs what it always did.
 
 mod actions;
-mod apps;
+pub mod apps;
 mod calc;
-mod config;
-mod icons;
+pub mod config;
+pub mod icons;
 mod modes;
-mod schemes;
+pub mod schemes;
 mod search;
 mod usage;
-mod variants;
-mod wallpapers;
+pub mod variants;
+pub mod wallpapers;
 mod watch;
 
+#[cfg(feature = "tauri-ui")]
 use std::sync::Mutex;
 
 use serde::Serialize;
+#[cfg(feature = "tauri-ui")]
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct Launcher {
@@ -45,7 +47,10 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    fn new() -> Launcher {
+    /// Reads everything the launcher lists: the desktop entries, the usage
+    /// counts, the schemes, the wallpapers. Hundreds of milliseconds of disk
+    /// and of other programs' output, so never on a thread that draws.
+    pub fn new() -> Launcher {
         let config = config::Config::load();
         let (current_scheme, current_variant) = schemes::current();
         Launcher {
@@ -60,7 +65,60 @@ impl Launcher {
             config,
         }
     }
+}
 
+impl Default for Launcher {
+    fn default() -> Launcher {
+        Launcher::new()
+    }
+}
+
+/// The desktop entries as just read from disk, on their way into a launcher.
+///
+/// Opaque, and its own step, so that the reading can be done by whoever
+/// noticed the change and the launcher is only held for the swap: a keystroke
+/// is never waiting behind a directory walk.
+pub struct Apps(Vec<apps::App>);
+
+impl Apps {
+    pub fn load() -> Apps {
+        Apps(apps::load())
+    }
+}
+
+impl Launcher {
+    /// Finds every application's icon now, so that no search has to.
+    ///
+    /// For whoever builds a launcher away from the thread that draws: there
+    /// it is a fraction of a second nobody is waiting for, and left until the
+    /// launcher opens it is the same fraction of a second between the key and
+    /// the first frame.
+    #[cfg_attr(feature = "tauri-ui", allow(dead_code))]
+    pub fn warm(&self) {
+        for app in &self.apps {
+            let _ = self.icons.resolve(&app.icon);
+        }
+    }
+
+    /// Keeps what the launcher this one replaces had found out about icons.
+    #[cfg_attr(feature = "tauri-ui", allow(dead_code))]
+    pub fn inherit_icons(&self, old: &Launcher) {
+        self.icons.inherit(&old.icons);
+    }
+
+    /// A new app brings new icons with it, and a name that resolved to
+    /// nothing before is exactly the name that has a file now, so the
+    /// negative results cached against it have to go as well.
+    pub fn take_apps(&mut self, fresh: Apps) {
+        self.icons.forget();
+        self.apps = fresh.0;
+    }
+}
+
+/// Blocks, calling `changed` whenever a directory desktop entries live in
+/// has changed and gone quiet again.
+pub fn watch_applications(changed: impl FnMut()) -> Result<(), String> {
+    watch::watch_dirs(apps::application_dirs(), changed)
 }
 
 /// One row, whatever mode produced it. The front end draws by `kind` — an
@@ -128,27 +186,33 @@ pub struct Results {
 /// Every mode goes through here on every keystroke: ranking a thousand apps
 /// takes a few hundred microseconds, and a launcher that lags the keyboard is
 /// the one thing it may not do.
+impl Launcher {
+    pub fn search(&self, query: &str) -> Results {
+        let (mode, argument) = modes::parse(query, &self.config);
+
+        let entries = match mode {
+            modes::Mode::Apps => app_entries(self, argument),
+            modes::Mode::Actions => action_entries(self, argument),
+            modes::Mode::Calc => calc_entries(argument),
+            modes::Mode::Scheme => scheme_entries(self, argument),
+            modes::Mode::Variant => variant_entries(self, argument),
+            modes::Mode::Wallpaper => wallpaper_entries(self, argument),
+        };
+
+        Results {
+            max_shown: self.config.launcher.max_shown.clamp(3, 20),
+            mode: mode.name().to_string(),
+            label: mode.label().to_string(),
+            action: mode.action().to_string(),
+            entries,
+        }
+    }
+}
+
+#[cfg(feature = "tauri-ui")]
 #[tauri::command]
 pub fn search(query: String, state: State<'_, Mutex<Launcher>>) -> Results {
-    let launcher = state.lock().expect("the launcher state is not poisoned");
-    let (mode, argument) = modes::parse(&query, &launcher.config);
-
-    let entries = match mode {
-        modes::Mode::Apps => app_entries(&launcher, argument),
-        modes::Mode::Actions => action_entries(&launcher, argument),
-        modes::Mode::Calc => calc_entries(argument),
-        modes::Mode::Scheme => scheme_entries(&launcher, argument),
-        modes::Mode::Variant => variant_entries(&launcher, argument),
-        modes::Mode::Wallpaper => wallpaper_entries(&launcher, argument),
-    };
-
-    Results {
-        max_shown: launcher.config.launcher.max_shown.clamp(3, 20),
-        mode: mode.name().to_string(),
-        label: mode.label().to_string(),
-        action: mode.action().to_string(),
-        entries,
-    }
+    state.lock().expect("the launcher state is not poisoned").search(&query)
 }
 
 fn app_entries(launcher: &Launcher, query: &str) -> Vec<Entry> {
@@ -306,71 +370,85 @@ fn capitalise(word: &str) -> String {
     }
 }
 
-/// What Enter does, which depends on the mode the query is in.
-///
-/// Returns the text the search box should now hold: empty means the launcher
-/// is done and closing, anything else means a command asked to lead the user
-/// somewhere (an `autocomplete` action, or the calculator handing off).
-#[tauri::command]
-pub fn activate(query: String, id: String, app: AppHandle, state: State<'_, Mutex<Launcher>>) -> String {
-    let mut launcher = state.lock().expect("the launcher state is not poisoned");
-    let (mode, _) = modes::parse(&query, &launcher.config);
+impl Launcher {
+    /// What Enter does, which depends on the mode the query is in.
+    ///
+    /// Returns the text the search box should now hold: empty means the
+    /// launcher is done and closing, anything else means a command asked to
+    /// lead the user somewhere (an `autocomplete` action, or the calculator
+    /// handing off).
+    pub fn activate(&mut self, query: &str, id: &str) -> String {
+        let (mode, _) = modes::parse(query, &self.config);
 
-    match mode {
-        modes::Mode::Apps => {
-            if let Some(entry) = launcher.apps.iter().find(|a| a.id == id) {
-                let command = if entry.terminal {
-                    format!("{} -e {}", launcher.config.terminal.join(" "), entry.exec)
-                } else {
-                    entry.exec.clone()
-                };
-                spawn_detached(&command);
-                launcher.usage.record(&id);
-            }
-        }
-        modes::Mode::Actions => {
-            let config = launcher.config.clone();
-            if let Some(action) = config.usable_actions().into_iter().find(|a| a.name == id) {
-                if let actions::Outcome::Autocomplete(text) = actions::run(action, &config) {
-                    // Stays open: the point of the action was to get here.
-                    return text;
+        match mode {
+            modes::Mode::Apps => {
+                if let Some(entry) = self.apps.iter().find(|a| a.id == id) {
+                    let command = if entry.terminal {
+                        format!("{} -e {}", self.config.terminal.join(" "), entry.exec)
+                    } else {
+                        entry.exec.clone()
+                    };
+                    // On the graphics card it was given, if it was given one.
+                    spawn_detached(&format!("{}{command}", crate::gpus::launch_prefix(id)));
+                    self.usage.record(id);
                 }
             }
-        }
-        modes::Mode::Calc => {
-            if id.is_empty() {
-                return query; // nothing to copy yet
+            modes::Mode::Actions => {
+                let config = self.config.clone();
+                if let Some(action) = config.usable_actions().into_iter().find(|a| a.name == id) {
+                    if let actions::Outcome::Autocomplete(text) = actions::run(action, &config) {
+                        // Stays open: the point of the action was to get here.
+                        return text;
+                    }
+                }
             }
-            copy_to_clipboard(&id);
-        }
-        modes::Mode::Scheme => {
-            if let Some((name, flavour)) = id.split_once('/') {
-                schemes::apply(name, flavour);
+            modes::Mode::Calc => {
+                if id.is_empty() {
+                    return query.to_string(); // nothing to copy yet
+                }
+                copy_to_clipboard(id);
             }
+            modes::Mode::Scheme => {
+                if let Some((name, flavour)) = id.split_once('/') {
+                    schemes::apply(name, flavour);
+                }
+            }
+            modes::Mode::Variant => schemes::apply_variant(id),
+            modes::Mode::Wallpaper => wallpapers::set(id),
         }
-        modes::Mode::Variant => schemes::apply_variant(&id),
-        modes::Mode::Wallpaper => wallpapers::set(&id),
+        String::new()
     }
 
-    hide(&app);
-    String::new()
+    /// Opens a calculation in a real calculator, which is the one thing a
+    /// one-line answer cannot do. False when there was nothing to open.
+    pub fn open_in_calculator(&self, expression: &str) -> bool {
+        let expression = expression.trim();
+        if expression.is_empty() {
+            return false;
+        }
+        let terminal = self.config.terminal.join(" ");
+        let quoted = expression.replace('\'', r"'\''");
+        spawn_detached(&format!("{terminal} fish -C \"exec qalc -i '{quoted}'\""));
+        true
+    }
 }
 
-/// Opens the current calculation in a real calculator, which is the one
-/// thing a one-line answer cannot do.
+#[cfg(feature = "tauri-ui")]
+#[tauri::command]
+pub fn activate(query: String, id: String, app: AppHandle, state: State<'_, Mutex<Launcher>>) -> String {
+    let next = state.lock().expect("the launcher state is not poisoned").activate(&query, &id);
+    if next.is_empty() {
+        hide(&app);
+    }
+    next
+}
+
+#[cfg(feature = "tauri-ui")]
 #[tauri::command]
 pub fn open_in_calculator(expression: String, app: AppHandle, state: State<'_, Mutex<Launcher>>) {
-    let expression = expression.trim();
-    if expression.is_empty() {
-        return;
+    if state.lock().expect("the launcher state is not poisoned").open_in_calculator(&expression) {
+        hide(&app);
     }
-    let terminal = {
-        let launcher = state.lock().expect("the launcher state is not poisoned");
-        launcher.config.terminal.join(" ")
-    };
-    let quoted = expression.replace('\'', r"'\''");
-    spawn_detached(&format!("{terminal} fish -C \"exec qalc -i '{quoted}'\""));
-    hide(&app);
 }
 
 fn copy_to_clipboard(text: &str) {
@@ -397,11 +475,13 @@ fn spawn_detached(command: &str) {
     }
 }
 
+#[cfg(feature = "tauri-ui")]
 #[tauri::command]
 pub fn dismiss(app: AppHandle) {
     hide(&app);
 }
 
+#[cfg(feature = "tauri-ui")]
 fn hide(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("launcher") {
         let _ = window.hide();
@@ -413,6 +493,7 @@ fn hide(app: &AppHandle) {
     refresh_in_background(app);
 }
 
+#[cfg(feature = "tauri-ui")]
 /// Re-reads everything that can go stale, off the main thread and after the
 /// window is out of the way.
 ///
@@ -433,6 +514,7 @@ fn refresh_in_background(app: &AppHandle) {
     });
 }
 
+#[cfg(feature = "tauri-ui")]
 /// Opens with the search box already filled, so a keybind can drop straight
 /// into a mode — `>wallpaper ` for the picker, `>calc ` for the calculator.
 fn show_with(app: &AppHandle, query: &str) {
@@ -455,6 +537,7 @@ fn show_with(app: &AppHandle, query: &str) {
     }
 }
 
+#[cfg(feature = "tauri-ui")]
 /// Closes the launcher if it is up; nothing otherwise.
 ///
 /// For when the view goes somewhere else underneath it. Losing focus is what
@@ -469,6 +552,7 @@ pub fn close_if_open(app: &AppHandle) {
     }
 }
 
+#[cfg(feature = "tauri-ui")]
 pub fn toggle_with(app: &AppHandle, query: &str) {
     let Some(window) = app.get_webview_window("launcher") else { return };
     if window.is_visible().unwrap_or(false) {
@@ -481,9 +565,12 @@ pub fn toggle_with(app: &AppHandle, query: &str) {
 /// The socket a second invocation talks to, so `--toggle` is a connect and a
 /// byte rather than a program start.
 mod control {
-    use std::os::unix::net::{UnixListener, UnixStream};
+    #[cfg(feature = "tauri-ui")]
+    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
 
+    #[cfg(feature = "tauri-ui")]
     use tauri::AppHandle;
 
     pub fn socket_path() -> PathBuf {
@@ -514,6 +601,7 @@ mod control {
         UnixStream::connect(socket_path()).is_ok()
     }
 
+    #[cfg(feature = "tauri-ui")]
     pub fn listen(app: AppHandle) {
         let path = socket_path();
         // Stale, from a launcher that crashed without cleaning up.
@@ -552,8 +640,9 @@ mod control {
     }
 }
 
-pub use control::{already_running, send as send_control};
+pub use control::{already_running, send as send_control, socket_path};
 
+#[cfg(feature = "tauri-ui")]
 /// Builds the launcher window and everything behind it.
 ///
 /// Called once from the bar's own setup. The window is built here rather than
@@ -600,10 +689,12 @@ pub fn setup(app: &AppHandle) {
     });
 }
 
+#[cfg(feature = "tauri-ui")]
 /// The launcher window's label.
 pub const WINDOW: &str = "launcher";
 
 
+#[cfg(feature = "tauri-ui")]
 /// Everything that needs the window underneath Tauri.
 mod platform {
     use tauri::WebviewWindow;

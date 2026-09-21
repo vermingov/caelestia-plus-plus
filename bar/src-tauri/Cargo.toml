@@ -43,7 +43,10 @@ gtk-layer-shell = { version = "0.8", features = ["v0_6"], optional = true }
 notify = { version = "7", default-features = false }
 
 [features]
-default = []
+# `tauri-ui` marks the glue that only means anything inside a Tauri app. cae,
+# in ../../cae-shell, builds the rest of these sources without it.
+default = ["tauri-ui"]
+tauri-ui = []
 layer-shell = ["dep:gtk", "dep:gtk-layer-shell"]
 
 [profile.release]

@@ -26,7 +26,13 @@ import qs.utils
 Singleton {
     id: root
 
-    readonly property string binary: "caelestia-bar"
+    // cae is the shell that is taking this one's place, a piece at a time: it
+    // draws the bar, the launcher and the notifications, in one process with
+    // no web engine in it. The Tauri bar it replaced is the one used where cae
+    // is not installed, and stays in the tree, as the QML one under it does.
+    readonly property list<string> binaries: ["cae-shell", "caelestia-bar"]
+    // Whichever of them is installed, by name, for the log
+    readonly property string binary: root.executable.split("/").pop() || root.binaries[0]
     // Where the check below found it; empty while it has not
     property string executable
 
@@ -44,12 +50,66 @@ Singleton {
     // True once that has been answered, whichever way
     property bool notifsKnown
 
+    // The other pieces the installed shell draws, which its installer records
+    // the same way, a file each: `bar-serves-dashboard`, `bar-serves-session`,
+    // `bar-serves-osd`, `bar-serves-background`, `bar-serves-utilities`.
+    // While it draws one, the one here stands down and the keys that open it
+    // are passed along: two of anything rising out of the same corner is one
+    // too many.
+    property list<string> served
+    readonly property bool hasDashboard: root.has("dashboard")
+    readonly property bool hasSession: root.has("session")
+    readonly property bool hasOsd: root.has("osd")
+    readonly property bool hasBackground: root.has("background")
+    readonly property bool hasUtilities: root.has("utilities")
+    readonly property bool hasIdle: root.has("idle")
+    readonly property bool hasPicker: root.has("picker")
+    readonly property bool hasGuard: root.has("guard")
+    readonly property bool hasSecurity: root.has("security")
+    readonly property bool hasFeatures: root.has("features")
+    readonly property bool hasLock: root.has("lock")
+    readonly property bool hasBattery: root.has("battery")
+    readonly property bool hasScan: root.has("scan")
+    readonly property bool hasEgg: root.has("egg")
+    readonly property bool hasCinema: root.has("cinema")
+
+    function has(piece: string): bool {
+        return root.external && root.served.includes(piece);
+    }
+
+    // Asks the installed shell to show, hide or toggle a piece it draws, and
+    // says whether it was asked: a caller that hears no does it here instead.
+    // `how` is "show", "hide" or "toggle".
+    function asked(piece: string, how: string): bool {
+        if (!root.has(piece))
+            return false;
+        root.ask([piece, how]);
+        return true;
+    }
+
+    // Says `words` to the shell that is running, down its socket.
+    function ask(words: list<string>): void {
+        Quickshell.execDetached([root.executable, ...words]);
+    }
+
     // Asked again after anything installs or removes the binary, because the
     // checks below run once and a shell that learned the answers at startup
     // would keep both this and the other one on screen until it restarted.
     function recheck(): void {
         check.running = true;
         notifsCheck.running = true;
+        servedCheck.running = true;
+    }
+
+    Process {
+        id: servedCheck
+
+        running: true
+        command: ["sh", "-c", `cd '${Paths.state}' 2>/dev/null && ls bar-serves-* 2>/dev/null`]
+
+        stdout: StdioCollector {
+            onStreamFinished: root.served = text.split("\n").map(name => name.replace("bar-serves-", "").trim()).filter(name => name.length > 0)
+        }
     }
 
     Process {
@@ -68,7 +128,7 @@ Singleton {
         id: check
 
         running: true
-        command: Paths.locate(root.binary)
+        command: Paths.locateFirst(root.binaries)
 
         stdout: StdioCollector {
             onStreamFinished: root.executable = text.trim()

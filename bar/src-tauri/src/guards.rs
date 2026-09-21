@@ -15,10 +15,18 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-/// Where each daemon listens. Both are root-owned sockets, group-readable by
-/// the user the desktop runs as.
-const SOCKETS: [(&str, &str); 2] =
-    [("firewall", "/run/redwall/ui.sock"), ("protection", "/run/redguard/ui.sock")];
+/// Where each daemon listens, under `/run`: both are root-owned sockets,
+/// group-readable by the user the desktop runs as.
+///
+/// `CAELESTIA_GUARD_RUN` puts that somewhere else, which is how the test rig
+/// answers with a daemon of its own instead of the machine's: a verdict is
+/// not something to try out on the real one.
+const SOCKETS: [(&str, &str); 2] = [("firewall", "redwall/ui.sock"), ("protection", "redguard/ui.sock")];
+
+fn socket(path: &str) -> std::path::PathBuf {
+    let run = std::env::var_os("CAELESTIA_GUARD_RUN").unwrap_or_else(|| "/run".into());
+    std::path::PathBuf::from(run).join(path)
+}
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -55,22 +63,37 @@ pub struct Detail {
     pub rules: Vec<Value>,
 }
 
+/// What is told whenever a daemon says anything, so that a panel waiting on
+/// a prompt does not have to ask over and over.
+type Listener = Arc<Mutex<Option<Box<dyn Fn() + Send + 'static>>>>;
+
 #[derive(Clone, Default)]
 pub struct Watcher {
     daemons: Vec<(&'static str, Arc<Mutex<Daemon>>)>,
+    changed: Listener,
 }
 
 impl Watcher {
     /// Starts one reader thread per daemon. They reconnect on their own, so a
     /// daemon that is restarted comes back without the bar noticing.
     pub fn start() -> Watcher {
+        let changed: Listener = Arc::default();
         let mut daemons = Vec::new();
         for (name, path) in SOCKETS {
             let shared = Arc::new(Mutex::new(Daemon::default()));
             daemons.push((name, Arc::clone(&shared)));
-            std::thread::spawn(move || read_forever(name, path, shared));
+            let changed = Arc::clone(&changed);
+            std::thread::spawn(move || read_forever(name, &socket(path), shared, &changed));
         }
-        Watcher { daemons }
+        Watcher { daemons, changed }
+    }
+
+    /// Calls `then` whenever anything either daemon says has changed what
+    /// `detail` would answer. One listener: the panel that draws it.
+    pub fn on_change(&self, then: impl Fn() + Send + 'static) {
+        if let Ok(mut listener) = self.changed.lock() {
+            *listener = Some(Box::new(then));
+        }
     }
 
     /// The counts, which is all the bar's shield needs.
@@ -145,12 +168,13 @@ impl Watcher {
     }
 }
 
-fn read_forever(name: &'static str, path: &'static str, shared: Arc<Mutex<Daemon>>) {
+fn read_forever(name: &'static str, path: &std::path::Path, shared: Arc<Mutex<Daemon>>, changed: &Listener) {
     loop {
         let Ok(mut socket) = UnixStream::connect(path) else {
             if let Ok(mut daemon) = shared.lock() {
                 daemon.connected = false;
             }
+            said(changed);
             std::thread::sleep(Duration::from_secs(5));
             continue;
         };
@@ -168,11 +192,13 @@ fn read_forever(name: &'static str, path: &'static str, shared: Arc<Mutex<Daemon
             daemon.enabled = true;
             daemon.socket = Some(socket);
         }
+        said(changed);
 
         for line in reader.lines().map_while(Result::ok) {
             if let Ok(mut daemon) = shared.lock() {
                 apply(&line, &mut daemon);
             }
+            said(changed);
         }
 
         // The socket closed: the daemon stopped, or is being restarted.
@@ -181,8 +207,21 @@ fn read_forever(name: &'static str, path: &'static str, shared: Arc<Mutex<Daemon
             daemon.pending.clear();
             daemon.socket = None;
         }
+        said(changed);
         eprintln!("caelestia-bar: {name} daemon disconnected, reconnecting");
         std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+/// Tells whoever is listening that something has changed. Never while a
+/// daemon is locked: what is told will ask about them.
+fn said(changed: &Listener) {
+    // The old bar is on an earlier edition, where two lets in one `if` are
+    // not allowed; this file is shared with it.
+    if let Ok(listener) = changed.lock() {
+        if let Some(then) = listener.as_ref() {
+            then();
+        }
     }
 }
 

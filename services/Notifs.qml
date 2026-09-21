@@ -366,7 +366,7 @@ pid=$(busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesk
 # five minutes and have the shell start it again.
 comm=$(cat "/proc/$pid/comm" 2>/dev/null)
 case "$comm" in
-    Hyprland|sway|river|niri|labwc|weston|plasmashell|kwin_wayland|kwin_x11|gnome-shell|xfce4-session|cinnamon-session|mate-session|lxqt-session|systemd|init|caelestia-bar)
+    Hyprland|sway|river|niri|labwc|weston|plasmashell|kwin_wayland|kwin_x11|gnome-shell|xfce4-session|cinnamon-session|mate-session|lxqt-session|systemd|init|caelestia-bar|cae-shell)
         echo "refusing to displace session process $comm (pid $pid)" >&2
         exit 0 ;;
 esac

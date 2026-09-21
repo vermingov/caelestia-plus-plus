@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Caelestia.Config
 import qs.components
+import qs.services
 
 Item {
     id: root
@@ -11,7 +12,8 @@ Item {
     required property bool sidebarVisible
     readonly property real nonAnimWidth: content.implicitWidth
 
-    readonly property bool shouldBeActive: screenState.session && Config.session.enabled
+    // Not while cae draws the session menu.
+    readonly property bool shouldBeActive: screenState.session && Config.session.enabled && !ExternalBar.hasSession
     property real offsetScale: shouldBeActive ? 0 : 1
     property real sidebarOffset: sidebarVisible ? 14 : 0
 

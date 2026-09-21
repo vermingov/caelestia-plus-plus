@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# A desktop nobody is looking at, for trying the shell on.
+#
+# sway with no screen and no devices, in a runtime directory of its own, with
+# a pointer and a keyboard that do what they are told. Nothing here reaches
+# the session that is in use: not its compositor, not its pointer, not its
+# screen, and (through the shims) not its volume, its network or its radios.
+#
+#   rig up                        fetch what is missing, start the compositor
+#   rig cae [ARGS]                (re)start the shell inside, as a preview
+#   rig serve [ARGS]              the same, but as the desktop's real shell: a
+#                                 session bus of its own to be the notification
+#                                 server on, with a history and a picture
+#                                 cache that are not the real ones
+#   rig notify ARGS...            notify-send, to the shell `rig serve` started
+#   rig bridge WORDS...           what a keybind would say to its notifications
+#   rig launcher [VERB [QUERY]]   what a keybind would say to the launcher
+#   rig settings [PAGE]           open the settings, as `cae-shell settings` does
+#   rig dashboard [show|hide]     the same for the dashboard
+#   rig move X Y | click | press | release | scroll DY
+#   rig level speakers|microphone PERCENT [muted]
+#                                 a pretend volume, moved: the real one is not
+#                                 the rig's to move, and the shell inside
+#                                 hears of this one as it would of that
+#   rig key [ctrl+][shift+]NAME | type TEXT
+#   rig shot FILE [X,Y WxH]       what is on the rig's screen
+#   rig asked                     what the shell tried to change, and did not
+#   rig kept [shell|prefs]        the settings as the shell inside has left them
+#   rig run CMD...                anything else, inside
+#   rig down                      stop all of it
+#
+# The shell inside reads a copy of the settings, made when it starts, because
+# it can write them now: what a switch in there changes is the copy.
+# RIG_CONFIG=DIR makes DIR its XDG_CONFIG_HOME instead, for a shell.json that
+# turns on what the real one leaves off. RIG_WALLPAPERS=DIR likewise.
+# RIG_HYPRLAND=rig has it believe in the Hyprland `rig/hyprland` pretends to be.
+set -uo pipefail
+
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/cae-rig
+# Short, because a socket's path may be no longer than 107 bytes and the
+# compositor's goes two directories deeper than this.
+RUN=/tmp/cae-rig-$(id -u)
+# Spelt the way it will appear in a process list, which is what stops it.
+CAE=$(readlink -m "$HERE/../target/fast/cae-shell")
+USER_RUN=/run/user/$(id -u)
+# Where the shell inside keeps its settings: a home of its own.
+KEPT=$CACHE/home
+# The levels `rig level` has set, and the events that say they moved.
+PRETEND=$CACHE/pretend
+
+# sway is not installed here and is not going to be: it is fetched from the
+# distribution's own mirror and unpacked where nothing else will find it.
+fetch() {
+    [ -x "$CACHE/root/usr/bin/sway" ] && return
+    mkdir -p "$CACHE/packages" "$CACHE/root"
+    for url in $(pacman -Sp sway wlroots0.20 libliftoff swaybg 2>/dev/null); do
+        file=$CACHE/packages/$(basename "$url")
+        [ -f "$file" ] || curl -fsSL --max-time 120 -o "$file" "$url" || { echo "rig: cannot fetch $url" >&2; exit 1; }
+        bsdtar -xf "$file" -C "$CACHE/root"
+    done
+}
+
+inside() {
+    env -u HYPRLAND_INSTANCE_SIGNATURE -u DISPLAY XDG_RUNTIME_DIR="$RUN" WAYLAND_DISPLAY=wayland-1 \
+        PULSE_SERVER="unix:$USER_RUN/pulse/native" PIPEWIRE_RUNTIME_DIR="$USER_RUN" \
+        XDG_CONFIG_HOME="${RIG_CONFIG:-$KEPT/config}" XDG_STATE_HOME="${RIG_STATE:-$KEPT/state}" \
+        ${RIG_WALLPAPERS:+CAELESTIA_WALLPAPERS_DIR=$RIG_WALLPAPERS} \
+        ${RIG_HYPRLAND:+HYPRLAND_INSTANCE_SIGNATURE=$RIG_HYPRLAND} \
+        CAELESTIA_GUARD_RUN="$RUN/guards" \
+        LD_LIBRARY_PATH="$CACHE/root/usr/lib" "$@"
+}
+
+# The settings as they are now, copied to where the shell inside will look.
+# The icon theme and the fonts are found through the same directory, so those
+# are linked rather than lost.
+keep_a_copy() {
+    local real_config=${XDG_CONFIG_HOME:-$HOME/.config} real_state=${XDG_STATE_HOME:-$HOME/.local/state}
+    rm -rf "$KEPT"; mkdir -p "$KEPT/config" "$KEPT/state/caelestia"
+    cp -r "$real_config/caelestia" "$KEPT/config/" 2>/dev/null
+    for shared in dconf fontconfig; do
+        [ -e "$real_config/$shared" ] && ln -s "$real_config/$shared" "$KEPT/config/$shared"
+    done
+    find "$real_state/caelestia" -maxdepth 1 -type f -size -512k -exec cp {} "$KEPT/state/caelestia/" \;
+    cp -r "$real_state/caelestia/wallpaper" "$KEPT/state/caelestia/" 2>/dev/null
+}
+
+# A shell starts with the real levels, and with somewhere to hear of
+# pretend ones.
+forget_levels() {
+    rm -rf "$PRETEND"; mkdir -p "$PRETEND"; : >"$PRETEND/events"
+}
+
+up() {
+    fetch
+    if ! pgrep -f "[c]ae-rig/root/usr/bin/sway" >/dev/null; then
+        rm -rf "$RUN"; mkdir -m 700 -p "$RUN"
+        env -u WAYLAND_DISPLAY -u DISPLAY -u SWAYSOCK -u HYPRLAND_INSTANCE_SIGNATURE XDG_RUNTIME_DIR="$RUN" \
+            WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 LD_LIBRARY_PATH="$CACHE/root/usr/lib" \
+            PATH="$CACHE/root/usr/bin:$PATH" \
+            setsid -f "$CACHE/root/usr/bin/sway" -c "$HERE/sway.conf" >"$CACHE/sway.log" 2>&1
+        for _ in $(seq 1 80); do [ -S "$RUN/wayland-1" ] && break; sleep 0.05; done
+    fi
+    if ! pgrep -f "[r]ig-pointer $RUN/input" >/dev/null; then
+        [ -x "$CACHE/pointer/debug/rig-pointer" ] ||
+            (cd "$HERE/pointer" && CARGO_TARGET_DIR="$CACHE/pointer" cargo build -q) || exit 1
+        [ -f "$CACHE/us.keymap" ] || xkbcli compile-keymap --layout us >"$CACHE/us.keymap"
+        [ -p "$RUN/input" ] || mkfifo "$RUN/input"
+        inside setsid -f "$CACHE/pointer/debug/rig-pointer" "$RUN/input" "$CACHE/us.keymap" >"$CACHE/pointer.log" 2>&1
+        sleep 0.3
+    fi
+}
+
+case "${1:-}" in
+    up) up ;;
+    down)
+        [ -f "$RUN/hypr/rig/pid" ] && kill "$(cat "$RUN/hypr/rig/pid")" 2>/dev/null
+        pkill -f "^$CAE"; pkill -f "[r]ig-pointer $RUN/input"; pkill -f "[c]ae-rig/root/usr/bin/sway"; true ;;
+    cae)
+        shift; up
+        # Whichever way the last one was started: one left over from `serve`
+        # still answers the sockets, and what is asked of the new shell is
+        # then done by the old one.
+        pkill -f "^$CAE"; sleep 0.3
+        keep_a_copy
+        forget_levels
+        # The shell under test may look at the machine and may not change it.
+        RIG_ASKED=$CACHE/asked.log RIG_PRETEND=$PRETEND RIG_REAL_PATH=$PATH PATH="$HERE/shims:$PATH" \
+            inside setsid -f "$CAE" --preview "$@" >"$CACHE/cae.log" 2>&1
+        sleep 2 ;;
+    serve)
+        shift; up
+        pkill -f "^$CAE"; sleep 0.3
+        # The real history is rewritten by whoever serves, and the real
+        # pictures are pruned against it: neither may be this shell's.
+        mkdir -p "$CACHE/served/state" "$CACHE/served/cache"
+        forget_levels
+        RIG_ASKED=$CACHE/asked.log RIG_PRETEND=$PRETEND RIG_REAL_PATH=$PATH PATH="$HERE/shims:$PATH" \
+            RIG_STATE="$CACHE/served/state" XDG_CACHE_HOME="$CACHE/served/cache" \
+            inside setsid -f dbus-run-session -- sh -c 'echo "$DBUS_SESSION_BUS_ADDRESS" >"$0"; exec "$@"' \
+            "$RUN/bus" "$CAE" "$@" >"$CACHE/cae.log" 2>&1
+        sleep 2.5 ;;
+    notify) shift; DBUS_SESSION_BUS_ADDRESS=$(cat "$RUN/bus") notify-send "$@" ;;
+    bridge)
+        shift
+        printf '%s\n' "$*" | python3 -c "
+import socket, sys
+door = socket.socket(socket.AF_UNIX); door.connect('$RUN/caelestia-notifs.sock'); door.sendall(sys.stdin.read().encode())" ;;
+    launcher)
+        shift
+        printf '%s\n' "${*:-toggle}" | python3 -c "
+import socket, sys
+door = socket.socket(socket.AF_UNIX); door.connect('$RUN/caelestia-launcher.sock'); door.sendall(sys.stdin.read().encode())" ;;
+    settings | dashboard | session) inside "$CAE" "$@" ;;
+    move | click | press | release | scroll | key | type)
+        # A pipe with nobody reading it takes whoever writes to it with it,
+        # for good: said here instead, when the rig is down.
+        pgrep -f "[r]ig-pointer $RUN/input" >/dev/null || { echo "rig: not up (rig up, or rig cae)" >&2; exit 1; }
+        echo "$*" >"$RUN/input" ;;
+    level)
+        [ -f "$PRETEND/events" ] || { echo "rig: no shell inside to tell (rig cae)" >&2; exit 1; }
+        case "${2:-}" in
+            speakers) node=@DEFAULT_AUDIO_SINK@ kind=sink ;;
+            microphone) node=@DEFAULT_AUDIO_SOURCE@ kind=source ;;
+            *) echo "rig: level speakers|microphone PERCENT [muted]" >&2; exit 1 ;;
+        esac
+        printf 'Volume: %s%s\n' "$(awk -v percent="${3:?a percentage}" 'BEGIN { printf "%.2f", percent / 100 }')" "${4:+ [MUTED]}" >"$PRETEND/$node"
+        echo "Event 'change' on $kind #0" >>"$PRETEND/events" ;;
+    shot) shift; out=$1; shift; if [ $# -gt 0 ]; then inside grim -g "$*" "$out"; else inside grim "$out"; fi ;;
+    asked) cat "$CACHE/asked.log" 2>/dev/null ;;
+    kept)
+        case "${2:-shell}" in
+            prefs) cat "$KEPT/state/caelestia/prefs.json" ;;
+            *) cat "${RIG_CONFIG:-$KEPT/config}/caelestia/shell.json" ;;
+        esac ;;
+    log) cat "$CACHE/cae.log" 2>/dev/null ;;
+    run) shift; inside "$@" ;;
+    *) sed -n '2,26p' "$0" ;;
+esac

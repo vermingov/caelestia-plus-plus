@@ -183,7 +183,7 @@ fn owns_name(connection: &zbus::blocking::Connection) -> bool {
 /// killing that takes the entire desktop down. The shell that runs this bar
 /// is on the list too: its own server lets go by itself once it sees the bar
 /// is installed, and stopping the shell would stop the bar with it.
-const NEVER_STOPPED: [&str; 19] = [
+const NEVER_STOPPED: [&str; 20] = [
     "Hyprland",
     "sway",
     "river",
@@ -203,6 +203,10 @@ const NEVER_STOPPED: [&str; 19] = [
     "qs",
     "quickshell",
     "caelestia-bar",
+    // The shell that is taking the bar's place. While one hands over to the
+    // other, each may find the other holding the name, and the answer is to
+    // wait for it rather than to stop it.
+    "cae-shell",
 ];
 
 /// Cgroup units that belong to the session rather than to one daemon. A
@@ -329,7 +333,7 @@ mod tests {
 
     #[test]
     fn the_shell_and_the_session_are_never_stopped_for_the_name() {
-        for comm in ["Hyprland", "qs", "quickshell", "plasmashell", "systemd", "caelestia-bar"] {
+        for comm in ["Hyprland", "qs", "quickshell", "plasmashell", "systemd", "caelestia-bar", "cae-shell"] {
             assert!(NEVER_STOPPED.contains(&comm), "{comm} could be killed for the bus name");
         }
         assert!(!NEVER_STOPPED.contains(&"dunst"));

@@ -37,6 +37,19 @@ Singleton {
         return ["sh", "-c", 'p="$1/$2"; [ -x "$p" ] || p=$(command -v "$2") || exit 1; echo "$p"', "sh", bin, program];
     }
 
+    // The same for whichever of several programs is installed, in the order
+    // given: for a thing that has been rewritten and whose old form is kept
+    // beside it, to be used where the new one is not installed.
+    function locateFirst(programs: list<string>): var {
+        const find = 'bin=$1; shift; for name in "$@"; do p="$bin/$name"; [ -x "$p" ] || p=$(command -v "$name") || continue; echo "$p"; exit 0; done; exit 1';
+        // Pushed one at a time: a QML list is not an array as far as
+        // `concat` is concerned, and would go in whole as a single argument.
+        const command = ["sh", "-c", find, "sh", bin];
+        for (const program of programs)
+            command.push(program);
+        return command;
+    }
+
     function toLocalFile(path: url): string {
         path = Qt.resolvedUrl(path);
         return path.toString() ? CUtils.toLocalFile(path) : "";

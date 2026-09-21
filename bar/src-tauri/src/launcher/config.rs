@@ -173,6 +173,15 @@ fn builtins() -> Vec<Action> {
         navigate("Variants", "Change how the palette is generated", "format_paint", "variant"),
         navigate("Wallpapers", "Browse and set a wallpaper", "wallpaper", "wallpaper"),
         Action {
+            name: "Settings".to_string(),
+            description: "Open the settings".to_string(),
+            icon: "settings".to_string(),
+            // A word to the shell that is running, which is what draws them.
+            command: vec!["cae-shell".to_string(), "settings".to_string()],
+            enabled: true,
+            dangerous: false,
+        },
+        Action {
             name: "Light mode".to_string(),
             description: "Switch the scheme to its light variant".to_string(),
             icon: "light_mode".to_string(),

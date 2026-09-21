@@ -17,7 +17,8 @@ import qs.services
 Scope {
     id: root
 
-    readonly property bool open: Security.panelOpen
+    // Not while the external bar draws its own centre.
+    readonly property bool open: Security.panelOpen && !ExternalBar.hasSecurity
     readonly property var focusedScreen: Quickshell.screens.find(s => s.name === Hypr.focusedMonitor?.name) ?? Quickshell.screens[0]
 
     readonly property var tabs: [

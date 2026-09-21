@@ -3,6 +3,7 @@ pragma Singleton
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import qs.services
 
 Singleton {
     id: root
@@ -25,7 +26,8 @@ Singleton {
     }
 
     IdleInhibitor {
-        enabled: props.enabled
+        // The external bar holds one of its own while it watches for quiet.
+        enabled: props.enabled && !ExternalBar.hasIdle
         window: PanelWindow {
             implicitWidth: 0
             implicitHeight: 0

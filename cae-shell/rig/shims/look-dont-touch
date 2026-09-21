@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Inside the rig a program may look at the machine and may not touch it: the
+# machine it would be changing is the one somebody is using. What it was asked
+# to do is written down instead, which is how a test knows the right thing was
+# asked for.
+#
+# Every name in this directory is this file. What each may do is listed here;
+# anything else is logged to $RIG_ASKED and dropped.
+name=$(basename "$0")
+case "$name" in
+    wpctl) allowed=' get-volume | status | inspect ' ;;
+    pactl) allowed=' list | get-default-sink | get-default-source | subscribe | info | stat ' ;;
+    nmcli) allowed=' show | list | status ' ;;
+    bluetoothctl) allowed=' devices | show | list | info ' ;;
+    brightnessctl) allowed=' get | max | info | -l | -m ' ;;
+    powerprofilesctl) allowed=' get | list ' ;;
+    # Nothing: holding the lid open or the machine awake is a real change to
+    # the machine the rig is running on.
+    systemd-inhibit) allowed='' ;;
+    # Nothing either: there is one pair of speakers and somebody is using
+    # them. An egg that plays a track plays it into this instead.
+    mpv | ffplay) allowed='' ;;
+    caelestia) allowed=' scheme list | scheme get ' ;;
+    # Reads only: what starts with the desktop is a list the security centre
+    # shows, and `enable` or `disable` would be a real change.
+    systemctl) allowed=' list-unit-files | list-units | is-enabled | show ' ;;
+    caelestia-tools) allowed=' hyprmod dump | hyprmod schema | hyprmod overrides | hyprmod binds | gpus | list ' ;;
+    *) allowed='' ;;
+esac
+
+# There is no Quickshell inside the rig, and what cae asks one before drawing
+# the dashboard is whether it has stood its own down. The shell under test is
+# the only shell there, so: yes.
+# RIG_QUICKSHELL=old is a Quickshell from before it knew the question.
+if [ "$name" = qs ] && [[ " $* " == *" ipc call cae stoodDown "* ]]; then
+    [ "${RIG_QUICKSHELL:-}" = old ] && echo "Target not found." || echo 1
+    exit 0
+fi
+
+# The volume is somebody's, and what the shell does when it moves has to be
+# tried on one that is nobody's: `rig level` keeps a pretend one, which is the
+# answer once it has been set, and says so where `pactl subscribe` is heard.
+pretend=${RIG_PRETEND:-/nonexistent}
+if [ "$name" = wpctl ] && [ "${1:-}" = get-volume ] && [ -f "$pretend/${2:-}" ]; then
+    exec cat "$pretend/$2"
+fi
+if [ "$name" = pactl ] && [ "${1:-}" = subscribe ] && [ -f "$pretend/events" ]; then
+    exec tail -n0 -F "$pretend/events"
+fi
+
+real=$(PATH=$RIG_REAL_PATH command -v "$name")
+said=" $* "
+IFS='|' read -ra may <<<"$allowed"
+for words in "${may[@]}"; do
+    [ -n "${words// /}" ] && [[ "$said" == *"$words"* ]] && [ -n "$real" ] && exec "$real" "$@"
+done
+# The one question nmcli is asked with no verb in it: what is each device doing.
+[ "$name" = nmcli ] && [[ "$said" == *" DEVICE,TYPE,STATE,CONNECTION device " ]] && exec "$real" "$@"
+echo "$(date +%T) $name $*" >>"${RIG_ASKED:-/dev/null}"

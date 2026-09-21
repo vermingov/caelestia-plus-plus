@@ -1,0 +1,326 @@
+--- a/crates/gpui/src/platform.rs	2026-09-20 16:36:25.781722006 +0200
++++ b/crates/gpui/src/platform.rs	2026-09-21 01:15:37.316397072 +0200
+@@ -5,6 +5,7 @@
+ #[cfg(all(target_os = "linux", feature = "wayland"))]
+ #[expect(missing_docs)]
+ pub mod layer_shell;
++pub mod session_lock;
+ 
+ /// Types for configuring parent-anchored popup windows such as menus, dropdowns and tooltips.
+ pub mod popup;
+@@ -2410,6 +2411,11 @@
+     #[cfg(all(target_os = "linux", feature = "wayland"))]
+     LayerShell(layer_shell::LayerShellOptions),
+ 
++    /// One of the surfaces shown while the session is locked, in place of
++    /// everything else. See [`session_lock`].
++    #[cfg(all(target_os = "linux", feature = "wayland"))]
++    SessionLock(session_lock::SessionLockOptions),
++
+     /// A window that appears on top of its parent window and blocks interaction with it
+     /// until the modal window is closed
+     Dialog,
+--- a/crates/gpui_linux/src/linux/wayland/client.rs	2026-09-20 16:36:25.796311300 +0200
++++ b/crates/gpui_linux/src/linux/wayland/client.rs	2026-09-21 01:17:40.397129917 +0200
+@@ -71,6 +71,9 @@
+     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
+ };
+ use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
++use wayland_protocols::ext::session_lock::v1::client::{
++    ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
++};
+ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+ use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
+ use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
+@@ -221,6 +224,11 @@
+         Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
+     pub decoration_manager: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
+     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
++    pub session_lock_manager: Option<ext_session_lock_manager_v1::ExtSessionLockManagerV1>,
++    /// The lock, once it has been taken. Every lock surface shares it: a
++    /// second `lock` request is a protocol error, and the session is
++    /// unlocked through this one.
++    pub session_lock: RefCell<Option<ext_session_lock_v1::ExtSessionLockV1>>,
+     pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
+     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
+@@ -267,6 +275,8 @@
+             fractional_scale_manager: globals.bind(&qh, 1..=1, ()).ok(),
+             decoration_manager: globals.bind(&qh, 1..=1, ()).ok(),
+             layer_shell: globals.bind(&qh, 1..=5, ()).ok(),
++            session_lock_manager: globals.bind(&qh, 1..=1, ()).ok(),
++            session_lock: RefCell::new(None),
+             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
+             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
+             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
+@@ -1521,6 +1531,49 @@
+ delegate_noop!(WaylandClientStatePtr: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
+ delegate_noop!(WaylandClientStatePtr: ignore zxdg_decoration_manager_v1::ZxdgDecorationManagerV1);
+ delegate_noop!(WaylandClientStatePtr: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
++delegate_noop!(
++    WaylandClientStatePtr: ignore ext_session_lock_manager_v1::ExtSessionLockManagerV1
++);
++
++impl Dispatch<ext_session_lock_v1::ExtSessionLockV1, ()> for WaylandClientStatePtr {
++    fn event(
++        _: &mut Self,
++        _: &ext_session_lock_v1::ExtSessionLockV1,
++        event: <ext_session_lock_v1::ExtSessionLockV1 as Proxy>::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        // `Locked` says the screen is covered and nothing else is shown;
++        // `Finished` says the compositor refused, which leaves the session
++        // unlocked and is the caller's business, not this layer's.
++        if let ext_session_lock_v1::Event::Finished = event {
++            log::error!("the compositor refused the session lock");
++        }
++    }
++}
++
++impl Dispatch<ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, ObjectId>
++    for WaylandClientStatePtr
++{
++    fn event(
++        this: &mut Self,
++        _: &ext_session_lock_surface_v1::ExtSessionLockSurfaceV1,
++        event: <ext_session_lock_surface_v1::ExtSessionLockSurfaceV1 as Proxy>::Event,
++        surface_id: &ObjectId,
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        let client = this.get_client();
++        let mut state = client.borrow_mut();
++        let Some(window) = get_window(&mut state, surface_id) else {
++            return;
++        };
++
++        drop(state);
++        window.handle_session_lock_surface_event(event);
++    }
++}
+ delegate_noop!(WaylandClientStatePtr: ignore xdg_positioner::XdgPositioner);
+ delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur_manager::OrgKdeKwinBlurManager);
+ delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
+--- a/crates/gpui_linux/src/linux/wayland/window.rs	2026-09-20 16:36:25.797298422 +0200
++++ b/crates/gpui_linux/src/linux/wayland/window.rs	2026-09-21 01:33:24.214435792 +0200
+@@ -17,6 +17,9 @@
+     Proxy,
+     protocol::{wl_callback, wl_output, wl_seat, wl_surface},
+ };
++use wayland_protocols::ext::session_lock::v1::client::{
++    ext_session_lock_surface_v1, ext_session_lock_v1,
++};
+ use wayland_protocols::wp::viewporter::client::wp_viewport;
+ use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
+ use wayland_protocols::xdg::shell::client::xdg_popup;
+@@ -39,6 +42,7 @@
+     Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+     WindowControls, WindowDecorations, WindowKind, WindowParams, WindowVisibility,
+     layer_shell::{Anchor, LayerShellNotSupportedError},
++    session_lock::SessionLockNotSupportedError,
+     popup::PopupOptions,
+     px, size,
+ };
+@@ -140,6 +144,7 @@
+ pub enum WaylandSurfaceState {
+     Xdg(WaylandXdgSurfaceState),
+     LayerShell(WaylandLayerSurfaceState),
++    SessionLock(WaylandSessionLockSurfaceState),
+     Popup(WaylandPopupSurfaceState),
+ }
+ 
+@@ -199,6 +204,33 @@
+             }));
+         }
+ 
++        // One of the surfaces shown while the session is locked. The lock
++        // itself is taken once and shared: a second `lock` request is a
++        // protocol error, and the session stays locked for as long as any of
++        // these is alive.
++        if let WindowKind::SessionLock(_) = &params.kind {
++            let Some(manager) = globals.session_lock_manager.as_ref() else {
++                return Err(SessionLockNotSupportedError.into());
++            };
++            let lock = globals
++                .session_lock
++                .borrow_mut()
++                .get_or_insert_with(|| manager.lock(&globals.qh, ()))
++                .clone();
++            let lock_surface = lock.get_lock_surface(
++                &surface,
++                target_output.as_ref().ok_or_else(|| {
++                    anyhow::anyhow!("a session lock surface has to say which screen it is on")
++                })?,
++                &globals.qh,
++                surface.id(),
++            );
++            return Ok(WaylandSurfaceState::SessionLock(WaylandSessionLockSurfaceState {
++                lock_surface,
++                lock,
++            }));
++        }
++
+         if let WindowKind::AnchoredPopup(options) = &params.kind {
+             let Some(parent) = parent.as_ref() else {
+                 return Err(anyhow::anyhow!("popup parent window not found"));
+@@ -308,6 +340,14 @@
+     anchor: Anchor,
+ }
+ 
++pub struct WaylandSessionLockSurfaceState {
++    lock_surface: ext_session_lock_surface_v1::ExtSessionLockSurfaceV1,
++    /// The lock itself, shared by every surface of it: the session stays
++    /// locked for as long as one of these is alive, and unlocking is done
++    /// through it.
++    lock: ext_session_lock_v1::ExtSessionLockV1,
++}
++
+ pub struct WaylandPopupSurfaceState {
+     xdg_surface: xdg_surface::XdgSurface,
+     xdg_popup: xdg_popup::XdgPopup,
+@@ -376,6 +416,12 @@
+             WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
+                 layer_surface.ack_configure(serial);
+             }
++            WaylandSurfaceState::SessionLock(WaylandSessionLockSurfaceState {
++                lock_surface,
++                ..
++            }) => {
++                lock_surface.ack_configure(serial);
++            }
+             WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
+                 xdg_surface.ack_configure(serial);
+             }
+@@ -406,7 +452,7 @@
+             WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
+                 Some(xdg_surface)
+             }
+-            WaylandSurfaceState::LayerShell(_) => None,
++            WaylandSurfaceState::LayerShell(_) | WaylandSurfaceState::SessionLock(_) => None,
+         }
+     }
+ 
+@@ -425,6 +471,9 @@
+             WaylandSurfaceState::Xdg(WaylandXdgSurfaceState { xdg_surface, .. }) => {
+                 xdg_surface.set_window_geometry(x, y, width, height);
+             }
++            // The compositor says how big a lock surface is; it is not a
++            // thing that can be asked to be another size.
++            WaylandSurfaceState::SessionLock(_) => {}
+             WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
+                 // cannot set window position of a layer surface
+                 layer_surface.set_size(width as u32, height as u32);
+@@ -524,6 +573,16 @@
+             WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
+                 layer_surface.destroy();
+             }
++            WaylandSurfaceState::SessionLock(WaylandSessionLockSurfaceState {
++                lock_surface,
++                lock,
++            }) => {
++                // The session is unlocked by letting go of the lock itself,
++                // and this is the surface it was holding the screen with:
++                // the compositor shows the desktop again from here.
++                lock_surface.destroy();
++                lock.unlock_and_destroy();
++            }
+             WaylandSurfaceState::Popup(WaylandPopupSurfaceState {
+                 xdg_surface,
+                 xdg_popup,
+@@ -847,6 +906,7 @@
+             .map(|viewporter| viewporter.get_viewport(&surface, &globals.qh, ()));
+ 
+         let frame_ping = globals.frame_ping.clone();
++        let locking = matches!(params.kind, WindowKind::SessionLock(_));
+         let this = Self(WaylandWindowStatePtr {
+             state: Rc::new(RefCell::new(WaylandWindowState::new(
+                 handle,
+@@ -866,8 +926,13 @@
+             frame_ping,
+         });
+ 
+-        // Kick things off
+-        surface.commit();
++        // Kick things off. Not for a session lock surface: that one is
++        // configured without being asked, and a commit with nothing attached
++        // to it is a protocol error ("committed with a null buffer"), which
++        // costs the connection and leaves the screen the compositor's blank.
++        if !locking {
++            surface.commit();
++        }
+ 
+         Ok((this, surface.id()))
+     }
+@@ -1340,6 +1405,41 @@
+         }
+     }
+ 
++    /// A lock surface is told what size to be, once, by the compositor. It
++    /// has nothing else to say.
++    pub fn handle_session_lock_surface_event(
++        &self,
++        event: ext_session_lock_surface_v1::Event,
++    ) {
++        let ext_session_lock_surface_v1::Event::Configure {
++            serial,
++            width,
++            height,
++        } = event
++        else {
++            return;
++        };
++        let size = if width == 0 || height == 0 {
++            None
++        } else {
++            Some(size(px(width as f32), px(height as f32)))
++        };
++
++        let mut state = self.state.borrow_mut();
++        state.in_progress_configure = Some(InProgressConfigure {
++            size,
++            fullscreen: false,
++            maximized: false,
++            resizing: false,
++            visibility: WindowVisibility::Visible,
++            tiling: Tiling::default(),
++        });
++        drop(state);
++
++        // From here it is the same as any other configure.
++        self.handle_xdg_surface_event(xdg_surface::Event::Configure { serial });
++    }
++
+     // Returns `true` if the popup should be closed.
+     pub fn handle_popup_event(&self, event: xdg_popup::Event) -> bool {
+         match event {
+--- /dev/null	2026-09-20 11:45:05.589933534 +0200
++++ b/crates/gpui/src/platform/session_lock.rs	2026-09-21 01:15:37.305577413 +0200
+@@ -0,0 +1,26 @@
++//! Locking the session.
++//!
++//! A window of this kind is one of the surfaces a compositor shows while the
++//! session is locked, in place of everything else. The protocol
++//! (`ext-session-lock-v1`) is the only way to lock a Wayland session
++//! honestly: the compositor stops showing anything else the moment the lock
++//! is taken, and goes on hiding it even if the locker dies, so a crash
++//! cannot leave the desktop open.
++//!
++//! One window per screen. The compositor decides their size, and a locker is
++//! expected to fill every screen there is: a screen with no lock surface on
++//! it is shown as a blank.
++
++use thiserror::Error;
++
++/// Options for a window that is part of a session lock. There is nothing to
++/// choose: the size is the screen's, and which screen it is comes from
++/// [`crate::WindowOptions::display_id`].
++#[derive(Clone, Debug, Default, PartialEq, Eq)]
++pub struct SessionLockOptions {}
++
++/// An error indicating that an action failed because the compositor doesn't support the required
++/// session lock protocol.
++#[derive(Debug, Error)]
++#[error("Compositor doesn't support ext_session_lock_v1")]
++pub struct SessionLockNotSupportedError;

@@ -16,10 +16,16 @@
 
 mod bridge;
 mod bus;
+#[cfg(feature = "tauri-ui")]
 pub mod commands;
 mod images;
 mod store;
+#[cfg(feature = "tauri-ui")]
 pub mod window;
+
+/// Where the bridge listens, for anything that wants to ask the server
+/// something the way a keybind does.
+pub use bridge::socket_path;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

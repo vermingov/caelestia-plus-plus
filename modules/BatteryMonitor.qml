@@ -4,9 +4,15 @@ import Quickshell.Services.UPower
 import Caelestia
 import Caelestia.Config
 import Caelestia.Services
+import qs.services
 
+// The warnings, and the hibernate before the charge runs out. cae watches
+// the same battery once it is installed, so this one stands down rather than
+// warn about it twice.
 Scope {
     id: root
+
+    readonly property bool active: !ExternalBar.hasBattery
 
     readonly property list<var> warnLevels: [...GlobalConfig.general.battery.warnLevels].sort((a, b) => a.level - b.level)
     property real lastPercentage: 100
@@ -15,6 +21,9 @@ Scope {
     // previous reading sat above it, so repeated percentage updates below a
     // level stay quiet until the charger resets lastPercentage
     function handleBatteryWarnings(): void {
+        if (!root.active)
+            return;
+
         const p = UPower.displayDevice.percentage * 100;
 
         if (!UPower.onBattery) {
@@ -41,7 +50,7 @@ Scope {
 
     Connections {
         function onOnBatteryChanged(): void {
-            if (!UPower.displayDevice.ready)
+            if (!root.active || !UPower.displayDevice.ready)
                 return;
 
             if (UPower.onBattery) {

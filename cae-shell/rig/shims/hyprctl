@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# There is no Hyprland inside the rig, and the page that arranges screens has
+# nothing to draw without one. This answers the one question that page asks,
+# with a laptop panel and a larger screen beside it, and writes down anything
+# else it is asked the way the other shims do.
+case " $* " in
+    *" monitors "*)
+        cat <<'JSON'
+[{"name": "eDP-1", "description": "Lenovo Group Limited 0x41B5", "x": 0, "y": 0, "width": 1920, "height": 1200,
+  "scale": 1.0, "transform": 0, "refreshRate": 60.003, "disabled": false,
+  "availableModes": ["1920x1200@60.00Hz", "1920x1080@60.00Hz", "1680x1050@60.00Hz", "1280x800@60.00Hz"]},
+ {"name": "DP-2", "description": "Dell Inc. U2723QE", "x": 1920, "y": 0, "width": 3840, "height": 2160,
+  "scale": 1.5, "transform": 0, "refreshRate": 59.997, "disabled": false,
+  "availableModes": ["3840x2160@60.00Hz", "3840x2160@30.00Hz", "2560x1440@59.95Hz", "1920x1080@60.00Hz",
+                     "1920x1080@50.00Hz", "1600x900@60.00Hz", "1280x720@60.00Hz", "1024x768@60.00Hz"]}]
+JSON
+        ;;
+    *) echo "$(date +%T) hyprctl $*" >>"${RIG_ASKED:-/dev/null}" ;;
+esac

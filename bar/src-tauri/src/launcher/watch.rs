@@ -11,13 +11,17 @@
 //! replaces.
 
 use std::path::PathBuf;
+#[cfg(feature = "tauri-ui")]
 use std::sync::Mutex;
 use std::time::Duration;
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
+#[cfg(feature = "tauri-ui")]
 use tauri::{AppHandle, Manager};
 
+#[cfg(feature = "tauri-ui")]
 use super::apps;
+#[cfg(feature = "tauri-ui")]
 use super::Launcher;
 
 /// An install writes a directory's worth of files, and a `pacman -Syu` writes
@@ -39,7 +43,7 @@ fn touches_entries(event: &Event) -> bool {
 ///
 /// Split out from the thread below so the debouncing and the filtering can be
 /// tested against a real directory rather than reasoned about.
-fn watch_dirs(dirs: Vec<PathBuf>, mut on_change: impl FnMut()) -> Result<(), String> {
+pub fn watch_dirs(dirs: Vec<PathBuf>, mut on_change: impl FnMut()) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut watcher = notify::recommended_watcher(tx).map_err(|e| e.to_string())?;
 
@@ -69,19 +73,16 @@ fn watch_dirs(dirs: Vec<PathBuf>, mut on_change: impl FnMut()) -> Result<(), Str
 /// Nothing here can fail in a way worth surfacing: a launcher whose watcher
 /// did not start is the launcher as it behaved before, not a broken one, so
 /// the failure is a line on stderr and the bar carries on.
+#[cfg(feature = "tauri-ui")]
 pub fn applications(app: AppHandle) {
     std::thread::spawn(move || {
         let reload = || {
             // Read before the lock is taken, so a keystroke is never waiting
             // behind a directory walk.
-            let fresh = apps::load();
+            let fresh = super::Apps::load();
             let Some(state) = app.try_state::<Mutex<Launcher>>() else { return };
             let Ok(mut launcher) = state.lock() else { return };
-            // A new app brings new icons with it, and a name that resolved to
-            // nothing before is exactly the name that has a file now, so the
-            // negative results cached against it have to go as well.
-            launcher.icons.forget();
-            launcher.apps = fresh;
+            launcher.take_apps(fresh);
         };
 
         if let Err(e) = watch_dirs(apps::application_dirs(), reload) {

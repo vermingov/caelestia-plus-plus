@@ -17,15 +17,19 @@ pub struct Logo {
     pub show: bool,
 }
 
-/// When the files these settings come from were last written.
+/// When the files these settings come from were last written, and the two
+/// beside them that say what the desktop looks like: which wallpaper, and
+/// which scheme.
 ///
-/// Polled rather than subscribed to, like the tray: two `stat` calls every
+/// Polled rather than subscribed to, like the tray: a few `stat` calls every
 /// couple of seconds against a dependency and an event loop is the right
 /// trade for something that changes when a person opens Settings.
 pub fn stamp() -> Vec<Option<std::time::SystemTime>> {
     let files = [
         state_dir().map(|dir| dir.join("prefs.json")),
         config_dir().map(|dir| dir.join("shell.json")),
+        state_dir().map(|dir| dir.join("wallpaper/path.txt")),
+        state_dir().map(|dir| dir.join("scheme.json")),
     ];
     files
         .into_iter()
@@ -149,53 +153,85 @@ fn stats_anchor(entries: &[String]) -> usize {
         .unwrap_or(entries.len())
 }
 
-pub fn layout() -> Layout {
-    let config = config_dir().map(|dir| json(dir.join("shell.json"))).unwrap_or(serde_json::Value::Null);
-    let bar = config.get("bar");
+/// What a bar with nothing said about it carries.
+const STOCK: [&str; 9] = ["workspaces", "spacer", "firewall", "features", "sysStats", "tray", "statusIcons", "clock", "power"];
 
-    let mut entries: Vec<String> = bar
-        .and_then(|bar| bar.get("entries"))
+/// Every entry the bar could draw, in the order it would draw them, and
+/// whether each is switched on.
+///
+/// What the config lists, as it lists it, with this fork's own entries put
+/// in where they belong unless the config mentions them: an entry can be
+/// listed and switched off, and that is a mention. This is the list a
+/// settings page shows, so that switching one entry off and on again leaves
+/// it where it was.
+pub fn entries_of(bar_entries: Option<&serde_json::Value>) -> Vec<(String, bool)> {
+    let mut entries: Vec<(String, bool)> = bar_entries
         .and_then(serde_json::Value::as_array)
-        .map(|entries| {
-            entries
+        .map(|listed| {
+            listed
                 .iter()
-                .filter(|entry| {
-                    // An entry can be listed and switched off.
-                    entry.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true)
+                .filter_map(|entry| {
+                    let id = entry.get("id").and_then(serde_json::Value::as_str)?;
+                    let enabled = entry.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true);
+                    Some((id.to_string(), enabled))
                 })
-                .filter_map(|entry| entry.get("id").and_then(serde_json::Value::as_str))
-                .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default();
 
     if entries.is_empty() {
-        entries = vec![
-            "workspaces".into(),
-            "spacer".into(),
-            "firewall".into(),
-            "features".into(),
-            "sysStats".into(),
-            "tray".into(),
-            "statusIcons".into(),
-            "clock".into(),
-            "power".into(),
-        ];
+        entries = STOCK.iter().map(|id| (id.to_string(), true)).collect();
     }
 
-    // The fork's own entries, added unless the config mentions them — an
-    // explicit `enabled: false` still wins, because it has already been
-    // filtered out above and `mentions` sees it here.
-    let mentioned = |id: &str| -> bool {
-        bar.and_then(|bar| bar.get("entries"))
-            .and_then(serde_json::Value::as_array)
-            .map(|entries| {
-                entries.iter().any(|entry| {
-                    entry.get("id").and_then(serde_json::Value::as_str) == Some(id)
-                })
-            })
-            .unwrap_or(false)
-    };
+    for id in INJECTED {
+        if entries.iter().any(|(entry, _)| entry == id) {
+            continue;
+        }
+        let ids: Vec<String> = entries.iter().map(|(entry, _)| entry.clone()).collect();
+        let at = if id == "sysStats" {
+            stats_anchor(&ids)
+        } else {
+            inject_before(id).and_then(|anchor| ids.iter().position(|entry| entry == anchor)).unwrap_or(ids.len())
+        };
+        entries.insert(at, (id.to_string(), true));
+    }
+    entries
+}
+
+/// `bar.entries` with one entry switched on or off, as it should be written
+/// back. The whole resolved list is written, this fork's entries included:
+/// an entry that was only ever implied has no `enabled` to set.
+pub fn entries_with(bar_entries: Option<&serde_json::Value>, id: &str, enabled: bool) -> serde_json::Value {
+    let listed = bar_entries.and_then(serde_json::Value::as_array);
+    let mut spent = vec![false; listed.map_or(0, Vec::len)];
+
+    let written = entries_of(bar_entries).into_iter().map(|(entry, was_enabled)| {
+        // The object the config already had for it, which may say more than
+        // this shell knows to ask about. There can be several spacers, so
+        // each object answers for one entry only.
+        let original = listed.and_then(|listed| {
+            let at = listed.iter().enumerate().position(|(at, object)| {
+                !spent[at] && object.get("id").and_then(serde_json::Value::as_str) == Some(entry.as_str())
+            })?;
+            spent[at] = true;
+            listed[at].as_object().cloned()
+        });
+        let mut object = original.unwrap_or_default();
+        object.insert("id".to_string(), entry.clone().into());
+        object.insert("enabled".to_string(), (if entry == id { enabled } else { was_enabled }).into());
+        serde_json::Value::Object(object)
+    });
+    written.collect()
+}
+
+pub fn layout() -> Layout {
+    let config = config_dir().map(|dir| json(dir.join("shell.json"))).unwrap_or(serde_json::Value::Null);
+    let bar = config.get("bar");
+
+    let mut entries: Vec<String> = entries_of(bar.and_then(|bar| bar.get("entries")))
+        .into_iter()
+        .filter_map(|(id, enabled)| enabled.then_some(id))
+        .collect();
 
     let prefs = state_dir().map(|dir| json(dir.join("prefs.json"))).unwrap_or(serde_json::Value::Null);
     let pref = |key: &str, default: bool| -> bool {
@@ -207,20 +243,6 @@ pub fn layout() -> Layout {
         ram: pref("barShowRam", true),
         gpu: pref("barShowGpu", true),
     };
-
-    for id in INJECTED {
-        if mentioned(id) || entries.iter().any(|entry| entry == id) {
-            continue;
-        }
-        let at = if id == "sysStats" {
-            stats_anchor(&entries)
-        } else {
-            inject_before(id)
-                .and_then(|anchor| entries.iter().position(|entry| entry == anchor))
-                .unwrap_or(entries.len())
-        };
-        entries.insert(at, id.to_string());
-    }
 
     // Two entries earn their place from the preferences rather than from the
     // entry list: the centre readout this fork ships without, and the monitor
@@ -478,6 +500,61 @@ mod tests {
         }
         // And the mark caps the left end.
         assert_eq!(layout.entries.first().map(String::as_str), Some("logo"));
+    }
+
+    /// This machine's own config: a stock list, which says nothing of what
+    /// the fork adds.
+    fn stock_config() -> serde_json::Value {
+        serde_json::json!([
+            {"id": "workspaces"}, {"id": "spacer"}, {"id": "spacer"}, {"id": "firewall"},
+            {"id": "features"}, {"id": "tray"}, {"id": "clock"}, {"id": "statusIcons"}, {"id": "power"}
+        ])
+    }
+
+    fn ids(entries: &[(String, bool)]) -> Vec<&str> {
+        entries.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    #[test]
+    fn the_forks_entries_are_put_where_they_belong() {
+        let entries = entries_of(Some(&stock_config()));
+        assert_eq!(
+            ids(&entries),
+            [
+                "logo", "workspaces", "specials", "activeWindow", "media", "visualiser", "spacer", "spacer", "firewall",
+                "features", "sysStats", "tray", "clock", "statusIcons", "power"
+            ]
+        );
+        assert!(entries.iter().all(|(_, enabled)| *enabled));
+    }
+
+    /// The point of writing the whole list back: an entry that was only
+    /// implied has a place once it has been switched off, and switched on
+    /// again it is still there rather than at the far end of the bar.
+    #[test]
+    fn an_entry_switched_off_and_on_again_stays_where_it_was() {
+        let before = ids(&entries_of(Some(&stock_config()))).join(" ");
+
+        let off = entries_with(Some(&stock_config()), "media", false);
+        let listed = entries_of(Some(&off));
+        assert_eq!(listed.iter().find(|(id, _)| id == "media"), Some(&("media".to_string(), false)));
+        assert_eq!(ids(&listed).join(" "), before, "switching an entry off moved something");
+
+        let on = entries_with(Some(&off), "media", true);
+        let listed = entries_of(Some(&on));
+        assert!(listed.iter().all(|(_, enabled)| *enabled));
+        assert_eq!(ids(&listed).join(" "), before, "switching it back on moved something");
+    }
+
+    #[test]
+    fn what_the_config_said_about_an_entry_is_kept_when_another_is_switched() {
+        let config = serde_json::json!([{"id": "clock", "somethingElse": 3}, {"id": "spacer"}, {"id": "spacer"}, {"id": "power"}]);
+        let written = entries_with(Some(&config), "power", false);
+
+        let clock = written.as_array().unwrap().iter().find(|entry| entry["id"] == "clock").unwrap();
+        assert_eq!(clock["somethingElse"], 3, "a key this shell does not know was dropped");
+        let spacers = written.as_array().unwrap().iter().filter(|entry| entry["id"] == "spacer").count();
+        assert_eq!(spacers, 2, "two spacers are two entries");
     }
 
     #[test]

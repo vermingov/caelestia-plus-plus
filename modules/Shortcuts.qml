@@ -29,7 +29,14 @@ Scope {
             if (root.hasFullscreen)
                 return;
             const v = ShellState.forActive();
-            v.launcher = v.dashboard = v.osd = v.utilities = !(v.launcher || v.dashboard || v.osd || v.utilities);
+            const showing = !(v.launcher || v.dashboard || v.osd || v.utilities);
+            const how = showing ? "show" : "hide";
+            // Whatever the installed shell draws, it is asked for; the rest
+            // is this shell's own.
+            for (const piece of ["dashboard", "osd", "utilities"])
+                if (!ExternalBar.asked(piece, how))
+                    v[piece] = showing;
+            v.launcher = showing;
         }
     }
 
@@ -40,6 +47,8 @@ Scope {
         description: "Toggle dashboard"
         onPressed: {
             if (root.hasFullscreen)
+                return;
+            if (ExternalBar.asked("dashboard", "toggle"))
                 return;
             const screenState = ShellState.forActive();
             screenState.dashboard = !screenState.dashboard;
@@ -53,6 +62,8 @@ Scope {
         description: "Toggle session menu"
         onPressed: {
             if (root.hasFullscreen)
+                return;
+            if (ExternalBar.asked("session", "toggle"))
                 return;
             const screenState = ShellState.forActive();
             screenState.session = !screenState.session;
@@ -125,7 +136,7 @@ Scope {
         name: "utilities"
         description: "Toggle utilities"
         onPressed: {
-            if (root.hasFullscreen)
+            if (root.hasFullscreen || ExternalBar.asked("utilities", "toggle"))
                 return;
             const screenState = ShellState.forActive();
             screenState.utilities = !screenState.utilities;
@@ -136,6 +147,8 @@ Scope {
         function toggle(drawer: string): void {
             if (list().split("\n").includes(drawer)) {
                 if (root.hasFullscreen && ["launcher", "session", "dashboard"].includes(drawer))
+                    return;
+                if (ExternalBar.asked(drawer, "toggle"))
                     return;
                 const screenState = ShellState.forActive();
                 screenState[drawer] = !screenState[drawer];
@@ -165,6 +178,18 @@ Scope {
         }
 
         target: "nexus"
+    }
+
+    // cae asks this before it draws something that is also drawn here, and
+    // draws it only on a yes. A shell from before this handler existed says
+    // "Target not found", which is a no: that shell has not stood anything
+    // down, and the desktop would have two of whatever it was.
+    IpcHandler {
+        function stoodDown(what: string): string {
+            return ExternalBar.has(what) ? "1" : "0";
+        }
+
+        target: "cae"
     }
 
     IpcHandler {

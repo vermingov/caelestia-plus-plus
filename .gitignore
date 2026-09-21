@@ -2,3 +2,13 @@
 # Python build artifacts
 __pycache__/
 *.pyc
+
+# Upstream's own checkout, pulled in by system/plugin when the plugin package
+# is built (the PKGBUILD's `shell::git+…` source). It is somebody else's tree
+# that happens to land here, not part of this one.
+/shell/
+
+# Where the vendored GPUI fork is unpacked if CAE_GPUI_FORK points inside the
+# checkout instead of the cache. The patch that makes it is tracked; the
+# hundreds of megabytes it applies to are not.
+/zed-fork/

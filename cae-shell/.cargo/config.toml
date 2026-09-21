@@ -1,0 +1,6 @@
+# Linking is most of what an incremental build of this crate costs, and lld
+# does it in a fraction of the time the default linker takes. It changes
+# nothing about the binary that runs.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

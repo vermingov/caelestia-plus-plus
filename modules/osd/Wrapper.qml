@@ -15,7 +15,8 @@ Item {
 
     property bool hovered
     readonly property Brightness.Monitor monitor: Brightness.getMonitorForScreen(root.screen)
-    readonly property bool shouldBeActive: screenState.osd && Config.osd.enabled && !(screenState.utilities && Config.utilities.enabled)
+    // Not while cae draws the on-screen display: it comes in from the same edge.
+    readonly property bool shouldBeActive: screenState.osd && Config.osd.enabled && !ExternalBar.hasOsd && !(screenState.utilities && Config.utilities.enabled)
     property real offsetScale: shouldBeActive ? 0 : 1
     property real sidebarOffset: sidebarOrSessionVisible ? 12 : 0
 

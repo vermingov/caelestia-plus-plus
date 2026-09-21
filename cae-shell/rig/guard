@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""A guard daemon that guards nothing, for the rig.
+
+The firewall and the exploit guard freeze programs and wait to be told what
+to do about them. Trying that on the real ones means freezing something of
+the user's, so this stands in: it speaks the same newline-JSON, asks about a
+program that does not exist, and writes down the verdict it is given.
+
+    rig/guard [firewall|protection] [NAME]
+
+The shell has to be started knowing about it, which `rig cae` does by setting
+CAELESTIA_GUARD_RUN to the rig's own run directory.
+"""
+import json
+import os
+import socket
+import sys
+import threading
+
+which = sys.argv[1] if len(sys.argv) > 1 else "firewall"
+name = sys.argv[2] if len(sys.argv) > 2 else "curl"
+directory = {"firewall": "redwall", "protection": "redguard"}[which]
+
+run = os.path.join(f"/tmp/cae-rig-{os.getuid()}", "guards", directory)
+os.makedirs(run, exist_ok=True)
+path = os.path.join(run, "ui.sock")
+if os.path.exists(path):
+    os.unlink(path)
+said = os.path.join(run, "said.log")
+
+ask = {
+    "t": "ask", "id": 7, "name": name, "exe": f"/usr/bin/{name}", "parent": "fish",
+    "pid": 4242, "detail": "Reaching a place it has not reached before",
+    "dst": "example.org", "port": 443,
+}
+
+door = socket.socket(socket.AF_UNIX)
+door.bind(path)
+door.listen()
+print(f"guard: {which} listening on {path}", flush=True)
+
+def answer(client):
+    waiting = [ask]
+
+    def say(message):
+        stream.write(json.dumps(message) + "\n")
+        stream.flush()
+
+    with client, client.makefile("rw") as stream:
+        say({"t": "state", "enabled": True})
+        say({"t": "rules", "rules": [], "pending": waiting})
+        for line in stream:
+            with open(said, "a") as log:
+                log.write(line)
+            asked = json.loads(line)
+            if asked.get("t") == "getrules":
+                say({"t": "rules", "rules": [], "pending": waiting})
+                continue
+            # Answered: say so, as the daemon does, which takes the prompt
+            # away wherever it is shown.
+            waiting = []
+            say({"t": "resolved", "exe": ask["exe"]})
+            say({"t": "rules", "rules": [], "pending": waiting})
+
+while True:
+    client, _ = door.accept()
+    threading.Thread(target=answer, args=(client,), daemon=True).start()

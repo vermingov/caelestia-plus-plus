@@ -14,6 +14,10 @@ import qs.services
 Scope {
     id: root
 
+    // cae draws this one now; while it does, the watcher below is its own
+    // and this whole scene stays where it is.
+    readonly property bool active: !ExternalBar.hasEgg
+
     // 0 idle, 1 rise, 2 partner, 3 approach, 4 thrust, 5 climax, 6 afterglow
     property int phase: 0
 
@@ -21,7 +25,7 @@ Scope {
         target: "easterEgg"
 
         function pop(): void {
-            if (root.phase === 0)
+            if (root.active && root.phase === 0)
                 timeline.restart();
         }
     }
@@ -30,7 +34,7 @@ Scope {
     // this a no-op when another copy (e.g. a compositor autostart) already
     // runs. Needs /dev/input read access (input group) to do anything.
     Process {
-        running: Helpers.ready
+        running: Helpers.ready && root.active
         command: Helpers.command("egg-watch")
     }
 

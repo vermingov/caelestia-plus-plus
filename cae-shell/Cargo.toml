@@ -1,0 +1,57 @@
+# cae: the Caelestia++ shell, standing on its own.
+#
+# A workspace rather than one crate, for one reason: build time. The backend
+# (D-Bus, Hyprland, PipeWire, the notification server) is eight thousand lines
+# behind slow proc macros and changes rarely; the interface changes constantly.
+# Split, an edit to a pill recompiles the interface alone, in a couple of
+# seconds. Both crates share one target directory, so every dependency is
+# compiled once for the whole shell.
+[workspace]
+resolver = "2"
+members = ["core", "app"]
+# The test rig's pointer and keyboard: a tool for working on the shell, with
+# dependencies of its own, and nothing the shell is built from.
+exclude = ["rig/pointer"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+# A copy of the GPUI this is built on, with one thing added: the window kind
+# a lock screen needs (`ext-session-lock-v1`), which GPUI does not have and
+# nothing else can give it. `vendor.sh` makes the copy from what cargo has
+# already fetched and applies `patches/`; without it this line points at
+# nothing and the build says so.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { path = "../../../../.cache/caelestia/zed-fork/crates/gpui" }
+gpui_platform = { path = "../../../../.cache/caelestia/zed-fork/crates/gpui_platform" }
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+# What ships. Optimised for running, not for building: this is compiled once
+# per release, on one machine, and everybody else downloads the result.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+panic = "abort"
+strip = true
+
+# What is built while working on it. Dependencies are optimised exactly as
+# they ship, so the shell behaves the same; only our own crates are compiled
+# quickly, which is the difference between a two-second rebuild and a
+# forty-second one.
+[profile.fast]
+inherits = "release"
+opt-level = 1
+lto = "off"
+codegen-units = 256
+incremental = true
+strip = false
+
+[profile.fast.package."*"]
+opt-level = 3

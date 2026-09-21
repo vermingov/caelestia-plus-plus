@@ -56,6 +56,9 @@ pub struct State {
     pub specials: Vec<Special>,
     pub active: Active,
     pub keyboard: Keyboard,
+    /// The outputs whose desktop can be seen, by name. What moves on a
+    /// desktop has no reason to while something is lying on it.
+    pub desktops: Vec<String>,
 }
 
 /// What is in front of the person: the focused workspace, and the special
@@ -212,6 +215,67 @@ pub fn monitors() -> Vec<(String, i32, i32, i32, i32)> {
         .collect()
 }
 
+/// Where a window is, for anything that has to line up with one: the
+/// screenshot picker snaps its selection to whatever is under the pointer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Window {
+    /// In the compositor's own coordinates, which span every screen.
+    pub at: (i32, i32),
+    pub size: (i32, i32),
+    pub workspace: i64,
+    pub floating: bool,
+    pub pinned: bool,
+    pub fullscreen: bool,
+}
+
+/// Every window that is on a screen, in the order they lie: whatever is
+/// pinned first, then what is fullscreen, then what floats.
+pub fn windows() -> Vec<Window> {
+    let clients: Vec<serde_json::Value> =
+        request("j/clients").and_then(|reply| serde_json::from_str(&reply).ok()).unwrap_or_default();
+    let mut windows: Vec<Window> = clients
+        .iter()
+        .filter(|client| {
+            let flag = |name: &str| client.get(name).and_then(serde_json::Value::as_bool).unwrap_or(false);
+            flag("mapped") && !flag("hidden")
+        })
+        .filter_map(|client| {
+            let pair = |name: &str| {
+                let numbers = client.get(name)?.as_array()?;
+                Some((numbers.first()?.as_i64()? as i32, numbers.get(1)?.as_i64()? as i32))
+            };
+            let flag = |name: &str| client.get(name).and_then(serde_json::Value::as_bool).unwrap_or(false);
+            Some(Window {
+                at: pair("at")?,
+                size: pair("size")?,
+                workspace: client.get("workspace")?.get("id")?.as_i64()?,
+                floating: flag("floating"),
+                pinned: flag("pinned"),
+                fullscreen: client.get("fullscreen").and_then(serde_json::Value::as_i64).unwrap_or(0) > 0,
+            })
+        })
+        .filter(|window| window.size.0 > 0 && window.size.1 > 0)
+        .collect();
+    windows.sort_by_key(|window| (!window.pinned, !window.fullscreen, !window.floating));
+    windows
+}
+
+/// Which workspace each monitor is showing, by monitor name: the one that is
+/// active, or the special one pulled up over it.
+pub fn showing() -> Vec<(String, i64)> {
+    let monitors: Vec<serde_json::Value> =
+        request("j/monitors").and_then(|reply| serde_json::from_str(&reply).ok()).unwrap_or_default();
+    monitors
+        .iter()
+        .filter_map(|monitor| {
+            let name = monitor.get("name")?.as_str()?.to_string();
+            let special = monitor.get("specialWorkspace").and_then(|w| w.get("id")).and_then(serde_json::Value::as_i64);
+            let id = special.filter(|id| *id != 0).or_else(|| monitor.get("activeWorkspace")?.get("id")?.as_i64())?;
+            Some((name, id))
+        })
+        .collect()
+}
+
 /// Pulls a special workspace up, or puts it away if it is already up.
 pub fn toggle_special(name: &str) {
     dispatch(&format!("togglespecialworkspace {name}"));
@@ -219,6 +283,24 @@ pub fn toggle_special(name: &str) {
 
 pub fn dispatch(command: &str) {
     let _ = request(&format!("/dispatch {command}"));
+}
+
+/// Sets one of the compositor's options for as long as it is running. Nothing
+/// is written to the config, so a reload puts back what it says.
+pub fn keyword(name: &str, value: &str) {
+    let _ = request(&format!("/keyword {name} {value}"));
+}
+
+/// Reads the config again, which undoes every keyword set above.
+pub fn reload() {
+    let _ = request("/reload");
+}
+
+/// A compositor option's value as a whole number, which is what the ones
+/// that are switches are.
+pub fn option(name: &str) -> Option<i64> {
+    let reply = request(&format!("j/getoption {name}"))?;
+    serde_json::from_str::<serde_json::Value>(&reply).ok()?.get("int")?.as_i64()
 }
 
 /// The whole picture, read fresh. Three requests rather than one: Hyprland has
@@ -236,23 +318,22 @@ pub fn read_state() -> State {
 
     let parsed = serde_json::from_str::<Vec<serde_json::Value>>(&workspaces).unwrap_or_default();
 
+    let list = |question: &str| -> Vec<serde_json::Value> {
+        request(question).and_then(|reply| serde_json::from_str(&reply).ok()).unwrap_or_default()
+    };
+    let monitors = list("j/monitors");
+
     // Whatever special workspace the focused monitor has pulled up, so the
     // row can show which one is open rather than just which exist.
-    let open_special = request("j/monitors")
-        .and_then(|monitors| serde_json::from_str::<Vec<serde_json::Value>>(&monitors).ok())
-        .and_then(|monitors| {
-            monitors
-                .into_iter()
-                .find(|monitor| {
-                    monitor.get("focused").and_then(serde_json::Value::as_bool).unwrap_or(false)
-                })
-                .and_then(|monitor| {
-                    monitor
-                        .get("specialWorkspace")?
-                        .get("name")?
-                        .as_str()
-                        .map(|name| name.trim_start_matches("special:").to_string())
-                })
+    let open_special = monitors
+        .iter()
+        .find(|monitor| monitor.get("focused").and_then(serde_json::Value::as_bool).unwrap_or(false))
+        .and_then(|monitor| {
+            monitor
+                .get("specialWorkspace")?
+                .get("name")?
+                .as_str()
+                .map(|name| name.trim_start_matches("special:").to_string())
         })
         .unwrap_or_default();
 
@@ -318,7 +399,33 @@ pub fn read_state() -> State {
         specials,
         active,
         keyboard: read_keyboard(),
+        desktops: seen_desktops(&monitors, &list("j/clients")),
     }
+}
+
+/// The outputs with nothing lying on their desktop: no window on the
+/// workspace each is showing, or on the special one pulled up over it, that is
+/// tiled or fullscreen. Floating windows leave most of a desktop in view,
+/// which is the line the shell it came from drew too.
+fn seen_desktops(monitors: &[serde_json::Value], clients: &[serde_json::Value]) -> Vec<String> {
+    let id_of = |owner: &serde_json::Value, workspace: &str| owner.get(workspace).and_then(|w| w.get("id")).and_then(serde_json::Value::as_i64);
+    let covers = |client: &&serde_json::Value| {
+        let flag = |name: &str| client.get(name).and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let fullscreen = client.get("fullscreen").and_then(serde_json::Value::as_i64).unwrap_or(0) > 0;
+        flag("mapped") && !flag("hidden") && (!flag("floating") || fullscreen)
+    };
+    let covered: Vec<i64> = clients.iter().filter(covers).filter_map(|client| id_of(client, "workspace")).collect();
+
+    monitors
+        .iter()
+        .filter(|monitor| {
+            // A special workspace that is not up has the id 0, which no
+            // window is on.
+            let showing = [id_of(monitor, "activeWorkspace"), id_of(monitor, "specialWorkspace")];
+            !showing.into_iter().flatten().any(|id| covered.contains(&id))
+        })
+        .filter_map(|monitor| monitor.get("name").and_then(serde_json::Value::as_str).map(str::to_string))
+        .collect()
 }
 
 /// The main keyboard's layout and locks.
@@ -421,6 +528,9 @@ pub fn watch(mut on_change: impl FnMut(State)) {
         "openwindow",
         "closewindow",
         "movewindow",
+        // Either takes a window off the desktop or lays it on.
+        "changefloatingmode",
+        "fullscreen",
         "createworkspace",
         "destroyworkspace",
         "urgent",
@@ -492,5 +602,41 @@ mod tests {
     #[test]
     fn no_keyboard_is_no_label() {
         assert_eq!(short_layout(""), "");
+    }
+
+    fn monitor(name: &str, workspace: i64, special: i64) -> serde_json::Value {
+        serde_json::json!({ "name": name, "activeWorkspace": { "id": workspace }, "specialWorkspace": { "id": special } })
+    }
+
+    fn window(workspace: i64, floating: bool, fullscreen: i64) -> serde_json::Value {
+        serde_json::json!({ "workspace": { "id": workspace }, "floating": floating, "fullscreen": fullscreen, "mapped": true, "hidden": false })
+    }
+
+    #[test]
+    fn a_desktop_is_seen_until_something_is_tiled_or_fullscreen_on_it() {
+        let monitors = [monitor("eDP-1", 1, 0), monitor("DP-2", 4, 0)];
+        assert_eq!(seen_desktops(&monitors, &[]), ["eDP-1", "DP-2"]);
+        // A floating window leaves the desktop in view; a tiled one does not.
+        assert_eq!(seen_desktops(&monitors, &[window(1, true, 0), window(4, false, 0)]), ["eDP-1"]);
+        // A floating window gone fullscreen covers it like any other.
+        assert_eq!(seen_desktops(&monitors, &[window(1, true, 2)]), ["DP-2"]);
+        // What is on a workspace nobody is looking at covers nothing.
+        assert_eq!(seen_desktops(&monitors, &[window(7, false, 0)]), ["eDP-1", "DP-2"]);
+    }
+
+    #[test]
+    fn a_special_workspace_pulled_up_lies_on_the_desktop_too() {
+        let scratchpad = window(-98, false, 0);
+        assert_eq!(seen_desktops(&[monitor("eDP-1", 1, -98)], std::slice::from_ref(&scratchpad)), [] as [&str; 0]);
+        assert_eq!(seen_desktops(&[monitor("eDP-1", 1, 0)], &[scratchpad]), ["eDP-1"]);
+    }
+
+    #[test]
+    fn a_window_that_is_not_on_screen_covers_nothing() {
+        let mut unmapped = window(1, false, 0);
+        unmapped["mapped"] = false.into();
+        let mut hidden = window(1, false, 0);
+        hidden["hidden"] = true.into();
+        assert_eq!(seen_desktops(&[monitor("eDP-1", 1, 0)], &[unmapped, hidden]), ["eDP-1"]);
     }
 }

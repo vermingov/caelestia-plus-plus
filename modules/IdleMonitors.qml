@@ -54,8 +54,10 @@ Scope {
         target: SessionManager
     }
 
+    // Nothing while the external bar watches for quiet: two shells acting on
+    // the same idleness would lock the machine twice over.
     Variants {
-        model: GlobalConfig.general.idle.timeouts
+        model: ExternalBar.hasIdle ? [] : GlobalConfig.general.idle.timeouts
 
         IdleMonitor {
             required property var modelData

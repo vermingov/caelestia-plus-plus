@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""A Hyprland that says one thing, for the rig.
+
+What the shell does over a fullscreen window, or on a desktop with nothing on
+it, cannot be tried on the real compositor, where the window is somebody's
+game. This answers the request socket the way Hyprland would with one screen
+and one window, and knows nothing else: every other question gets what
+Hyprland says to one it does not understand, which the shell already takes
+for no answer.
+
+    rig/hyprland [fullscreen|window|bare]     what is in front (default fullscreen)
+
+The shell has to be started knowing about it: RIG_HYPRLAND=rig rig/rig cae.
+`rig down` stops this too.
+"""
+import json
+import os
+import socket
+import sys
+
+front = sys.argv[1] if len(sys.argv) > 1 else "fullscreen"
+if front not in ("fullscreen", "window", "bare"):
+    sys.exit(__doc__)
+
+where = os.path.join(f"/tmp/cae-rig-{os.getuid()}", "hypr", "rig")
+os.makedirs(where, exist_ok=True)
+path = os.path.join(where, ".socket.sock")
+if os.path.exists(path):
+    os.unlink(path)
+with open(os.path.join(where, "pid"), "w") as kept:
+    kept.write(str(os.getpid()))
+
+window = {"class": "rig-game", "title": "A game", "workspace": {"id": 1}, "floating": False, "mapped": True,
+          "hidden": False, "fullscreen": 2 if front == "fullscreen" else 0,
+          # Somewhere to snap a selection to, in the rig's own coordinates.
+          "at": [200, 150], "size": [700, 450], "pinned": False}
+screen = {"name": "HEADLESS-1", "focused": True, "activeWorkspace": {"id": 1}, "specialWorkspace": {"id": 0}}
+answers = {
+    "activewindow": {} if front == "bare" else window,
+    "clients": [] if front == "bare" else [window],
+    "monitors": [screen],
+}
+
+door = socket.socket(socket.AF_UNIX)
+door.bind(path)
+door.listen()
+while True:
+    asker, _ = door.accept()
+    with asker:
+        asked = asker.recv(4096).decode(errors="replace").rpartition("/")[2]
+        asker.sendall(json.dumps(answers[asked]).encode() if asked in answers else b"unknown request")

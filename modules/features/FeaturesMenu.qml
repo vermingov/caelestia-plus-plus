@@ -15,7 +15,8 @@ import qs.services
 Scope {
     id: root
 
-    readonly property bool open: Features.menuOpen
+    // Not while the external bar draws its own.
+    readonly property bool open: Features.menuOpen && !ExternalBar.hasFeatures
     readonly property var focusedScreen: Quickshell.screens.find(s => s.name === Hypr.focusedMonitor?.name) ?? Quickshell.screens[0]
 
     StyledWindow {

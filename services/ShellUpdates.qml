@@ -165,7 +165,7 @@ fi
 # binary has never heard of. A build that fails is not fatal — the Python
 # fallbacks are still there and still correct.
 if command -v cargo >/dev/null 2>&1; then
-    for d in cli tools; do
+    for d in cli tools cae-shell; do
         [ -x "$d/install.sh" ] && "$d/install.sh" >/dev/null 2>&1 || true
     done
 fi

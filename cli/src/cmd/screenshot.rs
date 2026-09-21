@@ -3,8 +3,9 @@
 //! A fullscreen shot goes to the clipboard and to a cache file, and the
 //! notification offers to open or keep it. A region shot either hands the
 //! selection to the shell's own picker or crops with grim and opens the
-//! editor.
+//! editor — or, asked for, copies it and says so.
 
+use crate::cmd::shell;
 use crate::{clock, hypr, paths, proc};
 
 pub struct Args {
@@ -12,28 +13,54 @@ pub struct Args {
     /// already chosen, `None` for the focused monitor.
     pub region: Option<String>,
     pub freeze: bool,
+    /// To the clipboard rather than to the editor.
+    pub clipboard: bool,
 }
 
 pub fn run(args: &Args) -> i32 {
     match args.region.as_deref() {
-        Some("slurp") => open_picker(args.freeze),
-        Some(region) => crop(region.trim()),
+        Some("slurp") => open_picker(args),
+        Some(region) => crop(region.trim(), args.clipboard),
         None => fullscreen(),
     }
 }
 
-fn open_picker(freeze: bool) -> i32 {
-    let action = if freeze { "openFreeze" } else { "open" };
-    let ok = proc::run("qs", &["-c", "caelestia", "ipc", "call", "picker", action]);
-    i32::from(!ok)
+fn open_picker(args: &Args) -> i32 {
+    // The shell that is running: cae answers at its door, and the QML one
+    // over its own IPC. Whichever is there is the one with a picker.
+    let mut words = vec!["picker"];
+    if args.freeze {
+        words.push("freeze");
+    }
+    if args.clipboard {
+        words.push("clip");
+    }
+    if shell::knock(&words) {
+        return 0;
+    }
+    let action = match (args.freeze, args.clipboard) {
+        (true, true) => "openFreezeClip",
+        (true, false) => "openFreeze",
+        (false, true) => "openClip",
+        (false, false) => "open",
+    };
+    i32::from(!proc::run("qs", &["-c", "caelestia", "ipc", "call", "picker", action]))
 }
 
-fn crop(region: &str) -> i32 {
+fn crop(region: &str, clipboard: bool) -> i32 {
     let Some(image) = proc::capture("grim", &["-l", "0", "-g", region, "-"]) else {
         eprintln!("caelestia: grim could not capture {region}");
         return 1;
     };
-    proc::spawn_detached_with_input("swappy", &["-f", "-"], &image);
+    if !clipboard {
+        proc::spawn_detached_with_input("swappy", &["-f", "-"], &image);
+        return 0;
+    }
+    proc::pipe("wl-copy", &["--type", "image/png"], &image);
+    proc::spawn_detached(
+        "notify-send",
+        &["-a", "caelestia-cli", "Screenshot taken", "Screenshot copied to clipboard"],
+    );
     0
 }
 

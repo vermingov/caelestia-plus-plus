@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Caelestia++ <caelestia-plus-plus@users.noreply.github.com>
+Date: Fri, 18 Sep 2026 21:37:51 +0200
+Subject: [PATCH] perf(config): share anim and font tokens between attached
+ objects
+
+Tokens is an attached type, so every QML object that mentions Tokens.x gets
+one of its own, and each built its own AnimTokens (twelve easing curves) and
+FontTokens (nineteen fonts with variable axes, two dozen connections). The
+curves and durations come from global config alone and the fonts differ per
+screen at most, so a few thousand objects were each holding a private copy
+of the same values: 42.9 MB of a 160 MB heap.
+
+There is now one AnimTokens, and one FontTokens per font config. Both
+properties already notify through sourceChanged, which inheritScreen emits
+after rebinding, so a screen change still reaches every binding. Font
+configs are created with their parent config and never destroyed, which is
+what makes caching by their address safe.
+
+Measured in a second shell on the same config: anonymous memory 243 to
+196 MB, live heap 160 to 120 MB, 1.1 MB left under Tokens.
+---
+ .../src/Caelestia/Config/tokensattached.cpp   | 42 ++++++++++++++-----
+ .../src/Caelestia/Config/tokensattached.hpp   |  4 +-
+ 2 files changed, 32 insertions(+), 14 deletions(-)
+
+diff --git a/plugin/src/Caelestia/Config/tokensattached.cpp b/plugin/src/Caelestia/Config/tokensattached.cpp
+index d722598..aff5b4d 100644
+--- a/plugin/src/Caelestia/Config/tokensattached.cpp
++++ b/plugin/src/Caelestia/Config/tokensattached.cpp
+@@ -6,6 +6,8 @@
+ #include "monitorconfigmanager.hpp"
+ #include "tokens.hpp"
+ 
++#include <qcoreapplication.h>
++#include <qhash.h>
+ #include <qquickitem.h>
+ 
+ namespace caelestia::config {
+@@ -20,13 +22,36 @@ const AppearanceConfig* resolveAppearance(GlobalConfig* config, bool complete, c
+     return GlobalConfig::instance()->appearance();
+ }
+ 
++// Durations and curves are read from global config alone, so one set of them
++// is every object's set. Each attached object used to build its own: twelve
++// splines apiece, over a few thousand objects.
++AnimTokens* sharedAnim() {
++    static AnimTokens* anim = nullptr;
++    if (!anim) {
++        anim = new AnimTokens(QCoreApplication::instance());
++        anim->bindDurations(GlobalConfig::instance()->appearance()->anim()->durations());
++        anim->bindCurves(TokenConfig::instance()->appearance()->curves());
++    }
++    return anim;
++}
++
++// Fonts differ per screen at most, so there is one set for each font config
++// rather than nineteen fonts for each object. Configs are never destroyed,
++// which is why nothing is ever taken out of here.
++FontTokens* sharedFont(AppearanceFont* config) {
++    static QHash<AppearanceFont*, FontTokens*> fonts;
++    auto*& font = fonts[config];
++    if (!font) {
++        font = new FontTokens(QCoreApplication::instance());
++        font->bindFont(config);
++    }
++    return font;
++}
++
+ } // namespace
+ 
+ Tokens::Tokens(QObject* parent)
+-    : QQuickAttachedPropertyPropagator(parent)
+-    , m_font(new FontTokens(this))
+-    , m_anim(new AnimTokens(this)) {
+-    bindAnim();
++    : QQuickAttachedPropertyPropagator(parent) {
+     bindFont();
+     initialize();
+ }
+@@ -77,14 +102,9 @@ void Tokens::attachedParentChange(
+         inheritScreen(tokens->screen());
+ }
+ 
+-void Tokens::bindAnim() {
+-    m_anim->bindDurations(GlobalConfig::instance()->appearance()->anim()->durations());
+-    m_anim->bindCurves(TokenConfig::instance()->appearance()->curves());
+-}
+-
+ void Tokens::bindFont() {
+     auto* appearance = m_config ? m_config->appearance() : GlobalConfig::instance()->appearance();
+-    m_font->bindFont(appearance->font());
++    m_font = sharedFont(appearance->font());
+ }
+ 
+ #define TOKENS_ATTACHED_GETTER(Type, name)                                                                             \
+@@ -116,7 +136,7 @@ const FontTokens* Tokens::font() const {
+ }
+ 
+ const AnimTokens* Tokens::anim() const {
+-    return m_anim;
++    return sharedAnim();
+ }
+ 
+ TokenConfig* Tokens::forScreen(const QString& screen) {
+diff --git a/plugin/src/Caelestia/Config/tokensattached.hpp b/plugin/src/Caelestia/Config/tokensattached.hpp
+index 623b2ad..29b6fb4 100644
+--- a/plugin/src/Caelestia/Config/tokensattached.hpp
++++ b/plugin/src/Caelestia/Config/tokensattached.hpp
+@@ -67,15 +67,13 @@ private:
+     void componentComplete() override;
+ 
+     void propagateScreen();
+-    void bindAnim();
+     void bindFont();
+ 
+     bool m_complete = false;
+     QString m_screen;
+     GlobalConfig* m_config = nullptr;
+     TokenConfig* m_tokens = nullptr;
+-    FontTokens* m_font = nullptr;
+-    AnimTokens* m_anim = nullptr;
++    FontTokens* m_font = nullptr; // shared, not owned
+ };
+ 
+ } // namespace caelestia::config

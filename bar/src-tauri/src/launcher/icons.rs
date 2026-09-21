@@ -63,6 +63,23 @@ impl Icons {
         Icons { roots: icon_roots(), themes, cache: Mutex::new(HashMap::new()) }
     }
 
+    /// Takes over what another resolver has already found, when it was
+    /// looking in the same places for the same themes.
+    ///
+    /// Finding an icon is a walk of the theme's directories, and the answers
+    /// outlive the launcher they were found for: it is rebuilt every time it
+    /// closes, and without this the next one to open found all of them again,
+    /// one keystroke at a time, on the thread that draws.
+    #[cfg_attr(feature = "tauri-ui", allow(dead_code))]
+    pub fn inherit(&self, other: &Icons) {
+        if self.roots != other.roots || self.themes != other.themes {
+            return;
+        }
+        if let (Ok(mut mine), Ok(theirs)) = (self.cache.lock(), other.cache.lock()) {
+            mine.extend(theirs.iter().map(|(name, found)| (name.clone(), found.clone())));
+        }
+    }
+
     /// Drops everything resolved so far. Called when the desktop entries
     /// change: an install adds icon files too, and a name that resolved to
     /// nothing a moment ago is exactly the name that now has a file.

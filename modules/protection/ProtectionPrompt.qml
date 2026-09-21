@@ -17,7 +17,8 @@ Scope {
     id: root
 
     readonly property var current: Protection.pending[0] ?? null
-    readonly property bool open: Protection.pendingCount > 0
+    // Not while the external bar asks: one question, asked once.
+    readonly property bool open: Protection.pendingCount > 0 && !ExternalBar.hasGuard
     readonly property var focusedScreen: Quickshell.screens.find(s => s.name === Hypr.focusedMonitor?.name) ?? Quickshell.screens[0]
 
     readonly property string kindLabel: {

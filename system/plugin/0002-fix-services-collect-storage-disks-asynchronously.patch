@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Caelestia++ <caelestia-plus-plus@users.noreply.github.com>
+Date: Fri, 18 Sep 2026 21:37:51 +0200
+Subject: [PATCH] fix(services): collect storage disks asynchronously
+
+Disks were collected on the GUI thread, and statvfs on a mount that has
+stopped answering (an unreachable network share, a drive that dropped off
+the bus) blocks for as long as it likes: the whole shell froze with it.
+The scan now runs on a pool thread and only the result is applied here.
+
+Port of upstream 7f39105e. Upstream had split tick() into helpers by then,
+so this follows its shape rather than its diff.
+---
+ plugin/src/Caelestia/Services/CMakeLists.txt |  1 +
+ plugin/src/Caelestia/Services/storage.cpp    | 30 ++++++++++++++------
+ plugin/src/Caelestia/Services/storage.hpp    | 13 +++++++++
+ 3 files changed, 36 insertions(+), 8 deletions(-)
+
+diff --git a/plugin/src/Caelestia/Services/CMakeLists.txt b/plugin/src/Caelestia/Services/CMakeLists.txt
+index 163975b..76cc7d8 100644
+--- a/plugin/src/Caelestia/Services/CMakeLists.txt
++++ b/plugin/src/Caelestia/Services/CMakeLists.txt
+@@ -19,6 +19,7 @@ qml_module(caelestia-services
+         lyrics.cpp
+         sessionmanager.cpp
+     LIBRARIES
++        Qt::Concurrent
+         Qt::DBus
+         PkgConfig::Pipewire
+         PkgConfig::Aubio
+diff --git a/plugin/src/Caelestia/Services/storage.cpp b/plugin/src/Caelestia/Services/storage.cpp
+index 7f56fe7..3466a96 100644
+--- a/plugin/src/Caelestia/Services/storage.cpp
++++ b/plugin/src/Caelestia/Services/storage.cpp
+@@ -8,6 +8,7 @@
+ #include <qhash.h>
+ #include <qloggingcategory.h>
+ #include <qstorageinfo.h>
++#include <qtconcurrentrun.h>
+ #include <sys/stat.h>
+ #include <sys/sysmacros.h>
+ 
+@@ -17,12 +18,6 @@ namespace caelestia::services {
+ 
+ namespace {
+ 
+-struct Accum {
+-    quint64 usedBytes = 0;
+-    quint64 totalBytes = 0;
+-    bool hasRoot = false;
+-};
+-
+ [[nodiscard]] QString sysfsRealPath(uint major, uint minor) {
+     const QString link = QStringLiteral("/sys/dev/block/%1:%2").arg(major).arg(minor);
+     const QString resolved = QFileInfo(link).canonicalFilePath();
+@@ -98,7 +93,12 @@ QStringList resolveByDevt(uint major, uint minor, int depth) {
+ } // namespace
+ 
+ Storage::Storage(QObject* parent)
+-    : TickingService(parent) {}
++    : TickingService(parent)
++    , m_scan(new QFutureWatcher<QHash<QString, Accum>>(this)) {
++    QObject::connect(m_scan, &QFutureWatcherBase::finished, this, [this] {
++        applyDisks(m_scan->result());
++    });
++}
+ 
+ qreal Storage::percentage() const {
+     qreal totalUsed = 0.0;
+@@ -204,7 +204,15 @@ QStringList Storage::resolveToPhysicalDisks(const QString& devicePath) {
+ }
+ 
+ void Storage::tick() {
+-    const qreal prevPercentage = percentage();
++    // A scan still waiting on a mount that has stopped answering is not
++    // joined by a second one; the next tick after it returns starts afresh.
++    if (m_scan->isRunning()) {
++        return;
++    }
++    m_scan->setFuture(QtConcurrent::run(&Storage::collectDisks));
++}
++
++QHash<QString, Storage::Accum> Storage::collectDisks() {
+     QHash<QString, Accum> byDisk;
+ 
+     // Multiple mounts can share a single backing filesystem (btrfs subvolumes,
+@@ -258,6 +266,12 @@ void Storage::tick() {
+         }
+     }
+ 
++    return byDisk;
++}
++
++void Storage::applyDisks(const QHash<QString, Accum>& byDisk) {
++    const qreal prevPercentage = percentage();
++
+     QHash<QString, DiskInfo*> existing;
+     existing.reserve(m_disks.size());
+     for (DiskInfo* d : std::as_const(m_disks)) {
+diff --git a/plugin/src/Caelestia/Services/storage.hpp b/plugin/src/Caelestia/Services/storage.hpp
+index a3ee6be..e9f20a7 100644
+--- a/plugin/src/Caelestia/Services/storage.hpp
++++ b/plugin/src/Caelestia/Services/storage.hpp
+@@ -4,6 +4,8 @@
+ #include "tickingservice.hpp"
+ 
+ #include <qbytearrayview.h>
++#include <qfuturewatcher.h>
++#include <qhash.h>
+ #include <qqmlintegration.h>
+ #include <qqmllist.h>
+ #include <qvariant.h>
+@@ -40,6 +42,16 @@ protected:
+     void tick() override;
+ 
+ private:
++    struct Accum {
++        quint64 usedBytes = 0;
++        quint64 totalBytes = 0;
++        bool hasRoot = false;
++    };
++
++    // Static, because it runs on a pool thread and may outlive this object
++    [[nodiscard]] static QHash<QString, Accum> collectDisks();
++    void applyDisks(const QHash<QString, Accum>& byDisk);
++
+     [[nodiscard]] static QStringList resolveToPhysicalDisks(const QString& devicePath);
+     [[nodiscard]] static bool isPseudoFs(QByteArrayView fsType);
+     [[nodiscard]] static bool sameOrder(const QList<DiskInfo*>& a, const QList<DiskInfo*>& b);
+@@ -49,6 +61,7 @@ private:
+ 
+     QList<DiskInfo*> m_disks;
+     QPointer<DiskInfo> m_manualPrimaryDisk;
++    QFutureWatcher<QHash<QString, Accum>>* const m_scan;
+ };
+ 
+ } // namespace caelestia::services

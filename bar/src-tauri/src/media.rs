@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::Serialize;
 use zbus::blocking::{Connection, Proxy};
 use zbus::names::BusName;
-use zbus::zvariant::OwnedValue;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
 const PATH: &str = "/org/mpris/MediaPlayer2";
@@ -26,9 +26,20 @@ pub struct NowPlaying {
     pub identity: String,
     pub title: String,
     pub artist: String,
+    pub album: String,
+    /// Where the cover is: a `file://` of the player's own, or an address on
+    /// the web. Empty where the player gives none.
+    pub art: String,
+    /// How long the track is, in microseconds. Zero for a stream, which has
+    /// no end to be some way towards.
+    pub length: i64,
+    /// The player's own name for the track, which seeking has to quote back
+    /// at it so that a seek never lands in the next song.
+    pub track: String,
     pub playing: bool,
     pub can_go_next: bool,
     pub can_go_previous: bool,
+    pub can_seek: bool,
 }
 
 fn connection() -> Option<Connection> {
@@ -61,6 +72,17 @@ fn properties(connection: &Connection, bus: &str, interface: &str) -> HashMap<St
 
 fn text(properties: &HashMap<String, OwnedValue>, key: &str) -> String {
     properties.get(key).and_then(|value| String::try_from(value.clone()).ok()).unwrap_or_default()
+}
+
+/// A count of microseconds. The specification says signed; players that did
+/// not read it send unsigned, and one or two send a double.
+fn whole(properties: &HashMap<String, OwnedValue>, key: &str) -> i64 {
+    let Some(value) = properties.get(key) else { return 0 };
+    i64::try_from(value.clone())
+        .ok()
+        .or_else(|| u64::try_from(value.clone()).ok().map(|length| length as i64))
+        .or_else(|| f64::try_from(value.clone()).ok().map(|length| length as i64))
+        .unwrap_or(0)
 }
 
 fn flag(properties: &HashMap<String, OwnedValue>, key: &str) -> bool {
@@ -98,9 +120,18 @@ fn read_player(connection: &Connection, bus: &str) -> Option<NowPlaying> {
         },
         title: text(&metadata, "xesam:title"),
         artist,
+        album: text(&metadata, "xesam:album"),
+        art: text(&metadata, "mpris:artUrl"),
+        length: whole(&metadata, "mpris:length"),
+        track: metadata
+            .get("mpris:trackid")
+            .and_then(|value| OwnedObjectPath::try_from(value.clone()).ok())
+            .map(|path| path.as_str().to_string())
+            .unwrap_or_else(|| text(&metadata, "mpris:trackid")),
         playing: text(&player, "PlaybackStatus") == "Playing",
         can_go_next: flag(&player, "CanGoNext"),
         can_go_previous: flag(&player, "CanGoPrevious"),
+        can_seek: flag(&player, "CanSeek"),
     })
 }
 
@@ -117,6 +148,51 @@ fn read(connection: &Connection) -> Option<NowPlaying> {
         fallback.get_or_insert(player);
     }
     fallback
+}
+
+/// Every player there is, the ones that are playing first: for somewhere
+/// with room to choose between them.
+#[cfg_attr(feature = "tauri-ui", allow(dead_code))]
+pub fn all() -> Vec<NowPlaying> {
+    let Some(connection) = connection() else { return Vec::new() };
+    let mut players: Vec<NowPlaying> =
+        players(&connection).iter().filter_map(|bus| read_player(&connection, bus)).collect();
+    players.sort_by_key(|player| !player.playing);
+    players
+}
+
+/// How far into its track a player is, in microseconds. Asked for rather
+/// than watched: a player does not announce its position as it plays, only
+/// when it jumps.
+#[cfg_attr(feature = "tauri-ui", allow(dead_code))]
+pub fn position(bus: &str) -> Option<i64> {
+    let connection = connection()?;
+    let proxy = Proxy::new(&connection, BusName::try_from(bus.to_string()).ok()?, PATH, PLAYER).ok()?;
+    proxy.get_property::<i64>("Position").ok()
+}
+
+/// Moves a player to `position` microseconds into `track`, which is the
+/// track it was showing when somebody chose where to go.
+#[cfg_attr(feature = "tauri-ui", allow(dead_code))]
+pub fn set_position(bus: &str, track: &str, position: i64) {
+    let Some(connection) = connection() else { return };
+    let (Ok(bus), Ok(track)) = (BusName::try_from(bus.to_string()), ObjectPath::try_from(track.to_string())) else { return };
+    if let Ok(proxy) = Proxy::new(&connection, bus, PATH, PLAYER) {
+        let _ = proxy.call::<_, _, ()>("SetPosition", &(track, position));
+    }
+}
+
+/// `control`, for one player in particular.
+#[cfg_attr(feature = "tauri-ui", allow(dead_code))]
+pub fn control_on(bus: &str, action: &str) {
+    if !["PlayPause", "Next", "Previous", "Stop"].contains(&action) {
+        return;
+    }
+    let Some(connection) = connection() else { return };
+    let Ok(bus) = BusName::try_from(bus.to_string()) else { return };
+    if let Ok(proxy) = Proxy::new(&connection, bus, PATH, PLAYER) {
+        let _ = proxy.call::<_, _, ()>(action, &());
+    }
 }
 
 /// What is playing right now, for a caller that has just started listening.

@@ -6,6 +6,7 @@ import Caelestia
 import Caelestia.Config
 import qs.components
 import qs.modules.sidebar as Sidebar
+import qs.services
 import qs.modules.bar.popouts as BarPopouts
 
 Item {
@@ -24,7 +25,9 @@ Item {
 
         reloadableId: "utilities"
     }
-    readonly property bool shouldBeActive: screenState.sidebar || (screenState.utilities && Config.utilities.enabled && !(screenState.session && Config.session.enabled))
+    // Not while the external bar draws its own: the two rise out of the same
+    // corner, and the keys that open them are passed along to it.
+    readonly property bool shouldBeActive: !ExternalBar.hasUtilities && (screenState.sidebar || (screenState.utilities && Config.utilities.enabled && !(screenState.session && Config.session.enabled)))
     readonly property real totalPadding: content.anchors.margins + CUtils.clamp(content.anchors.margins - Config.border.thickness, 0, content.anchors.margins)
     readonly property real nonAnimHeight: ((content.item as Content)?.nonAnimHeight ?? 0) + totalPadding
     property real offsetScale: shouldBeActive ? 0 : 1

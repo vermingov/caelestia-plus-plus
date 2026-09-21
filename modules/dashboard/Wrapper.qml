@@ -6,6 +6,7 @@ import Caelestia
 import Caelestia.Config
 import qs.components
 import qs.components.filedialog
+import qs.services
 import qs.utils
 
 Item {
@@ -28,7 +29,8 @@ Item {
     // bottom-left, mirroring the utilities quick menu on the right
     readonly property real compactScale: 0.8
     readonly property real nonAnimHeight: ((content.item as Content)?.nonAnimHeight ?? 0) * compactScale
-    readonly property bool shouldBeActive: screenState.dashboard && Config.dashboard.enabled
+    // Not while cae draws the dashboard: it rises out of the same corner.
+    readonly property bool shouldBeActive: screenState.dashboard && Config.dashboard.enabled && !ExternalBar.hasDashboard
     property real offsetScale: shouldBeActive ? 0 : 1
 
     visible: offsetScale < 1

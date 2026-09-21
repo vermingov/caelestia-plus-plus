@@ -620,7 +620,7 @@ Singleton {
 
         const freshPackages = missingPackages.filter(p => !dismissedPackages.includes(p));
         const freshHalves = outdatedRootHalves.filter(dir => (vers[dir]?.repo ?? 0) > (dismissedRootHalves[dir] ?? 0));
-        if ((freshPackages.length || freshHalves.length) && !DebugConsole.open)
+        if ((freshPackages.length || freshHalves.length) && !DebugConsole.open && !ExternalBar.hasScan)
             promptOpen = true;
     }
 
@@ -717,9 +717,11 @@ Singleton {
         }
     }
 
-    // First scan waits out the startup rush; the shell is fully up by then
+    // First scan waits out the startup rush; the shell is fully up by then.
+    // cae looks over the same machine once it is installed, and one look is
+    // enough: two would probe the same things and interrupt twice.
     Timer {
-        running: true
+        running: !ExternalBar.hasScan
         interval: 15000
         onTriggered: root.scan()
     }

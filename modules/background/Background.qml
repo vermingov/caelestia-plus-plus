@@ -9,7 +9,12 @@ import qs.components.containers
 import qs.services
 
 Variants {
-    model: Screens.screens.filter(s => GlobalConfig.forScreen(s.name).background.enabled)
+    // cae draws the whole of the background now — the wallpaper, the helix
+    // and the desktop clock on top of them — so this stands down whole.
+    model: Screens.screens.filter(s => {
+        const background = GlobalConfig.forScreen(s.name).background;
+        return background.enabled && !ExternalBar.hasBackground;
+    })
 
     StyledWindow {
         id: win
@@ -19,8 +24,10 @@ Variants {
         screen: modelData
         name: "background"
         WlrLayershell.exclusionMode: ExclusionMode.Ignore
-        WlrLayershell.layer: contentItem.Config.background.wallpaperEnabled ? WlrLayer.Background : WlrLayer.Bottom
-        color: contentItem.Config.background.wallpaperEnabled ? "black" : "transparent"
+        readonly property bool drawsWallpaper: contentItem.Config.background.wallpaperEnabled && !ExternalBar.hasBackground
+
+        WlrLayershell.layer: drawsWallpaper ? WlrLayer.Background : WlrLayer.Bottom
+        color: drawsWallpaper ? "black" : "transparent"
         surfaceFormat.opaque: false
 
         anchors.top: true
@@ -46,7 +53,7 @@ Variants {
                 asynchronous: true
 
                 anchors.fill: parent
-                active: !Config.background.wallpaperEnabled && ShellPrefs.dnaEnabled
+                active: !Config.background.wallpaperEnabled && ShellPrefs.dnaEnabled && !ExternalBar.hasBackground
 
                 sourceComponent: DnaBackground {
                     screen: win.screen
@@ -59,7 +66,7 @@ Variants {
                 asynchronous: true
 
                 anchors.fill: parent
-                active: Config.background.wallpaperEnabled
+                active: win.drawsWallpaper
 
                 sourceComponent: Wallpaper {}
             }

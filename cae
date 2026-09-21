@@ -6,6 +6,9 @@
 #   cae status       what is installed and what is behind
 #   cae doctor       full diagnosis (doctor.sh)
 #   cae log          follow the running shell's log
+#   cae migrate      apply what this release needs doing to the machine
+#   cae preview      look at the new shell (cae-shell/) beside the one in use
+#   cae settings     open the settings, on a page if one is named: cae settings audio
 #   cae revert       put the machine back on upstream caelestia
 #
 # Everything that needs root is collected first and applied in a single sudo
@@ -67,9 +70,24 @@ run_root_actions() {
 
 # --- the shell process ------------------------------------------------------
 
-shell_pid() { pgrep -xf 'qs -c caelestia -n -d' | head -1; }
+# Two shells have run this desktop. Quickshell started cae as a child and
+# supervised it; now cae is started by systemd and Quickshell is not there at
+# all. Which one this machine is on decides how the shell is stopped, how it
+# is started, and what a failure to come up means.
+CAE_UNIT=cae-shell.service
+
+standalone() { systemctl --user is-enabled --quiet "$CAE_UNIT" 2>/dev/null; }
+
+shell_pid() {
+    if standalone; then
+        systemctl --user show -p MainPID --value "$CAE_UNIT" 2>/dev/null | grep -v '^0$'
+        return
+    fi
+    pgrep -xf 'qs -c caelestia -n -d' | head -1
+}
 
 stop_shell() {
+    standalone && { systemctl --user stop "$CAE_UNIT"; return 0; }
     shell_pid >/dev/null || return 0
     caelestia shell -k >/dev/null 2>&1 || true
     for _ in {1..20}; do
@@ -81,9 +99,26 @@ stop_shell() {
     sleep 1
 }
 
+# Whether anything has put a bar on the screen. What a loaded config meant
+# for the QML shell, asked of the compositor instead: cae's log says nothing
+# as useful, and a surface on screen is the thing actually wanted.
+bar_is_up() {
+    local _
+    for _ in {1..40}; do
+        hyprctl layers 2>/dev/null | grep -q 'caelestia-bar' && return 0
+        sleep 0.25
+    done
+    return 1
+}
+
 # Starts the shell and waits until its own log says the config loaded, so a
 # QML error is reported here instead of leaving a blank desktop behind
 start_shell() {
+    if standalone; then
+        systemctl --user start "$CAE_UNIT" || return 1
+        bar_is_up
+        return
+    fi
     local before after logdir
     before=$(ls -d /run/user/"$(id -u)"/quickshell/by-id/*/ 2>/dev/null | sort || true)
     setsid -f caelestia shell -d >/dev/null 2>&1 || true
@@ -104,6 +139,19 @@ start_shell() {
 }
 
 restart_shell() {
+    if standalone; then
+        # systemd stops the old one and starts the new one in that order,
+        # with no gap to fall into: never two, never none.
+        systemctl --user restart "$CAE_UNIT" || { warn "systemd would not restart $CAE_UNIT"; return 1; }
+        if bar_is_up; then
+            ok "shell restarted (pid $(shell_pid), through $CAE_UNIT)"
+            return 0
+        fi
+        warn "cae did not put a bar on the screen"
+        echo "--- last lines of journalctl --user -u $CAE_UNIT"
+        journalctl --user -u "$CAE_UNIT" -n 15 --no-pager 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+        return 1
+    fi
     stop_shell
     if start_shell; then
         ok "shell restarted (pid $(shell_pid))"
@@ -204,7 +252,9 @@ fetch_newer_packages() {
 
 # quickshell links Qt private API, so a Qt update can leave it unable to start
 # while the running shell carries on against the deleted libraries
-quickshell_broken() { ! timeout 20 qs --version >/dev/null 2>&1; }
+# Only ever asked while Quickshell is the one starting the shell. Once cae
+# runs itself, a quickshell that cannot start is a package nobody calls.
+quickshell_broken() { ! standalone && ! timeout 20 qs --version >/dev/null 2>&1; }
 
 # Root halves stamp their version in /etc/caelestia; only ones already
 # installed are upgraded, never silently enabled
@@ -224,6 +274,72 @@ queue_root_half_upgrades() {
             queue_root "bash '${dir%/}/install.sh'"
         fi
     done
+}
+
+# --- migrations -------------------------------------------------------------
+
+# What a release needs doing to the machine that no build can do: a unit to
+# enable, a line in the session to retire. They are data in release.json,
+# read out of the checkout that was just pulled, because the script running
+# an update is the one the update replaces — a release cannot teach an older
+# `cae` through code, only through what it leaves lying about.
+#
+# Every one is safe to run twice, and each carries the test for whether it
+# still needs running at all, so a machine that half-applied one finishes it
+# rather than starting again.
+run_migrations() {
+    local manifest=$SHELL_DIR/release.json
+    [[ -f $manifest ]] || return 0
+    command -v python3 >/dev/null || return 0
+
+    local count
+    count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("migrations",[])))' "$manifest" 2>/dev/null || echo 0)
+    (( count )) || return 0
+
+    local index name label says finished run after
+    for (( index = 0; index < count; index++ )); do
+        name=$(migration_field "$manifest" "$index" name)
+        label=$(migration_field "$manifest" "$index" label)
+        says=$(migration_field "$manifest" "$index" says)
+        finished=$(migration_field "$manifest" "$index" done)
+        run=$(migration_field "$manifest" "$index" run)
+        after=$(migration_field "$manifest" "$index" after)
+        [[ -n $run ]] || continue
+
+        if [[ -n $finished ]] && eval "$finished" >/dev/null 2>&1; then
+            step "${label:-$name} already done"
+            continue
+        fi
+
+        printf '\n'
+        say "${label:-$name}"
+        [[ -n $says ]] && printf '     %s\n\n' "$says" | fold -s -w 78 | sed '2,$s/^/     /'
+        if ! agreed "apply it now?"; then
+            warn "skipped; run it later with: cae migrate"
+            continue
+        fi
+        if eval "$run"; then
+            [[ -n $after ]] && step "$after"
+        else
+            warn "${label:-$name} did not finish; the machine is as it was"
+        fi
+    done
+}
+
+migration_field() {
+    python3 -c 'import json,sys
+step = json.load(open(sys.argv[1]))["migrations"][int(sys.argv[2])]
+sys.stdout.write(str(step.get(sys.argv[3], "")))' "$1" "$2" "$3" 2>/dev/null
+}
+
+# Yes unless told otherwise, and yes without asking where there is nobody to
+# ask: an update run from a script must not stop on a question.
+agreed() {
+    [[ -n ${CAE_YES:-} ]] && return 0
+    [[ -t 0 ]] || return 0
+    local answer
+    read -r -p "$(printf '%s::%s %s [Y/n] ' "$bold" "$reset" "$1")" answer || return 0
+    [[ -z $answer || $answer == [Yy]* ]]
 }
 
 # --- commands ---------------------------------------------------------------
@@ -276,10 +392,15 @@ cmd_update() {
     # with nothing to do this costs a tenth of a second.
     if command -v cargo >/dev/null; then
         say "checking the Rust binaries"
-        for rust_dir in cli tools; do
+        # cae-shell is the bar, the launcher and the notifications. Its
+        # installer changes nothing, and so restarts nothing, when the build
+        # comes out the same as what is installed.
+        for rust_dir in cli tools cae-shell; do
             [[ -x $SHELL_DIR/$rust_dir/install.sh ]] || continue
             if "$SHELL_DIR/$rust_dir/install.sh" >/dev/null 2>&1; then
                 step "$rust_dir current"
+            elif [[ $rust_dir == cae-shell ]]; then
+                warn "cae-shell did not build; the one already installed stays in charge"
             else
                 warn "$rust_dir did not build; its Python fallback stays in charge"
             fi
@@ -289,6 +410,10 @@ cmd_update() {
     if quickshell_broken; then
         die "quickshell still cannot start; run 'qs --version' to see why. The shell was not restarted."
     fi
+
+    # After the binaries, because a migration may want the ones just built,
+    # and before the restart, because it may change what a restart means.
+    run_migrations
 
     say "restarting the shell"
     if restart_shell; then
@@ -302,6 +427,9 @@ cmd_update() {
         warn "rolling the checkout back to $(git -C "$SHELL_DIR" log -1 --format=%h "$PREVIOUS_HEAD")"
         git -C "$SHELL_DIR" reset --hard "$PREVIOUS_HEAD" >/dev/null
         restart_shell && die "the new commits broke the shell; rolled back and restarted. Report the log above."
+    fi
+    if standalone; then
+        die "the shell is not running. Start it by hand with: systemctl --user start $CAE_UNIT"
     fi
     die "the shell is not running. Start it by hand with: caelestia shell -d"
 }
@@ -395,6 +523,11 @@ EOF
     ok "back on upstream caelestia — Caelestia++ is kept at $backup"
 }
 
+cmd_migrate() {
+    say "what this release needs doing to the machine"
+    run_migrations
+}
+
 cmd_restart() {
     say "restarting the shell"
     restart_shell
@@ -448,13 +581,24 @@ cmd_status() {
     done
 
     say "process"
+    if standalone; then
+        ok "the session is cae's own ($CAE_UNIT)"
+    else
+        warn "Quickshell still starts the shell; 'cae migrate' hands it over"
+    fi
     local pid
     pid=$(shell_pid || true)
     if [[ -n $pid ]]; then
         local nice
         nice=$(ps -o ni= -p "$pid" | tr -d ' ')
         ok "running (pid $pid, up $(ps -o etime= -p "$pid" | tr -d ' '), nice $nice)"
-        (( nice > 0 )) && warn "the shell is scheduled as a background task; 'cae' reinstalls the quickshell root half to fix that"
+        if (( nice > 0 )); then
+            if standalone; then
+                warn "the shell is scheduled as a background task; Nice= in $CAE_UNIT should be -5"
+            else
+                warn "the shell is scheduled as a background task; 'cae' reinstalls the quickshell root half to fix that"
+            fi
+        fi
     else
         warn "not running"
     fi
@@ -463,10 +607,37 @@ cmd_status() {
 cmd_doctor() { bash "$SHELL_DIR/doctor.sh" "$@"; }
 
 cmd_log() {
+    if standalone; then
+        exec journalctl --user -u "$CAE_UNIT" -f
+    fi
     local logdir
     logdir=$(ls -td /run/user/"$(id -u)"/quickshell/by-id/*/ 2>/dev/null | head -1)
     [[ -n $logdir ]] || die "no running shell to read a log from"
     tail -n 200 -F "$logdir/log.log"
+}
+
+# The shell that is replacing this one, drawn under the bar that is in use:
+# over everything, reserving nothing, and taking over neither the
+# notifications nor the launcher key. Built first, because a preview of last
+# week's build is a preview of nothing; with nothing changed that is a third
+# of a second.
+cmd_preview() {
+    local workspace=$SHELL_DIR/cae-shell
+    [[ -f $workspace/Cargo.toml ]] || die "no cae-shell/ in this checkout"
+    command -v cargo >/dev/null || die "cargo is needed to build cae-shell (rustup, or pacman -S rust)"
+
+    say "building cae-shell"
+    [[ -d $workspace/target/fast ]] || step "the first build is a few minutes; every one after it is seconds"
+    # Said only when it fails: a build that worked has nothing to say that
+    # is worth a screenful between the command and the shell it shows.
+    local output
+    if ! output=$(cd "$workspace" && cargo build --profile fast --bin cae-shell --color always 2>&1); then
+        printf '%s\n' "$output" >&2
+        die "cae-shell did not build"
+    fi
+
+    say "previewing under the bar — Ctrl+C to take it down"
+    exec "$workspace/target/fast/cae-shell" --preview "$@"
 }
 
 case ${1:-update} in
@@ -475,9 +646,14 @@ case ${1:-update} in
     status)     cmd_status ;;
     doctor)     shift; cmd_doctor "$@" ;;
     log)        cmd_log ;;
+    migrate)    cmd_migrate ;;
+    # The second spelling is the one it was first described with.
+    preview|--preview) shift; cmd_preview "$@" ;;
+    # A word to the shell that is running, which is what draws them.
+    settings)   exec cae-shell "$@" ;;
     revert)     shift; cmd_revert "$@" ;;
     -h|--help|help)
-        sed -n '2,10p' "$0" | sed 's/^# \?//'
+        sed -n '2,12p' "$0" | sed 's/^# \?//'
         ;;
     *) die "unknown command: $1 (try: cae --help)" ;;
 esac

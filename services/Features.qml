@@ -102,7 +102,8 @@ Singleton {
     // idle so nothing else powers the machine down while it runs closed.
     Process {
         command: ["systemd-inhibit", "--what=handle-lid-switch:sleep:idle", "--who=Caelestia Features", "--why=Stay-awake mode is on", "--mode=block", "sleep", "infinity"]
-        running: props.lidStay
+        // The external bar holds one of its own while the modes are its.
+        running: props.lidStay && !ExternalBar.hasFeatures
     }
 
     Process {
@@ -136,7 +137,12 @@ Singleton {
     IpcHandler {
         target: "features"
 
-        function toggleMenu(): void { root.menuOpen = !root.menuOpen; }
+        function toggleMenu(): void {
+            if (ExternalBar.hasFeatures)
+                ExternalBar.ask(["features"]);
+            else
+                root.menuOpen = !root.menuOpen;
+        }
         // Generic, for a front end that has the list from `status` and wants
         // to flip one by id — the Tauri bar's battery popout does exactly
         // that, and a named function per mode would need one added here every

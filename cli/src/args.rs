@@ -117,6 +117,7 @@ fn parse_screenshot(argv: &[String]) -> Option<Command> {
     let mut args = cmd::screenshot::Args {
         region: None,
         freeze: false,
+        clipboard: false,
     };
     let mut i = 0;
     while i < argv.len() {
@@ -134,6 +135,7 @@ fn parse_screenshot(argv: &[String]) -> Option<Command> {
                 }
             }
             "-f" | "--freeze" => args.freeze = true,
+            "-c" | "--clipboard" => args.clipboard = true,
             _ => return None,
         }
         i += 1;

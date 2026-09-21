@@ -1,0 +1,31 @@
+[package]
+name = "cae-core"
+description = "What cae knows about the desktop, with nothing in it about how that is drawn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+# The tray, MPRIS, the power and Bluetooth daemons and the notification server
+# are all D-Bus. The blocking API, because each lives on a thread of its own
+# and an async runtime would earn nothing there.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+# Tray icons and notification pictures arrive as raw pixels as often as they
+# arrive as a name.
+png = "0.17"
+# Small copies of wallpapers, for a page of them. The version and the formats
+# GPUI already builds, so nothing is compiled for it twice.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Watching the desktop-entry directories for the launcher.
+notify = { version = "7", default-features = false }
+# Asking whether that is the password, the way everything else on the machine
+# asks: the same rules, the same lockout, and no need for the shell to be
+# privileged.
+pam = { version = "0.8.0", default-features = false, features = ["client"] }
+
+[features]
+# Named only because the shared sources test for it; nothing here turns it on.
+tauri-ui = []

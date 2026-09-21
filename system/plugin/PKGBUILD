@@ -1,0 +1,63 @@
+# The compiled half of Caelestia++: upstream's shell at a pinned commit with
+# this fork's patches on top. Built once per release and attached to it;
+# system/plugin/build.sh drives this file.
+#
+# The patches are the record of what the fork changed. The set before this
+# one was written in a scratch directory and installed from there, and once
+# that directory was gone the binary was the only account of it left.
+#
+# Moving the pin: set _pin, reset pkgrel to 1 and rebase the patches; pkgver
+# follows the pin by itself. Otherwise bump pkgrel, which is what `cae`
+# compares to decide that a machine needs the package.
+
+pkgname=caelestia++-shell
+_pin=aa836f2a29bf48b403c57af4bec224aed0412878
+pkgver=2.1.0.r18.gaa836f2
+pkgrel=4
+pkgdesc='The desktop shell for the Caelestia dotfiles (local fork, detached from caelestia-shell-git)'
+arch=(x86_64 aarch64)
+url='https://github.com/vermingov/caelestia-plus-plus'
+license=(GPL-3.0-only)
+depends=(caelestia-cli quickshell-git ddcutil brightnessctl libcava networkmanager lm_sensors fish
+         aubio libpipewire glibc gcc-libs ttf-material-symbols-variable power-profiles-daemon
+         ttf-rubik-vf ttf-cascadia-code-nerd swappy libqalculate bash qt6-base qt6-declarative
+         qt6-imageformats)
+makedepends=(git cmake ninja qt6-shadertools)
+provides=("caelestia-shell-git=$pkgver-1")
+conflicts=(caelestia-shell-git)
+replaces=(caelestia-shell-git)
+options=(!debug)
+source=("shell::git+https://github.com/caelestia-dots/shell.git#commit=$_pin"
+        0001-fix-core-null-check-grabToImage-result-in-saveItem.patch
+        0002-fix-services-collect-storage-disks-asynchronously.patch
+        0003-fix-requests-stop-sending-Connection-close.patch
+        0004-perf-config-share-anim-and-font-tokens-between-attac.patch)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP)
+
+pkgver() {
+	cd shell
+	git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+	cd shell
+	local file
+	for file in "$srcdir"/[0-9]*.patch; do
+		patch -p1 < "$file"
+	done
+}
+
+build() {
+	cd shell
+	cmake -G Ninja -B build -W no-dev \
+		-D CMAKE_BUILD_TYPE=RelWithDebInfo \
+		-D CMAKE_INSTALL_PREFIX=/ \
+		-D DISTRIBUTOR='Caelestia++'
+	cmake --build build
+}
+
+package() {
+	cd shell
+	DESTDIR="$pkgdir" cmake --install build
+	install -Dm0644 -t "$pkgdir/usr/share/licenses/caelestia-shell/" LICENSE
+}

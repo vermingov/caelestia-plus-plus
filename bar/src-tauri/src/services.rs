@@ -366,31 +366,67 @@ pub fn connect_device(address: &str, connect: bool) {
 /// `nmcli -t` is the parseable form: colon-separated, with colons inside a
 /// field escaped as `\:`.
 pub fn networks() -> Vec<Wifi> {
+    wifi_list(&[])
+}
+
+/// The networks NetworkManager already has in hand, without waiting on the
+/// radio. `networks` lets it scan first when what it has is stale, and that
+/// is several seconds of an empty list: this one answers at once, and is what
+/// to show while the other is on its way.
+///
+/// cae's network panel opens with it. The Tauri bar never learnt to.
+#[cfg_attr(feature = "tauri-ui", allow(dead_code))]
+pub fn networks_at_hand() -> Vec<Wifi> {
+    wifi_list(&["--rescan", "no"])
+}
+
+fn wifi_list(scanning: &[&str]) -> Vec<Wifi> {
     let known: Vec<String> = output("nmcli", &["-t", "-f", "NAME", "connection", "show"])
         .unwrap_or_default()
         .lines()
         .map(unescape)
         .collect();
 
+    let list = [&["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"], scanning].concat();
+    let mut found = parse_wifi(&output("nmcli", &list).unwrap_or_default());
+    for wifi in &mut found {
+        wifi.known = known.contains(&wifi.ssid);
+    }
+    found
+}
+
+/// `nmcli`'s list of access points as a list of networks, the one in use
+/// first and the rest by strength.
+///
+/// A network is usually several access points: a router on two bands, a
+/// house with repeaters. They are one row here, and that row is the one in
+/// use if any of them is. Keeping whichever came first lost that whenever a
+/// stronger access point of the same network was listed above the one the
+/// machine was actually on, which is the ordinary case, and then nothing in
+/// the list was marked as connected.
+fn parse_wifi(listing: &str) -> Vec<Wifi> {
     let mut found: Vec<Wifi> = Vec::new();
-    for line in output("nmcli", &["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"])
-        .unwrap_or_default()
-        .lines()
-    {
+    for line in listing.lines() {
         let fields = split_escaped(line);
         let [in_use, ssid, signal, security] = &fields[..] else { continue };
         if ssid.is_empty() {
             continue; // a hidden network is not something to offer
         }
-        // The same network on two bands is one row in the list.
-        if found.iter().any(|w| &w.ssid == ssid) {
+        let (active, strength) = (in_use.trim() == "*", signal.parse().unwrap_or(0));
+
+        if let Some(same) = found.iter_mut().find(|w| &w.ssid == ssid) {
+            // The strength that matters is the link's own, not the best one
+            // in the building.
+            if active {
+                (same.active, same.strength) = (true, strength);
+            }
             continue;
         }
         found.push(Wifi {
-            active: in_use.trim() == "*",
-            strength: signal.parse().unwrap_or(0),
+            active,
+            strength,
             secured: !security.is_empty() && security != "--",
-            known: known.contains(ssid),
+            known: false,
             ssid: ssid.clone(),
         });
     }
@@ -507,6 +543,29 @@ pub fn read(guards: Guards) -> Snapshot {
 mod tests {
     use super::*;
 
+    /// What `nmcli` printed in a flat with repeaters: the network in use is
+    /// the sixth row, under a stronger access point with the same name.
+    const FLAT: &str = " :H158-381_08DD:79:WPA2\n ::65:WPA2\n :TP-Link_FB8C:64:WPA1 WPA2\n ::59:\n :H158-381_08DD_5G:57:WPA2\n*:H158-381_08DD:44:WPA2\n :Lars s:32:WPA2\n";
+
+    #[test]
+    fn the_network_in_use_is_marked_even_under_a_stronger_access_point() {
+        let list = parse_wifi(FLAT);
+
+        let current: Vec<&Wifi> = list.iter().filter(|w| w.active).collect();
+        assert_eq!(current.len(), 1, "exactly one network is the one in use");
+        assert_eq!(current[0].ssid, "H158-381_08DD");
+        assert_eq!(current[0].strength, 44, "the strength shown is the link's own");
+        assert_eq!(list[0].ssid, "H158-381_08DD", "and it comes first");
+    }
+
+    #[test]
+    fn access_points_of_one_network_are_one_row_and_hidden_ones_none() {
+        let list = parse_wifi(FLAT);
+        let names: Vec<&str> = list.iter().map(|w| w.ssid.as_str()).collect();
+        assert_eq!(names, ["H158-381_08DD", "TP-Link_FB8C", "H158-381_08DD_5G", "Lars s"]);
+        assert!(list.iter().all(|w| w.secured));
+    }
+
     #[test]
     fn profiles_are_shown_fastest_first() {
         let profile = |name: &'static str| {
@@ -597,6 +656,11 @@ fn nodes(kind: &str) -> Vec<AudioNode> {
         .lines()
         .filter_map(|line| {
             let name = line.split('\t').nth(1)?.to_string();
+            // Every sink has a monitor, which is a source in name only: it
+            // is what the sink is playing, and nobody picks it to talk into.
+            if name.ends_with(".monitor") {
+                return None;
+            }
             let description = descriptions
                 .iter()
                 .find(|(known, _)| known == &name)

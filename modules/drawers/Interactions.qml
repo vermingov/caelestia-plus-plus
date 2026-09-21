@@ -6,6 +6,7 @@ import qs.components
 import qs.components.controls
 import qs.modules.bar as Bar
 import qs.modules.bar.popouts as BarPopouts
+import qs.services
 
 CustomMouseArea {
     id: root
@@ -17,6 +18,11 @@ CustomMouseArea {
     required property Bar.BarWrapper bar
     required property real borderThickness
     required property bool fullscreen
+
+    // The notification drawer is the external bar's own centre while that bar
+    // serves notifications, and it has a corner of its own to be reached for:
+    // opening this one as well would put two of the same list on screen.
+    readonly property bool sidebarOnHover: Config.sidebar.showOnHover && !Notifs.external
 
     property point dragStart
     property bool dashboardShortcutActive
@@ -129,7 +135,7 @@ CustomMouseArea {
             const showSidebar = pressed && dragStart.x > Math.min(width - Config.border.minThickness, root.borderThickness + panels.sidebar.x);
 
             // Show sidebar on hover (top-right corner, bounded by notification panel height)
-            if (Config.sidebar.showOnHover) {
+            if (root.sidebarOnHover) {
                 const sidebarTriggerY = Math.max(Config.sidebar.minHoverThreshold, panels.notifications.y + panels.notifications.height + bar.implicitHeight);
                 const showSidebarHover = x > Math.min(width - Config.border.minThickness, root.borderThickness + panels.sidebar.x) && y <= sidebarTriggerY;
                 if (showSidebarHover && !screenState.sidebar)
@@ -174,7 +180,7 @@ CustomMouseArea {
             }
 
             // Show/hide sidebar on hover
-            if (Config.sidebar.showOnHover && !pressed) {
+            if (root.sidebarOnHover && !pressed) {
                 const sidebarTriggerY = Math.max(Config.sidebar.minHoverThreshold, panels.notifications.y + panels.notifications.height + bar.implicitHeight);
                 const showSidebarHover = x > Math.min(width - Config.border.minThickness, root.borderThickness + panels.sidebar.x) && y <= sidebarTriggerY;
                 if (showSidebarHover && !screenState.sidebar) {

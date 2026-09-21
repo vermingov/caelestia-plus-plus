@@ -1,0 +1,23 @@
+[Unit]
+Description=cae, the Caelestia++ shell
+Documentation=https://github.com/vermingov/caelestia-plus-plus
+# The desktop's own: it starts with the graphical session and goes with it.
+PartOf=graphical-session.target
+After=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cae-shell
+# A shell that falls over is a desktop with nothing on it, so it comes back.
+# Not `always`: one that refuses to start is one that should say so in the
+# log rather than spin.
+Restart=on-failure
+RestartSec=1s
+Slice=session.slice
+# The bar is what the screen is drawn from; it should not wait behind a
+# compile.
+Nice=-5
+
+[Install]
+WantedBy=graphical-session.target

@@ -6,6 +6,7 @@
 //! clock — because that layout is not what was wrong with it.
 
 mod children;
+mod gpus;
 mod guards;
 pub mod launcher;
 mod hypr;
@@ -176,14 +177,17 @@ fn cycle_workspace(forward: bool) {
     hypr::dispatch(if forward { "workspace r+1" } else { "workspace r-1" });
 }
 
+/// The headroom this bar's wheel has always had, and its slider has not.
+const WHEEL_LOUDEST: i64 = 150;
+
 #[tauri::command(async)]
 fn volume(delta: i64) {
-    volume::nudge(delta);
+    volume::nudge(delta, WHEEL_LOUDEST);
 }
 
 #[tauri::command(async)]
 fn volume_to(level: i64) {
-    volume::set(level);
+    volume::set(level, 100);
 }
 
 /// What of the surface accepts the pointer.

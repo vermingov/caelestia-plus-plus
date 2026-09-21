@@ -23,6 +23,10 @@ const SETTLE: Duration = Duration::from_millis(100);
 /// How often to look when there is no event stream to wait on.
 const POLL: Duration = Duration::from_secs(1);
 
+/// The two ends, by the names PipeWire has for whichever of each is in use.
+const SPEAKERS: &str = "@DEFAULT_AUDIO_SINK@";
+const MICROPHONE: &str = "@DEFAULT_AUDIO_SOURCE@";
+
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Volume {
@@ -40,7 +44,7 @@ pub struct Levels {
 }
 
 fn read() -> Levels {
-    Levels { volume: read_node("@DEFAULT_AUDIO_SINK@"), microphone: read_node("@DEFAULT_AUDIO_SOURCE@") }
+    Levels { volume: read_node(SPEAKERS), microphone: read_node(MICROPHONE) }
 }
 
 fn read_node(node: &str) -> Option<Volume> {
@@ -187,35 +191,42 @@ pub fn watch(mut on_change: impl FnMut(Levels)) {
     }
 }
 
-/// Moves the volume by `delta` percent, with the headroom above 100 that the
-/// wheel is allowed and the slider is not.
-pub fn nudge(delta: i64) {
+/// Moves the volume by `delta` percent, and no higher than `loudest` percent.
+/// What is above 100 is headroom, and how much of it there is is a setting.
+pub fn nudge(delta: i64, loudest: i64) {
+    nudge_node(SPEAKERS, delta, loudest);
+}
+
+pub fn nudge_microphone(delta: i64) {
+    nudge_node(MICROPHONE, delta, 100);
+}
+
+fn nudge_node(node: &str, delta: i64, highest: i64) {
     let sign = if delta >= 0 { "+" } else { "-" };
-    let _ = Command::new("wpctl")
-        .args(["set-volume", "-l", "1.5", "@DEFAULT_AUDIO_SINK@", &format!("{}%{sign}", delta.abs())])
-        .status();
+    let limit = format!("{:.2}", highest.max(0) as f64 / 100.0);
+    let _ = Command::new("wpctl").args(["set-volume", "-l", &limit, node, &format!("{}%{sign}", delta.abs())]).status();
 }
 
-/// Sets the volume outright, for the popout's slider. Capped at 100: the
-/// headroom above it is for the wheel, where asking for it is deliberate.
-pub fn set(level: i64) {
-    let _ = Command::new("wpctl")
-        .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{}%", level.clamp(0, 100))])
-        .status();
-}
-
-pub fn toggle_mute() {
-    let _ = Command::new("wpctl").args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"]).status();
-}
-
-pub fn toggle_microphone() {
-    let _ = Command::new("wpctl").args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"]).status();
+/// Sets the volume outright, for a slider, which says how far it reaches: up
+/// to 100 for one that offers no headroom, `loudest` for one that does.
+pub fn set(level: i64, loudest: i64) {
+    set_node(SPEAKERS, level.clamp(0, loudest.max(0)));
 }
 
 pub fn set_microphone(level: i64) {
-    let _ = Command::new("wpctl")
-        .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", &format!("{}%", level.clamp(0, 100))])
-        .status();
+    set_node(MICROPHONE, level.clamp(0, 100));
+}
+
+fn set_node(node: &str, level: i64) {
+    let _ = Command::new("wpctl").args(["set-volume", node, &format!("{level}%")]).status();
+}
+
+pub fn toggle_mute() {
+    let _ = Command::new("wpctl").args(["set-mute", SPEAKERS, "toggle"]).status();
+}
+
+pub fn toggle_microphone() {
+    let _ = Command::new("wpctl").args(["set-mute", MICROPHONE, "toggle"]).status();
 }
 
 #[cfg(test)]
