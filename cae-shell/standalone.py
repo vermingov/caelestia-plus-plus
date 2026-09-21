@@ -60,6 +60,12 @@ STOPPED = [
 ]
 
 
+# What the session runs in Quickshell's place. Only execs.lua gets it, and
+# only if it has the line this replaces.
+QUICKSHELL_EXEC = 'hl.exec_cmd("caelestia shell -d")'
+STARTS = 'hl.exec_cmd("cae-session")'
+
+
 def changed(text):
     """The file as it would be, and what was done to it, line by line."""
     out, notes = [], []
@@ -75,6 +81,23 @@ def changed(text):
         if line != was:
             notes.append((number, was.rstrip(), line.rstrip()))
         out.append(line)
+
+    # Stopping Quickshell is only half of it: something has to start cae. A
+    # session run by uwsm activates graphical-session.target and the unit is
+    # pulled in by it, but a Hyprland started from a display manager
+    # activates nothing, and the unit sits enabled and never runs. This line
+    # covers both, and goes in whether or not the Quickshell line above has
+    # already been commented out — a machine left half moved by an earlier
+    # version has nothing else to add it.
+    at = next((i for i, line in enumerate(out) if QUICKSHELL_EXEC in line), None)
+    if at is not None and not any(STARTS in line for line in out):
+        indent = out[at][: len(out[at]) - len(out[at].lstrip())]
+        if not out[at].endswith("\n"):
+            out[at] += "\n"
+        added = f"{indent}{STARTS}\n"
+        out.insert(at + 1, added)
+        notes.append((at + 2, "", added.rstrip()))
+
     return "".join(out), notes
 
 
@@ -180,8 +203,11 @@ def main():
         total += len(notes)
         print(f"\n{path.name}: {len(notes)} lines")
         for number, was, now in notes:
-            print(f"  {number:>4}  - {was.strip()}")
-            print(f"        + {now.strip()}")
+            if was:
+                print(f"  {number:>4}  - {was.strip()}")
+                print(f"        + {now.strip()}")
+            else:
+                print(f"  {number:>4}  + {now.strip()}")
         if notes:
             planned.append((path, after))
 

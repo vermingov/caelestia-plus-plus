@@ -71,16 +71,23 @@ service="$units/cae-shell.service"
 # last job away. Only ever on request: while Quickshell is the one starting
 # it, a second one would find the lock taken and exit.
 stand_alone() {
-    mkdir -p "$units"
+    mkdir -p "$units" "$bindir"
     install -m644 "$here/cae-shell.service" "$service"
+    # What the session runs to start it. On PATH rather than called from the
+    # checkout, so that moving the checkout does not leave a line in
+    # execs.lua pointing at nothing.
+    install -m755 "$here/session.sh" "$bindir/cae-session"
     systemctl --user daemon-reload
     systemctl --user enable cae-shell.service
     echo
     echo "cae will start with the graphical session."
-    echo "Take Quickshell out of it by removing this line from"
-    echo "~/.config/hypr/hyprland/execs.lua:"
-    echo '    hl.exec_cmd("caelestia shell -d")'
-    echo "and starting cae now with: systemctl --user start cae-shell"
+    if ! systemctl --user is-active --quiet graphical-session.target; then
+        echo
+        echo "  This session does not activate graphical-session.target — nothing"
+        echo "  here speaks systemd, so the unit would never be pulled in. The line"
+        echo "  standalone.py puts in execs.lua (cae-session) starts it instead, and"
+        echo "  hands systemd the Wayland display it would otherwise not know."
+    fi
 }
 
 if [[ ${1:-} == --uninstall ]]; then

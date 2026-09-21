@@ -2,9 +2,16 @@
 Description=cae, the Caelestia++ shell
 Documentation=https://github.com/vermingov/caelestia-plus-plus
 # The desktop's own: it starts with the graphical session and goes with it.
+#
+# Not `Requisite=`. That refuses to start unless the target is already
+# active, and only a session manager that speaks systemd — uwsm, and the
+# like — ever activates it. A Hyprland started straight from a display
+# manager never does, so the unit failed there with "a dependency job
+# failed" and nothing in its own log to say why. `After=` still orders it
+# behind the target where there is one, and `cae-session` starts it where
+# there is not.
 PartOf=graphical-session.target
 After=graphical-session.target
-Requisite=graphical-session.target
 
 [Service]
 Type=simple
