@@ -82,13 +82,32 @@ if standalone; then
         | grep -q 'is not compatible with the display surface'; then
         fail "the GPU cae chose cannot draw some of its windows, so they never opened"
         journalctl --user -u "$cae_unit" -n 400 --no-pager 2>/dev/null \
-            | grep -o 'Adapter "[^"]*" (backend=[^)]*)' | sort -u | sed 's/^/        /'
-        echo "        the machine's GPUs:"
-        lspci -nn 2>/dev/null | grep -iE 'vga|3d controller' | sed 's/^/          /'
-        echo "        pick another with its [vendor:device] id, second half, e.g.:"
-        echo "          mkdir -p ~/.config/caelestia"
-        echo "          echo ZED_DEVICE_ID=0x1b81 > ~/.config/caelestia/cae-shell.env"
-        echo "          systemctl --user restart $cae_unit"
+            | grep -o 'Adapter "[^"]*" (backend=[^)]*)' | sort -u | sed 's/^/        cae chose: /'
+
+        # Which card the screens are actually plugged into. That is the one
+        # the compositor draws on, and the only one whose surfaces every
+        # window can be given — asked of the kernel rather than guessed,
+        # because a machine with three GPUs gives no useful default.
+        drawing=""
+        for status in /sys/class/drm/card*-*/status; do
+            [[ $(cat "$status" 2>/dev/null) == connected ]] || continue
+            connector=$(basename "$(dirname "$status")")
+            card=${connector%%-*}
+            id=$(cat "/sys/class/drm/$card/device/device" 2>/dev/null) || continue
+            printf '        %s is driven by %s [%s:%s]\n' "${connector#*-}" "$card" \
+                "$(cat "/sys/class/drm/$card/device/vendor" 2>/dev/null | sed 's/0x//')" "${id#0x}"
+            [[ -z $drawing ]] && drawing=$id
+        done
+
+        if [[ -n $drawing ]]; then
+            echo "        tell cae to use that one:"
+            echo "          mkdir -p ~/.config/caelestia"
+            echo "          echo ZED_DEVICE_ID=$drawing > ~/.config/caelestia/cae-shell.env"
+            echo "          systemctl --user restart $cae_unit"
+        else
+            echo "        no connected output found in /sys/class/drm; the machine's GPUs are:"
+            lspci -nn 2>/dev/null | grep -iE 'vga|3d controller' | sed 's/^/          /'
+        fi
     fi
 elif pgrep -f 'qs -c caelestia' >/dev/null; then
     pass "shell running"
