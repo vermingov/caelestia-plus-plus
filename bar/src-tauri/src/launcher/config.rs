@@ -108,11 +108,21 @@ impl Config {
         let raw = std::fs::read_to_string(path()).unwrap_or_default();
         let root: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
 
-        let launcher = root
+        let mut launcher: Launcher = root
             .get("launcher")
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
+
+        // An empty prefix is not "no prefix", it is a launcher that can only
+        // show commands: every query starts with the empty string, so the
+        // apps are unreachable and even an empty box lists the actions. The
+        // setting is a choice of prefix, not a way to turn one off, so a
+        // cleared one goes back to the default rather than taking the apps
+        // with it.
+        if launcher.action_prefix.is_empty() {
+            launcher.action_prefix = Launcher::default().action_prefix;
+        }
 
         let terminal = root
             .pointer("/general/apps/terminal")
@@ -310,6 +320,24 @@ mod tests {
         let config = Config::load();
         assert!(!config.terminal.is_empty());
         assert!(!config.launcher.action_prefix.is_empty());
+    }
+
+    #[test]
+    fn an_empty_action_prefix_does_not_swallow_the_apps() {
+        // `"".strip_prefix("")` succeeds, so with an empty prefix every
+        // query — the empty one included — parsed as the command list and
+        // the apps could never be reached.
+        let mut launcher = Launcher::default();
+        launcher.action_prefix = String::new();
+        assert!(launcher.action_prefix.is_empty(), "the state a cleared setting leaves");
+
+        let config = Config::load();
+        assert!(!config.launcher.action_prefix.is_empty(), "a cleared prefix must not reach the parser");
+
+        let mut mended = Config::load();
+        mended.launcher.action_prefix = ">".to_string();
+        assert!(matches!(crate::launcher::modes::parse("", &mended).0, crate::launcher::modes::Mode::Apps));
+        assert!(matches!(crate::launcher::modes::parse("fire", &mended).0, crate::launcher::modes::Mode::Apps));
     }
 
     #[test]
