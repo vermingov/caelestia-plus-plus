@@ -104,6 +104,33 @@ pub fn shade(colour: u32, alpha: f32) -> Hsla {
     rgba((colour << 8) | (alpha.clamp(0., 1.) * 255.) as u32).into()
 }
 
+/// The same colour, moved toward white or black. `by` is how far, one being
+/// all the way.
+pub fn lit(colour: u32, by: f32) -> u32 {
+    let mix = |channel: u32| {
+        let channel = channel as f32;
+        let moved = if by >= 0. { channel + (255. - channel) * by } else { channel * (1. + by) };
+        (moved.clamp(0., 255.)) as u32
+    };
+    mix(colour >> 16 & 0xff) << 16 | mix(colour >> 8 & 0xff) << 8 | mix(colour & 0xff)
+}
+
+/// A flat colour given form: lighter where the light would fall, darker
+/// underneath.
+///
+/// The drawings came across from the files as flat fills, one colour to a
+/// shape, which is what an SVG is and what the old shell drew. A shape with
+/// one colour in it reads as a sticker of the thing rather than the thing,
+/// and no amount of moving it about fixes that. Every fill is a short
+/// gradient now, which costs nothing here — the same path, one more stop —
+/// and is the whole difference between a cut-out and something with a side
+/// to it.
+pub fn modelled(colour: u32, alpha: f32) -> Background {
+    // Gently. Far enough to see a side to the shape, not so far that the
+    // colour turns to dirt at the bottom of it.
+    down(shade(lit(colour, 0.17), alpha), shade(lit(colour, -0.12), alpha))
+}
+
 /// A rectangle, with corners as round as `radius`.
 fn trace_rect(path: &mut PathBuilder, cam: &Cam, x: f32, y: f32, w: f32, h: f32, radius: f32) {
     let radius = radius.min(w / 2.).min(h / 2.).max(0.);

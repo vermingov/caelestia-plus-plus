@@ -181,7 +181,26 @@ pub struct Placed {
 /// uses for the same job.
 const ROUNDNESS: f32 = 0.552_284_75;
 
+/// The dark it sits in, under everything else it is made of.
+///
+/// Without one it is a drawing laid on the screen; with one it is standing on
+/// the bottom of it. Nine ovals rather than a blur, each wider and fainter
+/// than the last, which is the same trick `glow` uses and the only one on
+/// offer without a real shadow to cast.
+fn footing(sticker: &Sticker, placed: Placed, cam: &Cam, window: &mut Window) {
+    const RINGS: usize = 9;
+    let width = sticker.across * placed.scale * 0.42;
+    let (x, y) = (f32::from(placed.at.x), f32::from(placed.at.y) + sticker.down * placed.scale * 0.5);
+    for ring in (0..RINGS).rev() {
+        let out = (ring + 1) as f32 / RINGS as f32;
+        let alpha = 0.22 * (1. - out) * placed.alpha;
+        crate::ui::eggs::paint::disc(window, cam, x, y, width * (0.55 + out * 0.9), 0.16,
+            crate::ui::eggs::paint::shade(0x000000, alpha));
+    }
+}
+
 pub fn paint(sticker: &Sticker, placed: Placed, cam: &Cam, window: &mut Window) {
+    footing(sticker, placed, cam, window);
     let (angle, (about_x, about_y)) = (placed.turn * std::f32::consts::TAU, placed.about);
     let (sin, cos) = (angle.sin(), angle.cos());
     let put = move |x: f32, y: f32| {
@@ -194,7 +213,7 @@ pub fn paint(sticker: &Sticker, placed: Placed, cam: &Cam, window: &mut Window) 
             let mut path = PathBuilder::fill();
             trace(&mut path, piece.shape, &put);
             if let Ok(built) = path.build() {
-                window.paint_path(built, shade(colour, piece.alpha * placed.alpha));
+                window.paint_path(built, crate::ui::eggs::paint::modelled(colour, piece.alpha * placed.alpha));
             }
         }
         if let Some((colour, width)) = piece.stroke {
