@@ -15,9 +15,17 @@ pub struct Args {
     pub freeze: bool,
     /// To the clipboard rather than to the editor.
     pub clipboard: bool,
+    /// A picture that has already been taken, to be used instead of taking
+    /// one. The shell's picker holds the screen still by photographing it and
+    /// drawing that; cropping the live screen afterwards throws that away and
+    /// takes whatever is there a moment later, which is not what was chosen.
+    pub from: Option<String>,
 }
 
 pub fn run(args: &Args) -> i32 {
+    if let Some(path) = args.from.as_deref() {
+        return already_taken(path, args.clipboard);
+    }
     match args.region.as_deref() {
         Some("slurp") => open_picker(args),
         Some(region) => crop(region.trim(), args.clipboard),
@@ -47,11 +55,26 @@ fn open_picker(args: &Args) -> i32 {
     i32::from(!proc::run("qs", &["-c", "caelestia", "ipc", "call", "picker", action]))
 }
 
+/// Does the rest of what a screenshot is — the editor, or the clipboard and
+/// a word about it — to a picture somebody else has already taken.
+fn already_taken(path: &str, clipboard: bool) -> i32 {
+    let Ok(image) = std::fs::read(path) else {
+        eprintln!("caelestia: cannot read {path}");
+        return 1;
+    };
+    let _ = std::fs::remove_file(path);
+    finish(image, clipboard)
+}
+
 fn crop(region: &str, clipboard: bool) -> i32 {
     let Some(image) = proc::capture("grim", &["-l", "0", "-g", region, "-"]) else {
         eprintln!("caelestia: grim could not capture {region}");
         return 1;
     };
+    finish(image, clipboard)
+}
+
+fn finish(image: Vec<u8>, clipboard: bool) -> i32 {
     if !clipboard {
         proc::spawn_detached_with_input("swappy", &["-f", "-"], &image);
         return 0;

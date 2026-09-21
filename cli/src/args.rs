@@ -118,6 +118,7 @@ fn parse_screenshot(argv: &[String]) -> Option<Command> {
         region: None,
         freeze: false,
         clipboard: false,
+        from: None,
     };
     let mut i = 0;
     while i < argv.len() {
@@ -136,6 +137,10 @@ fn parse_screenshot(argv: &[String]) -> Option<Command> {
             }
             "-f" | "--freeze" => args.freeze = true,
             "-c" | "--clipboard" => args.clipboard = true,
+            "--from" => {
+                args.from = argv.get(i + 1).cloned();
+                i += 1;
+            }
             _ => return None,
         }
         i += 1;

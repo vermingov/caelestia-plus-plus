@@ -242,11 +242,22 @@ impl Picker {
         let (x, y) = (self.at.x + f32::from(region.origin.x) as i32, self.at.y + f32::from(region.origin.y) as i32);
         let (width, height) = (f32::from(region.size.width) as i32, f32::from(region.size.height) as i32);
         let want = self.at.want;
+        // Where on this screen it was chosen, which is where it is in the
+        // still: the still is one screen's, and the numbers above are the
+        // whole desk's.
+        let here = Bounds::new(region.origin, region.size);
+        let frozen = self.at.frozen.clone();
         // Off the drawing thread, and after the surfaces have gone: a shot
         // taken while they are up is a shot of them.
         done(window, cx);
         cx.defer(move |cx| {
-            cx.background_spawn(async move { take(x, y, width, height, want) }).detach();
+            cx.background_spawn(async move {
+                match frozen.and_then(|still| cut(&still, here)) {
+                    Some(cut) => taken_already(&cut, want),
+                    None => take(x, y, width, height, want),
+                }
+            })
+            .detach();
         });
     }
 }
@@ -262,6 +273,38 @@ fn between(one: gpui::Point<Pixels>, other: gpui::Point<Pixels>) -> Bounds<Pixel
         point(one.x.min(other.x), one.y.min(other.y)),
         point(one.x.max(other.x), one.y.max(other.y)),
     )
+}
+
+/// Cuts the chosen rectangle out of the still, and says where it put it.
+///
+/// The freeze is not a picture of what will be taken unless what is taken
+/// comes out of it. Holding the screen still and then asking `grim` for the
+/// region afterwards photographs the desk as it is a moment later — the
+/// freeze looked right and the shot was of something else, which is the
+/// worst way for this to be wrong.
+fn cut(still: &std::path::Path, region: Bounds<Pixels>) -> Option<PathBuf> {
+    let whole = image::open(still).ok()?;
+    let (x, y) = (f32::from(region.origin.x).max(0.) as u32, f32::from(region.origin.y).max(0.) as u32);
+    let (width, height) = (f32::from(region.size.width) as u32, f32::from(region.size.height) as u32);
+    let (width, height) = (width.min(whole.width().saturating_sub(x)), height.min(whole.height().saturating_sub(y)));
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let cut = image::imageops::crop_imm(&whole, x, y, width, height).to_image();
+    let put = still.with_file_name(format!("cut-{}.png", std::process::id()));
+    cut.save(&put).ok()?;
+    Some(put)
+}
+
+/// Hands the cut to the CLI, which does what the keybind would have done
+/// with a whole screen. The CLI takes the file away once it has it.
+fn taken_already(cut: &std::path::Path, want: Want) {
+    let mut asking = std::process::Command::new("caelestia");
+    asking.args(["screenshot", "--from"]).arg(cut);
+    if want.clip {
+        asking.arg("--clipboard");
+    }
+    let _ = asking.status();
 }
 
 /// Hands the region to the CLI, which crops it and does what the keybind
@@ -344,6 +387,40 @@ fn shade(chosen: Option<Bounds<Pixels>>) -> Vec<gpui::Div> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_is_taken_is_cut_out_of_the_still_and_not_the_live_screen() {
+        // A picture nothing could mistake for the desktop: a known colour in
+        // the region that will be chosen, a different one everywhere else.
+        let mut whole = image::RgbaImage::from_pixel(200, 120, image::Rgba([9, 9, 9, 255]));
+        for y in 30..70 {
+            for x in 40..140 {
+                whole.put_pixel(x, y, image::Rgba([200, 30, 60, 255]));
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("cae-cut-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let still = dir.join("eDP-1-1.png");
+        whole.save(&still).unwrap();
+
+        let region = Bounds::new(point(px(40.), px(30.)), Size::new(px(100.), px(40.)));
+        let chosen = cut(&still, region).expect("the region is inside the still");
+        let taken = image::open(&chosen).unwrap().to_rgba8();
+        assert_eq!(taken.dimensions(), (100, 40));
+        // Every pixel is the marked region's, which can only have come from
+        // the file: the live screen is not this colour and never was.
+        assert!(
+            taken.pixels().all(|pixel| pixel.0 == [200, 30, 60, 255]),
+            "the cut did not come out of the still"
+        );
+
+        // A region running off the edge is clamped rather than refused.
+        let over = Bounds::new(point(px(150.), px(100.)), Size::new(px(400.), px(400.)));
+        let clamped = cut(&still, over).expect("clamped to what there is");
+        assert_eq!(image::open(&clamped).unwrap().to_rgba8().dimensions(), (50, 20));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn a_still_is_never_written_where_one_was_drawn_from_before() {
