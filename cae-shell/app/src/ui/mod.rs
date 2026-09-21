@@ -28,6 +28,7 @@ pub mod security;
 pub mod session;
 pub mod settings;
 pub mod slider;
+pub mod surface;
 pub mod utilities;
 
 /// What a key, or somebody at the door, asks of a panel that opens and

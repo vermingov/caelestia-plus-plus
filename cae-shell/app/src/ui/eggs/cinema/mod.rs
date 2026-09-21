@@ -83,7 +83,7 @@ fn play(cx: &mut App) {
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         }),
-        ..Default::default()
+        ..crate::ui::surface::options()
     };
     match cx.open_window(options, |window, cx| cx.new(|cx| Cinema::new(window, cx))) {
         Ok(window) => cx.set_global(Open(Some(window))),

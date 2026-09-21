@@ -186,7 +186,7 @@ impl Launchers {
                 keyboard_interactivity: KeyboardInteractivity::Exclusive,
                 ..Default::default()
             }),
-            ..Default::default()
+            ..crate::ui::surface::options()
         };
 
         let (index, launchers) = (self.index.clone(), cx.weak_entity());

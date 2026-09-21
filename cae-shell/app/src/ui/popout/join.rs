@@ -57,7 +57,7 @@ pub fn ask(ssid: String, at: Point<Pixels>, display: Option<DisplayId>, cx: &mut
             keyboard_interactivity: KeyboardInteractivity::Exclusive,
             ..Default::default()
         }),
-        ..Default::default()
+        ..crate::ui::surface::options()
     };
     let opened = cx.open_window(options, move |window, cx| {
         cx.new(|cx| {

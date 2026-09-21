@@ -94,7 +94,7 @@ fn open(cx: &mut App, display: DisplayId, output: String, feeds: &Feeds, preview
         app_id: Some(NAMESPACE.to_string()),
         window_background: WindowBackgroundAppearance::Transparent,
         kind: WindowKind::LayerShell(layer(preview, height)),
-        ..Default::default()
+        ..crate::ui::surface::options()
     };
 
     let feeds = feeds.clone();

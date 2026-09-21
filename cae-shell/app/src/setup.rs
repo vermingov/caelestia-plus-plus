@@ -159,7 +159,7 @@ fn show(missing: Missing, cx: &mut App) {
                 keyboard_interactivity: KeyboardInteractivity::OnDemand,
                 ..Default::default()
             }),
-            ..Default::default()
+            ..crate::ui::surface::options()
         };
         let opened = cx.open_window(options, move |window, cx| cx.new(|cx| Prompt::new(missing, window, cx)));
         looking.open = opened.map_err(|error| eprintln!("cae: cannot say what the machine is missing: {error}")).ok();

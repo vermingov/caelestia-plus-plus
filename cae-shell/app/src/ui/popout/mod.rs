@@ -309,7 +309,7 @@ fn placement(item: Bounds<Pixels>, bar: &Window, cx: &App) -> (WindowOptions, Pl
         ))),
         window_background: WindowBackgroundAppearance::Transparent,
         kind: WindowKind::AnchoredPopup(popup),
-        ..Default::default()
+        ..crate::ui::surface::options()
     };
     (options, place)
 }

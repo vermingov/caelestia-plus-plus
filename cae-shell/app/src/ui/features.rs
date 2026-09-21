@@ -82,7 +82,7 @@ impl Menus {
                 keyboard_interactivity: KeyboardInteractivity::OnDemand,
                 ..Default::default()
             }),
-            ..Default::default()
+            ..crate::ui::surface::options()
         };
         let opened = cx.open_window(options, move |window, cx| cx.new(|cx| Menu::new(menus, window, cx)));
         self.open = opened.map_err(|error| eprintln!("cae: cannot open the features menu: {error}")).ok();

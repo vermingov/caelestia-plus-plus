@@ -91,7 +91,7 @@ fn play(cx: &mut App) {
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         }),
-        ..Default::default()
+        ..crate::ui::surface::options()
     };
     let opened = cx.open_window(options, |window, cx| cx.new(|cx| Scene::new(window, cx)));
     match opened {

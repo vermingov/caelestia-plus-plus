@@ -157,7 +157,7 @@ fn surface(display: DisplayId) -> WindowOptions {
             keyboard_interactivity: KeyboardInteractivity::Exclusive,
             ..Default::default()
         }),
-        ..Default::default()
+        ..crate::ui::surface::options()
     }
 }
 

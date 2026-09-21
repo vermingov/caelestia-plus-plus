@@ -204,7 +204,7 @@ pub fn open(word: Option<&str>, cx: &mut App) {
         // corners and on anything else is whatever that desktop's windows
         // have. Drawing our own would be a second frame inside the first.
         window_decorations: Some(WindowDecorations::Server),
-        ..Default::default()
+        ..crate::ui::surface::options()
     };
 
     let feeds = cx.global::<Feeds>().clone();

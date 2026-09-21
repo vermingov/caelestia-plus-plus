@@ -157,7 +157,7 @@ impl Prompts {
                 keyboard_interactivity: KeyboardInteractivity::Exclusive,
                 ..Default::default()
             }),
-            ..Default::default()
+            ..crate::ui::surface::options()
         };
         let opened = cx.open_window(options, move |window, cx| cx.new(|cx| Prompt::new(first, &feeds, prompts, window, cx)));
         self.open = opened.map_err(|error| eprintln!("cae: cannot ask about a frozen program: {error}")).ok();

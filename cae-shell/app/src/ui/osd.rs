@@ -185,7 +185,7 @@ fn surface(display: Option<DisplayId>, size: Size<Pixels>) -> WindowOptions {
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         }),
-        ..Default::default()
+        ..crate::ui::surface::options()
     }
 }
 

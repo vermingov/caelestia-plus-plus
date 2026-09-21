@@ -85,7 +85,7 @@ fn lock_ours(feeds: &Feeds, cx: &mut App) {
             app_id: Some("caelestia-lock".to_string()),
             window_background: WindowBackgroundAppearance::Opaque,
             kind: WindowKind::SessionLock(SessionLockOptions::default()),
-            ..Default::default()
+            ..crate::ui::surface::options()
         };
         let asking = asking_on.is_none_or(|focused| focused == display) && up.is_empty();
         let (feeds, wallpaper) = (feeds.clone(), wallpaper.clone());

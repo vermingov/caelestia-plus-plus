@@ -146,7 +146,7 @@ fn open(cx: &mut App) {
             keyboard_interactivity: KeyboardInteractivity::Exclusive,
             ..Default::default()
         }),
-        ..Default::default()
+        ..crate::ui::surface::options()
     };
     match cx.open_window(options, |window, cx| cx.new(|cx| Menu::new(window, cx))) {
         Ok(menu) => cx.set_global(Open(Some(menu))),

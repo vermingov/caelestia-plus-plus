@@ -8,6 +8,14 @@ and one window, and knows nothing else: every other question gets what
 Hyprland says to one it does not understand, which the shell already takes
 for no answer.
 
+The one thing it does change its mind about is which workspace is focused,
+because the bar's only animation is the marker travelling between them, and
+an animation nothing can start is an animation nothing can measure. Both of
+Hyprland's sockets are here for it: `.socket.sock` takes `dispatch workspace
+N` exactly as the shell's own pips send it, and `.socket2.sock` then says
+`workspace>>N` to everyone listening, which is the shell's cue to read the
+state back and move the marker.
+
     rig/hyprland [fullscreen|window|bare]     what is in front (default fullscreen)
 
 The shell has to be started knowing about it: RIG_HYPRLAND=rig rig/rig cae.
@@ -17,6 +25,7 @@ import json
 import os
 import socket
 import sys
+import threading
 
 front = sys.argv[1] if len(sys.argv) > 1 else "fullscreen"
 if front not in ("fullscreen", "window", "bare"):
@@ -25,8 +34,10 @@ if front not in ("fullscreen", "window", "bare"):
 where = os.path.join(f"/tmp/cae-rig-{os.getuid()}", "hypr", "rig")
 os.makedirs(where, exist_ok=True)
 path = os.path.join(where, ".socket.sock")
-if os.path.exists(path):
-    os.unlink(path)
+events_path = os.path.join(where, ".socket2.sock")
+for stale in (path, events_path):
+    if os.path.exists(stale):
+        os.unlink(stale)
 with open(os.path.join(where, "pid"), "w") as kept:
     kept.write(str(os.getpid()))
 
@@ -35,11 +46,78 @@ window = {"class": "rig-game", "title": "A game", "workspace": {"id": 1}, "float
           # Somewhere to snap a selection to, in the rig's own coordinates.
           "at": [200, 150], "size": [700, 450], "pinned": False}
 screen = {"name": "HEADLESS-1", "focused": True, "activeWorkspace": {"id": 1}, "specialWorkspace": {"id": 0}}
-answers = {
-    "activewindow": {} if front == "bare" else window,
-    "clients": [] if front == "bare" else [window],
-    "monitors": [screen],
-}
+
+SCREEN = "HEADLESS-1"
+# Enough of them to page the row, and enough windows on the first few that the
+# bar draws the occupied run as it would on a desktop in use.
+WINDOWS = {1: 2, 2: 1, 3: 3, 5: 1, 7: 1}
+focused = 1
+
+listeners = []
+lock = threading.Lock()
+
+
+def workspaces():
+    """Every workspace the rig has, as `j/workspaces` answers it."""
+    return [{"id": id, "name": str(id), "windows": count, "monitor": SCREEN,
+             "lastwindow": "", "lastwindowtitle": ""}
+            for id, count in sorted({**WINDOWS, focused: WINDOWS.get(focused, 0)}.items())]
+
+
+def answer(asked):
+    fixed = {
+        "activewindow": {} if front == "bare" else window,
+        "clients": [] if front == "bare" else [window],
+        "monitors": [{**screen, "activeWorkspace": {"id": focused, "name": str(focused)}}],
+        "workspaces": workspaces(),
+        "activeworkspace": {"id": focused, "name": str(focused),
+                            "windows": WINDOWS.get(focused, 0), "monitor": SCREEN},
+    }
+    return fixed.get(asked)
+
+
+def announce(line):
+    """Hyprland's event stream is a line per event, to every listener."""
+    with lock:
+        for listener in list(listeners):
+            try:
+                listener.sendall(f"{line}\n".encode())
+            except OSError:
+                listeners.remove(listener)
+
+
+def take(message):
+    """A dispatch. Only `workspace` means anything here; the rest are taken
+    and dropped, which is what Hyprland does with one it cannot carry out."""
+    global focused
+    verb, _, rest = message.strip().partition(" ")
+    if verb != "workspace":
+        return
+    wanted = rest.strip()
+    if wanted.startswith("r"):                      # `workspace r+1`, from a scroll
+        try:
+            focused = max(1, focused + int(wanted[1:]))
+        except ValueError:
+            return
+    elif wanted.isdigit():
+        focused = int(wanted)
+    else:
+        return
+    announce(f"workspace>>{focused}")
+    announce(f"workspacev2>>{focused},{focused}")
+
+
+def serve_events():
+    door = socket.socket(socket.AF_UNIX)
+    door.bind(events_path)
+    door.listen()
+    while True:
+        listener, _ = door.accept()
+        with lock:
+            listeners.append(listener)
+
+
+threading.Thread(target=serve_events, daemon=True).start()
 
 door = socket.socket(socket.AF_UNIX)
 door.bind(path)
@@ -47,5 +125,10 @@ door.listen()
 while True:
     asker, _ = door.accept()
     with asker:
-        asked = asker.recv(4096).decode(errors="replace").rpartition("/")[2]
-        asker.sendall(json.dumps(answers[asked]).encode() if asked in answers else b"unknown request")
+        message = asker.recv(4096).decode(errors="replace")
+        if message.startswith("/dispatch "):
+            take(message[len("/dispatch "):])
+            asker.sendall(b"ok")
+            continue
+        said = answer(message.rpartition("/")[2])
+        asker.sendall(json.dumps(said).encode() if said is not None else b"unknown request")

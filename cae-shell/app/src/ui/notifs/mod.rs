@@ -87,7 +87,7 @@ fn surface(display: DisplayId, size: Size<gpui::Pixels>, anchor: Anchor) -> Wind
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         }),
-        ..Default::default()
+        ..crate::ui::surface::options()
     }
 }
 
