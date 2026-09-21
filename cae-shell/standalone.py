@@ -90,7 +90,28 @@ QUICKSHELL_EXEC = 'hl.exec_cmd("caelestia shell -d")'
 STARTS_NAME = "cae-session"
 
 
-def changed(text):
+# What cae's surfaces want from the compositor: blur behind the ones drawn as
+# glass, and how each comes and goes. Hyprland keeps these in the user's own
+# `rules.lua`, and nothing but this puts them there — a machine that came from
+# the QML shell has that shell's rules and none of these, so the launcher and
+# the panels came up as flat colour with no blur behind them and the bar
+# appeared without sliding.
+#
+# Matched by the namespace, so a rule somebody has written themselves is left
+# exactly as it is.
+LAYER_RULES = [
+    ("caelestia-launcher",
+     'hl.layer_rule({ match = { namespace = "caelestia-launcher" }, animation = "popin 90%", blur = true, ignore_alpha = 0.6 })'),
+    ("caelestia-panel",
+     'hl.layer_rule({ match = { namespace = "caelestia-panel" }, blur = true, ignore_alpha = 0.6, animation = "fade" })'),
+    ("caelestia-bar",
+     'hl.layer_rule({ match = { namespace = "caelestia-bar" }, animation = "slide top" })'),
+    ("caelestia-(features-menu",
+     'hl.layer_rule({ match = { namespace = "caelestia-(features-menu|firewall-(panel|prompt)|security-center|protection-prompt|setup-prompt)" }, animation = "fade" })'),
+]
+
+
+def changed(text, name=""):
     """The file as it would be, and what was done to it, line by line."""
     out, notes = [], []
     for number, line in enumerate(text.splitlines(keepends=True), 1):
@@ -98,9 +119,9 @@ def changed(text):
         for starts, why in STOPPED:
             if starts in line and not line.lstrip().startswith("--"):
                 line = line.replace(starts, f"-- {why}: {starts}")
-        for name, command in VERBS.items():
+        for verb, command in VERBS.items():
             wanted = spell(command)
-            shortcut = f'hl.dsp.global("caelestia:{name}")'
+            shortcut = f'hl.dsp.global("caelestia:{verb}")'
             if shortcut in line:
                 line = line.replace(shortcut, f'hl.dsp.exec_cmd("{wanted}")')
             # An earlier version wrote these by bare name, which the
@@ -116,6 +137,21 @@ def changed(text):
         if line != was:
             notes.append((number, was.rstrip(), line.rstrip()))
         out.append(line)
+
+    # The compositor's own rules for cae's surfaces, appended rather than
+    # matched into place: they are new lines, not changes to existing ones.
+    if name == "rules.lua":
+        missing = [rule for match, rule in LAYER_RULES if match not in text]
+        if missing:
+            if out and not out[-1].endswith("\n"):
+                out[-1] += "\n"
+            out.append("\n-- cae's own surfaces: blur behind the glass ones, and how each\n")
+            out.append("-- comes and goes.\n")
+            notes.append((len(out), "", "-- cae's own surfaces"))
+            for rule in missing:
+                out.append(f"{rule}\n")
+                notes.append((len(out), "", rule))
+        return "".join(out), notes
 
     # Stopping Quickshell is only half of it: something has to start cae. A
     # session run by uwsm activates graphical-session.target and the unit is
@@ -138,7 +174,7 @@ def changed(text):
 
 
 def files():
-    for name in ("execs.lua", "keybinds.lua"):
+    for name in ("execs.lua", "keybinds.lua", "rules.lua"):
         path = HYPR / name
         if not path.is_file():
             sys.exit(f"standalone: {path} is not there")
@@ -235,7 +271,7 @@ def main():
     # reads.
     planned, total = [], 0
     for path in files():
-        after, notes = changed(path.read_text())
+        after, notes = changed(path.read_text(), path.name)
         total += len(notes)
         print(f"\n{path.name}: {len(notes)} lines")
         for number, was, now in notes:
