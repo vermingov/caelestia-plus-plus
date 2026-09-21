@@ -199,15 +199,40 @@ pub fn pane() -> Background {
 ///
 /// So this begins where `face` ends, and carries no rim.
 pub fn hanging() -> Background {
-    linear_gradient(180., linear_color_stop(rgba(0x0d0d0fe0), 0.), linear_color_stop(rgba(0x0d0d0fc2), 1.))
+    // As dense as the bar, and falling off as sharply.
+    //
+    // A pane is thinner because the compositor blurs what is behind it;
+    // nothing blurs behind this, for the same reason nothing blurs behind the
+    // bar, so it carries its own body exactly as the pill does.
+    //
+    // The fall has to happen near the top rather than over the whole height.
+    // The bar's glass loses ten levels in its thirty-eight pixels, which is
+    // what makes it read as lit from above; the same two colours spread down
+    // four hundred and fifty lose five, which reads as one flat colour beside
+    // it. So the second stop comes at a third of the way down and the rest
+    // holds, and the two surfaces catch the light the same way.
+    // Starting a shade under the glass's own end, not at it: the bar darkens
+    // its last rows with the shadow it casts inside its edge, so matching the
+    // colour `face` ends on leaves the drawer three levels lighter than the
+    // row above it — little, and enough to draw a line across a join that is
+    // supposed to have none.
+    linear_gradient(180., linear_color_stop(rgba(0x0a0a0ce0), 0.), linear_color_stop(rgba(0x050508ea), 0.33))
 }
 
-/// Its shadow, cast downward and to the sides. No inset hairline: see
-/// `hanging`.
+/// Its shadow, and not one pixel of it above the drawer's own top edge.
+///
+/// This surface is an overlay and the bar is not, so it is drawn over the
+/// bar: a shadow that reaches upward is painted onto the thing the drawer is
+/// supposed to be part of. A pane's reaches eighteen pixels up, which put a
+/// black band along the bottom of the bar wherever the drawer was open — the
+/// join it was meant to hide being the one thing it drew attention to.
+///
+/// Each is offset further than it spreads, so every one of them falls away
+/// below. No inset hairline either: see `hanging`.
 pub fn hanging_shadows() -> Vec<BoxShadow> {
     vec![
-        BoxShadow::new(px(0.), px(20.), hsla(0., 0., 0., 0.5)).blur_radius(px(48.)).spread_radius(px(-10.)),
-        BoxShadow::new(px(0.), px(4.), hsla(0., 0., 0., 0.42)).blur_radius(px(14.)).spread_radius(px(-4.)),
+        BoxShadow::new(px(0.), px(26.), hsla(0., 0., 0., 0.5)).blur_radius(px(36.)).spread_radius(px(-14.)),
+        BoxShadow::new(px(0.), px(6.), hsla(0., 0., 0., 0.42)).blur_radius(px(12.)).spread_radius(px(-6.)),
     ]
 }
 

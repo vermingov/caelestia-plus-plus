@@ -37,8 +37,16 @@ use pane::Pane;
 /// What Quickshell is asked about before any of this is drawn.
 const PIECE: &str = "dashboard";
 
-/// The name the compositor already blurs behind and fades in: a panel's.
-const NAMESPACE: &str = "caelestia-panel";
+/// Its own name, and not a panel's.
+///
+/// A panel is blurred behind and faded in by the compositor, and this must be
+/// neither. The bar is deliberately not blurred — its surface is taller than
+/// the pill and `ignore_alpha` does not keep the compositor off the
+/// transparent part — so a blurred surface hanging off it shows a different
+/// world through the same glass, and the join is visible however well the
+/// two colours are matched. The fade is worse: it dissolves the thing in
+/// rather than letting it open, over the top of whatever this draws itself.
+const NAMESPACE: &str = "caelestia-drawer";
 
 /// How far down the bar's own surface reaches. Both of this module's
 /// surfaces step over it themselves rather than asking the compositor to
