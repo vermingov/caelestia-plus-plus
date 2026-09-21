@@ -107,6 +107,67 @@ def others_needing_quickshell():
     return []
 
 
+# Where `cae revert` looks for a package to put back. It is the only way
+# back once pacman no longer has these, and it is routinely empty: pacman's
+# own cache is cleaned on a timer on most machines, and a package installed
+# from a release download was never in it to begin with.
+PACKAGE_CACHE = Path.home() / ".cache/caelestia/packages"
+RELEASES = "https://api.github.com/repos/vermingov/caelestia-plus-plus/releases/latest"
+
+
+def kept_for_a_way_back(packages):
+    """Makes sure each package can be reinstalled before it is removed.
+
+    Taking something off a machine with no way to put it back is not a
+    migration, it is a one-way door. pacman keeps nothing once a package is
+    gone, so a copy goes in the cache `cae revert` reads — from pacman's own
+    cache if it still has one, and from the release otherwise.
+
+    Returns what could not be secured, which is what stops the removal.
+    """
+    PACKAGE_CACHE.mkdir(parents=True, exist_ok=True)
+    have = {path.name.rsplit("-", 3)[0] for path in PACKAGE_CACHE.glob("*.pkg.tar.zst")}
+    wanted = [name for name in packages if name not in have]
+    if not wanted:
+        return []
+
+    for name in list(wanted):
+        for cached in Path("/var/cache/pacman/pkg").glob(f"{name}-*.pkg.tar.zst"):
+            shutil.copy2(cached, PACKAGE_CACHE / cached.name)
+            print(f"    kept {cached.name} (from pacman's cache)")
+            wanted.remove(name)
+            break
+    if not wanted:
+        return []
+
+    # The releases carry every package as an asset, which is where a machine
+    # that installed from one got them in the first place.
+    try:
+        import json
+        import urllib.request
+
+        with urllib.request.urlopen(RELEASES, timeout=25) as answer:
+            assets = json.load(answer).get("assets", [])
+    except Exception as trouble:
+        print(f"    could not reach the releases: {trouble}")
+        return wanted
+
+    for name in list(wanted):
+        for asset in assets:
+            label = asset.get("name", "").replace("%2B", "+").replace("%2b", "+")
+            if not label.startswith(f"{name}-") or not label.endswith(".pkg.tar.zst"):
+                continue
+            try:
+                urllib.request.urlretrieve(asset["browser_download_url"], PACKAGE_CACHE / label)
+            except Exception as trouble:
+                print(f"    could not download {label}: {trouble}")
+                break
+            print(f"    kept {label} (from the latest release)")
+            wanted.remove(name)
+            break
+    return wanted
+
+
 def plan():
     """Everything that would go, as (what, how it is described) pairs."""
     going = [(package, f"package {package} {version}")
@@ -165,6 +226,15 @@ def main():
     if not args.apply:
         print("\nNothing has been taken. `--apply` takes it.")
         return
+
+    # Before anything is taken, make sure it can be put back.
+    packages = [name for name, _ in going if isinstance(name, str)]
+    print("\nKeeping a copy of each package, so `cae revert` has one to put back:")
+    stranded = kept_for_a_way_back(packages)
+    if stranded:
+        sys.exit("retire: no way back for " + ", ".join(stranded) + ".\n"
+                 "        Nothing was removed. pacman has no copy and the release could\n"
+                 "        not be reached; try again when it can.")
 
     script = as_root(going)
     print("\nAsking for root once, for pacman and the two files it does not own.")
