@@ -75,6 +75,21 @@ if standalone; then
     else
         fail "nothing is drawing a bar — see: journalctl --user -u $cae_unit"
     fi
+    # A window that cannot be given a drawing surface is logged and stepped
+    # over, so the shell stays up with pieces of it simply missing. Worth
+    # saying plainly, with the one setting that chooses a different GPU.
+    if journalctl --user -u "$cae_unit" -n 400 --no-pager 2>/dev/null \
+        | grep -q 'is not compatible with the display surface'; then
+        fail "the GPU cae chose cannot draw some of its windows, so they never opened"
+        journalctl --user -u "$cae_unit" -n 400 --no-pager 2>/dev/null \
+            | grep -o 'Adapter "[^"]*" (backend=[^)]*)' | sort -u | sed 's/^/        /'
+        echo "        the machine's GPUs:"
+        lspci -nn 2>/dev/null | grep -iE 'vga|3d controller' | sed 's/^/          /'
+        echo "        pick another with its [vendor:device] id, second half, e.g.:"
+        echo "          mkdir -p ~/.config/caelestia"
+        echo "          echo ZED_DEVICE_ID=0x1b81 > ~/.config/caelestia/cae-shell.env"
+        echo "          systemctl --user restart $cae_unit"
+    fi
 elif pgrep -f 'qs -c caelestia' >/dev/null; then
     pass "shell running"
 else

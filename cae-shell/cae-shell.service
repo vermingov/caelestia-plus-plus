@@ -15,6 +15,13 @@ After=graphical-session.target
 
 [Service]
 Type=simple
+# Somewhere to put what only this machine needs, that an update will not
+# overwrite. The leading `-` means an absent file is not an error, which is
+# the usual case. Chiefly for `ZED_DEVICE_ID=0x…`, which picks the GPU the
+# shell draws on where more than one could answer and the wrong one is
+# chosen: the symptom is "Adapter … is not compatible with the display
+# surface for this window" in the log, and windows that never appear.
+EnvironmentFile=-%h/.config/caelestia/cae-shell.env
 ExecStart=%h/.local/bin/cae-shell
 # A shell that falls over is a desktop with nothing on it, so it comes back.
 # Not `always`: one that refuses to start is one that should say so in the

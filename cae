@@ -454,8 +454,20 @@ cmd_update() {
         git -C "$SHELL_DIR" reset --hard "$PREVIOUS_HEAD" >/dev/null
         restart_shell && die "the new commits broke the shell; rolled back and restarted. Report the log above."
     fi
+    # Out of ways to get a shell up. If the session was handed to cae, it no
+    # longer starts Quickshell either, and leaving it that way means the next
+    # login draws nothing at all and says nothing about why. Rolling the
+    # checkout back does not undo that — the session is a different machine
+    # change — so put Quickshell back and let cae be the thing that is
+    # broken, rather than the desktop.
     if standalone; then
-        die "the shell is not running. Start it by hand with: systemctl --user start $CAE_UNIT"
+        warn "cae will not draw, and the session no longer starts Quickshell:"
+        warn "putting Quickshell back so the next login has a desktop"
+        if python3 "$SHELL_DIR/cae-shell/standalone.py" --undo; then
+            start_shell >/dev/null 2>&1 || true
+            die "Quickshell starts the session again. Report the log above; 'cae migrate' tries cae once it is fixed."
+        fi
+        die "the shell is not running, and the session could not be put back. Start Quickshell by hand with: caelestia shell -d"
     fi
     die "the shell is not running. Start it by hand with: caelestia shell -d"
 }
