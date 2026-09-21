@@ -51,6 +51,18 @@ const MAX_FPS: u64 = 15;
 const ATTACK: f32 = 0.26;
 const DECAY: f32 = 0.10;
 
+/// The quietest a band's own reference may fall to.
+///
+/// Without a floor, a band with nothing in it divides by nothing and silence
+/// comes out as a full-height bar of hiss.
+const LEAST: f32 = 0.34;
+
+/// How fast a band's reference follows what it is hearing. Up within a bar
+/// of music, down over several seconds, so a loud passage does not
+/// permanently flatten the quiet one after it.
+const LOUDER: f32 = 0.08;
+const QUIETER: f32 = 0.004;
+
 /// How much of each bar is its neighbours.
 ///
 /// The envelope above smooths each bar through time and leaves it deaf to the
@@ -163,6 +175,15 @@ struct Analyser {
     window: Vec<f32>,
     edges: Vec<usize>,
     levels: [f32; BARS],
+    /// What each band has been reaching lately.
+    ///
+    /// A fixed tilt cannot even this row out. How much energy sits in a band
+    /// depends on the music, not only on the frequency: a track with a busy
+    /// bass and nothing at 4kHz drew a mountain at one end and a flat line
+    /// at the other, and the same tilt that fixed that track ruined the
+    /// next. Each band is measured against what it has been doing instead,
+    /// so a band that is quiet in this song still has somewhere to move.
+    loudest: [f32; BARS],
 }
 
 impl Analyser {
@@ -175,7 +196,7 @@ impl Analyser {
                 0.5 - 0.5 * phase.cos()
             })
             .collect();
-        Analyser { window, edges: band_edges(), levels: [0.0; BARS] }
+        Analyser { window, edges: band_edges(), levels: [0.0; BARS], loudest: [LEAST; BARS] }
     }
 
     fn frame(&mut self, samples: &[f32]) -> [f32; BARS] {
@@ -202,9 +223,17 @@ impl Analyser {
             let level = ((decibels + 62.0) / 62.0).clamp(0.0, 1.0);
 
             // Treble carries far less energy than bass and would otherwise
-            // never leave the floor.
-            let tilt = 1.0 + 0.9 * (bar as f32 / BARS as f32);
+            // never leave the floor. A gentler tilt than before, because the
+            // band's own reference below does most of this work now and the
+            // two together overshot.
+            let tilt = 1.0 + 0.45 * (bar as f32 / BARS as f32);
             heard[bar] = (level * tilt).clamp(0.0, 1.0);
+
+            // Measured against what this band has been reaching.
+            let rate = if heard[bar] > self.loudest[bar] { LOUDER } else { QUIETER };
+            self.loudest[bar] += (heard[bar] - self.loudest[bar]) * rate;
+            self.loudest[bar] = self.loudest[bar].max(LEAST);
+            heard[bar] = (heard[bar] / self.loudest[bar]).clamp(0.0, 1.0);
         }
 
         // Across, then through time. The ends lean on the one neighbour they
@@ -511,6 +540,36 @@ mod tests {
         let mut analyser = Analyser::new();
         let after_fifteen = reached(&mut analyser, 15);
         assert!(after_fifteen > 0.7, "a second of the same tone only reaches {after_fifteen}");
+    }
+
+    #[test]
+    fn a_quiet_band_still_has_somewhere_to_move() {
+        // The complaint this answers is that it looked like mountains. Real
+        // music is loud at one end and thin at the other, and white noise is
+        // not — a row fed noise comes out even whatever the code does, which
+        // is why the first version of this test passed without the fix and
+        // proved nothing.
+        //
+        // So: a heavy low note and a faint high one, which is most music.
+        // Without each band being measured against itself, the high band
+        // sits on the floor for the whole song.
+        let mut analyser = Analyser::new();
+        let window: Vec<f32> = (0..WINDOW)
+            .map(|at| {
+                let time = at as f32 / RATE as f32;
+                (time * std::f32::consts::TAU * 110.0).sin() * 0.5
+                    + (time * std::f32::consts::TAU * 6000.0).sin() * 0.012
+            })
+            .collect();
+        let mut bars = [0.0; BARS];
+        for _ in 0..200 {
+            bars = analyser.frame(&window);
+        }
+
+        let high = bars[BARS - 4..].iter().cloned().fold(0.0f32, f32::max);
+        let low = bars[..4].iter().cloned().fold(0.0f32, f32::max);
+        assert!(low > 0.5, "the loud note only reaches {low}");
+        assert!(high > 0.3, "the faint note is left at {high} while the loud one is at {low}");
     }
 
     #[test]
