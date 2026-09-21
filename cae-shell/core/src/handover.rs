@@ -31,8 +31,29 @@ fn read(asked: std::io::Result<std::process::Output>) -> Answer {
 
 /// Asks the running Quickshell. A process start and a round trip over its
 /// socket: never from the thread that draws.
+///
+/// Asked only when there is something to ask. Starting `qs` to be told there
+/// is no Quickshell costs about 25 ms, and every piece pays it once — which
+/// on a desktop that has no Quickshell at all is 25 ms times thirteen, spent
+/// finding out what was already true.
 pub fn stood_down(what: &str) -> Answer {
+    if !any_running() {
+        return Answer::Ours;
+    }
     read(std::process::Command::new("qs").args(["-c", SHELL, "ipc", "call", "cae", "stoodDown", what]).output())
+}
+
+/// Whether any Quickshell is up, by trying the sockets it advertises itself
+/// on.
+///
+/// Every Quickshell that has ever run leaves its directory behind, so the
+/// directory existing means nothing; the socket in it is what answers. A
+/// dead one refuses at once, which is the whole test and costs no process.
+fn any_running() -> bool {
+    let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else { return false };
+    let by_id = std::path::PathBuf::from(runtime).join("quickshell/by-id");
+    let Ok(instances) = std::fs::read_dir(by_id) else { return false };
+    instances.filter_map(Result::ok).any(|instance| std::os::unix::net::UnixStream::connect(instance.path().join("ipc.sock")).is_ok())
 }
 
 #[cfg(test)]
@@ -54,6 +75,15 @@ mod tests {
         // clean exit: it has stood nothing down.
         assert_eq!(read(said(0, "Target not found.\n")), Answer::Theirs);
         assert_eq!(read(said(0, "Function not found.\n")), Answer::Theirs);
+    }
+
+    #[test]
+    fn nothing_advertising_itself_is_nobody_to_ask() {
+        // Whatever this machine is running, the two must agree: if no socket
+        // answers then `stood_down` must not have gone looking for `qs`.
+        if !any_running() {
+            assert_eq!(stood_down("anything"), Answer::Ours);
+        }
     }
 
     #[test]
