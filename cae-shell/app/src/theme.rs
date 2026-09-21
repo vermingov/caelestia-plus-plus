@@ -1,11 +1,17 @@
 //! What cae looks like, as numbers.
 //!
 //! Near-black glass, one quiet rim, nothing coloured unless it is saying
-//! something. These are the values the bar has always had; they lived in a
-//! stylesheet when a webview drew it, and they are constants now that GPUI
-//! does.
+//! something. The glass is a constant; the colour is not. What little of the
+//! shell is coloured comes from the scheme the person has set, which the CLI
+//! keeps in `scheme.json` and rewrites every themed config from — the bar
+//! being one more thing themed by it rather than a thing with a colour of
+//! its own.
+//!
+//! These began as the hex the stylesheet had when a webview drew the bar,
+//! and the hex was whatever the scheme happened to be on the machine it was
+//! written on. Anybody else's shell was that machine's red for ever.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use gpui::{Background, BoxShadow, FontFeatures, Hsla, Pixels, hsla, linear_color_stop, linear_gradient, px, rgba};
 
@@ -55,23 +61,72 @@ pub fn text_faint() -> Hsla {
     white(0.34)
 }
 
-/// The one colour, and it is the mark's own. Used for the logo, the focused
-/// workspace and the dials, so that when it appears it means something.
-pub fn accent() -> Hsla {
-    rgba(0xff5449ff).into()
+/// What the scheme says, or what the shell was written with.
+///
+/// Read once and kept, because a colour is asked for many times a frame and
+/// the answer only changes when somebody picks a new scheme. The file is
+/// looked at again at most a few times a second, which is far faster than
+/// anyone can choose a colour and far cheaper than a read per quad.
+fn coloured(key: &str, fallback: u32) -> Hsla {
+    static KEPT: LazyLock<RwLock<(std::time::Instant, Arc<Palette>)>> =
+        LazyLock::new(|| RwLock::new((std::time::Instant::now(), Arc::new(Palette::read()))));
+    const STALE: std::time::Duration = std::time::Duration::from_millis(400);
+
+    let palette = {
+        let kept = KEPT.read().unwrap_or_else(|held| held.into_inner());
+        if kept.0.elapsed() < STALE {
+            Some(Arc::clone(&kept.1))
+        } else {
+            None
+        }
+    };
+    let palette = palette.unwrap_or_else(|| {
+        let fresh = Arc::new(Palette::read());
+        if let Ok(mut kept) = KEPT.write() {
+            *kept = (std::time::Instant::now(), Arc::clone(&fresh));
+        }
+        fresh
+    });
+
+    palette.0.get(key).copied().map_or_else(|| rgba(fallback).into(), |colour| rgba(colour).into())
 }
 
+/// The scheme's colours, by the names the CLI writes them under.
+struct Palette(std::collections::HashMap<String, u32>);
+
+impl Palette {
+    fn read() -> Palette {
+        Palette(
+            cae_core::scheme::colours()
+                .into_iter()
+                .filter_map(|(name, hex)| {
+                    let hex = hex.strip_prefix('#').unwrap_or(&hex);
+                    u32::from_str_radix(hex, 16).ok().map(|rgb| (name, rgb << 8 | 0xff))
+                })
+                .collect(),
+        )
+    }
+}
+
+/// The one colour, and it is the scheme's own. Used for the logo, the focused
+/// workspace and the dials, so that when it appears it means something.
+pub fn accent() -> Hsla {
+    coloured("primary", 0xff5449ff)
+}
+
+/// Amber, and not the scheme's: a warning that turned the scheme's own
+/// colour would stop reading as a warning on half of them.
 pub fn warn() -> Hsla {
     rgba(0xf5a25dff).into()
 }
 
 pub fn alert() -> Hsla {
-    rgba(0xff8a80ff).into()
+    coloured("tertiary", 0xff8a80ff)
 }
 
 /// The ink on the accent: the focused workspace's number.
 pub fn on_accent() -> Hsla {
-    rgba(0x1a0d0cff).into()
+    coloured("onPrimary", 0x1a0d0cff)
 }
 
 /// The pill's surface. Denser than it would be over a compositor blur,
@@ -194,4 +249,44 @@ pub fn critical_shadows() -> Vec<BoxShadow> {
         BoxShadow::new(px(0.), px(0.), rgba(0xff544952).into()).spread_radius(px(1.)).inset(),
         BoxShadow::new(px(0.), px(1.), rgba(0xff8a802e).into()).inset(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_accent_is_the_scheme_s_and_not_the_one_it_was_written_with() {
+        // 0xff5449 is what the stylesheet had, and it is also what the
+        // scheme happened to be on the machine cae was written on — which is
+        // exactly why nobody noticed it was frozen. The test that catches
+        // that is the one that reads the file rather than the constant.
+        let set: std::collections::HashMap<String, String> =
+            cae_core::scheme::colours().into_iter().collect();
+        let Some(primary) = set.get("primary") else {
+            return; // no scheme on this machine; the fallback is all there is
+        };
+        let want: u32 = u32::from_str_radix(primary.strip_prefix('#').unwrap_or(primary), 16).unwrap();
+        let expected: Hsla = rgba(want << 8 | 0xff).into();
+        let got = accent();
+        assert!(
+            (got.h - expected.h).abs() < 0.001 && (got.s - expected.s).abs() < 0.001,
+            "accent is {got:?}, the scheme says {expected:?}"
+        );
+
+        // On a machine whose scheme IS the old constant the check above
+        // passes either way, which is how this went unnoticed. Asking for
+        // the same colour under a fallback it could not have come from
+        // proves the file was read.
+        let read_not_assumed = coloured("primary", 0x00000000);
+        assert_eq!(read_not_assumed, expected, "the scheme file was not read at all");
+    }
+
+    #[test]
+    fn a_colour_the_scheme_does_not_set_keeps_the_one_it_was_written_with() {
+        // Nothing in a Material You scheme is called this, so it can only
+        // come back as the fallback.
+        let fallback: Hsla = rgba(0x123456ff).into();
+        assert_eq!(coloured("nothing-is-called-this", 0x123456ff), fallback);
+    }
 }

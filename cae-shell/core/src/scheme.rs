@@ -39,6 +39,29 @@ pub fn current() -> Current {
     serde_json::from_str(&text).unwrap_or_default()
 }
 
+/// Every colour the scheme sets, by the name the CLI writes it under, as the
+/// six digits the file keeps them in.
+///
+/// The whole map rather than one colour at a time: whoever is drawing wants
+/// several of them, and the file is one read either way.
+pub fn colours() -> Vec<(String, String)> {
+    let Some(text) = state_file().and_then(|path| std::fs::read_to_string(path).ok()) else {
+        return Vec::new();
+    };
+    let Ok(set) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    set.get("colours")
+        .and_then(serde_json::Value::as_object)
+        .map(|colours| {
+            colours
+                .iter()
+                .filter_map(|(name, hex)| hex.as_str().map(|hex| (name.clone(), hex.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The scheme's primary colour, as the six digits the file keeps it in.
 pub fn primary() -> Option<String> {
     let text = state_file().and_then(|path| std::fs::read_to_string(path).ok())?;
