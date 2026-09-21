@@ -107,6 +107,12 @@ def changed(text):
             # compositor's PATH cannot find. Same keybind, spelled so it runs.
             elif wanted != command and f'"{command}"' in line:
                 line = line.replace(f'"{command}"', f'"{wanted}"')
+        # The same for the line that starts the shell, which an earlier
+        # version also wrote by bare name — and which, unlike a keybind,
+        # fails at login where nobody is watching at all.
+        started = spell(STARTS_NAME)
+        if started != STARTS_NAME and f'"{STARTS_NAME}"' in line:
+            line = line.replace(f'"{STARTS_NAME}"', f'"{started}"')
         if line != was:
             notes.append((number, was.rstrip(), line.rstrip()))
         out.append(line)
