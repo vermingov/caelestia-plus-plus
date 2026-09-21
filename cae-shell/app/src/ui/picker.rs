@@ -234,9 +234,16 @@ impl Picker {
     /// Lets go: what is chosen is taken, unless it is too small to have been
     /// meant, in which case it is the window under the pointer.
     fn taken(&mut self, at: gpui::Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let dragged = self.from.take().map(|from| between(from, at));
+        // A release with no press before it is not a choice. A surface is
+        // born believing the pointer is already inside it, and on a desk with
+        // several screens one of the pickers is handed a release that belongs
+        // to nothing — which was taken as a click, and a click with no drag
+        // means "the window under the pointer". The picker appeared and shot
+        // whatever was beneath the cursor in the same instant, which is the
+        // freeze never being seen at all.
+        let Some(from) = self.from.take() else { return };
         let big_enough = |region: &Bounds<Pixels>| region.size.width > px(A_SPECK) && region.size.height > px(A_SPECK);
-        let Some(region) = dragged.filter(big_enough).or_else(|| self.window_under(at)) else {
+        let Some(region) = Some(between(from, at)).filter(big_enough).or_else(|| self.window_under(at)) else {
             return done(window, cx);
         };
         let (x, y) = (self.at.x + f32::from(region.origin.x) as i32, self.at.y + f32::from(region.origin.y) as i32);
