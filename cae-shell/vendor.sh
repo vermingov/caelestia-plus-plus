@@ -5,8 +5,8 @@
 # `ext-session-lock-v1`, the protocol a locker must speak for the compositor
 # to hide the desktop and to keep hiding it if the locker dies. So the shell
 # builds against a copy of GPUI with that one thing added
-# (`patches/gpui-session-lock.patch`, about three hundred lines), and this
-# makes the copy.
+# (`patches/`, of which the session-lock one is about three hundred lines),
+# and this makes the copy.
 #
 # Nothing is downloaded when cargo has already fetched the revision the shell
 # pins: that checkout is copied, which costs a disk read. A machine that has
@@ -22,7 +22,9 @@ set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 fork=${CAE_GPUI_FORK:-${XDG_CACHE_HOME:-$HOME/.cache}/caelestia/zed-fork}
-patch_file="$here/patches/gpui-session-lock.patch"
+# Every patch in the directory, in name order, so adding one is adding a
+# file rather than editing this.
+patches="$here/patches"
 
 # The revision `app/Cargo.toml` pins, read from it rather than repeated here.
 rev=$(sed -n 's/.*zed", rev = "\([0-9a-f]*\)".*/\1/p' "$here/app/Cargo.toml" | head -1)
@@ -86,8 +88,13 @@ except Exception: pass' 2>/dev/null)
     rm -rf "$staging/.git"
 fi
 
-echo ">> Applying $(basename "$patch_file")"
-patch -p1 -d "$staging" < "$patch_file"
+for patch_file in "$patches"/*.patch; do
+    [[ -f $patch_file ]] || { echo "vendor: no patches in $patches" >&2; exit 1; }
+    echo ">> Applying $(basename "$patch_file")"
+    # Fuzz off: a patch that lands in roughly the right place is how a
+    # fix silently stops being applied after an upstream bump.
+    patch -p1 -F0 -d "$staging" < "$patch_file"
+done
 printf '%s\n' "$rev" > "$staging/.caelestia-patched"
 
 rm -rf "$fork"

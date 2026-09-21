@@ -1,0 +1,34 @@
+A layer surface is created at size 0 on the axis it wants the compositor to
+size for it — the bar asks for a width of nothing and is told how wide the
+screen is. Between those two moments GPUI may set the viewport destination,
+and `wp_viewport.set_destination` with a zero or negative side is a protocol
+error: "Size was <= 0". A protocol error is not a failed call, it is the end
+of the connection, so one bar on one output that had not been configured yet
+took the whole shell off every screen.
+
+One output is usually configured before anything asks, which is why this
+never showed on a single screen and always showed on three.
+
+Nothing needs sending in that window: the size is not known yet, and the
+configure that brings it sets the destination itself.
+
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -1596,8 +1596,15 @@
+         {
+             let state = self.state.borrow();
+             if let Some(viewport) = &state.viewport {
+-                viewport
+-                    .set_destination(f32::from(size.width) as i32, f32::from(size.height) as i32);
++                let width = f32::from(size.width) as i32;
++                let height = f32::from(size.height) as i32;
++                // Zero or less is a protocol error, and a protocol error ends
++                // the connection for every surface this client has. A surface
++                // still waiting to be configured has no size to send, and the
++                // configure that brings it sets the destination itself.
++                if width > 0 && height > 0 {
++                    viewport.set_destination(width, height);
++                }
+             }
+         }
+     }
