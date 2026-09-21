@@ -216,14 +216,12 @@ else
     echo "WARN: shell checkout has no fastfetch asset — skipped"
 fi
 
-# Without an autostart the shell is gone after the next login
-if ! grep -rqs "caelestia shell" "$HOME/.config/hypr/" 2>/dev/null; then
-    if [[ -f $HOME/.config/hypr/hyprland.conf ]]; then
-        echo ":: adding Hyprland autostart (exec-once = caelestia shell -d)"
-        printf '\nexec-once = caelestia shell -d\n' >> "$HOME/.config/hypr/hyprland.conf"
-    else
-        echo "WARN: no Hyprland config found — add an autostart for: caelestia shell -d"
-    fi
+# Without an autostart the shell is gone after the next login. cae installs
+# its own — a systemd unit and a line in execs.lua — through
+# `cae-shell/standalone.py`, which `cae migrate` runs; there is no QML shell
+# left here for an `exec-once` to start.
+if ! grep -rqs "cae-session" "$HOME/.config/hypr/" 2>/dev/null; then
+    echo ":: nothing starts the shell at login yet — run 'cae migrate' to set that up"
 fi
 
 echo

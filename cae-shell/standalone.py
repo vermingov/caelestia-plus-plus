@@ -227,10 +227,34 @@ def hand_over():
             return
         time.sleep(0.25)
 
-    print("\ncae did not come up — putting Quickshell back.")
     subprocess.run(["systemctl", "--user", "stop", "cae-shell.service"], check=False)
-    subprocess.Popen(["setsid", "-f", "caelestia", "shell", "-d"])
-    sys.exit("standalone: look at `journalctl --user -u cae-shell` before trying again")
+    if quickshell_to_fall_back_on():
+        print("\ncae did not come up — putting Quickshell back.")
+        subprocess.Popen(["setsid", "-f", "caelestia", "shell", "-d"])
+        sys.exit("standalone: look at `journalctl --user -u cae-shell` before trying again")
+    sys.exit("standalone: cae did not come up, and there is no Quickshell left to put back —\n"
+             "           the QML went when cae replaced it. Look at\n"
+             "           `journalctl --user -u cae-shell`; `cae revert` puts the machine\n"
+             "           back on upstream caelestia, which brings its own shell.")
+
+
+def quickshell_to_fall_back_on():
+    """Whether there is still a Quickshell shell to put the session back to.
+
+    There used to always be one: the QML lived in this checkout, so falling
+    back was a matter of starting it. cae replaced all of it and the QML left
+    the repository, so the only copy that can still answer `qs -c caelestia`
+    is a packaged one, and most machines that have come this far no longer
+    have that either.
+
+    Worth asking before promising to put anything back. A fallback to
+    something that is not there is worse than none, because it is believed.
+    """
+    if not shutil.which("qs"):
+        return False
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return any((where / "quickshell/caelestia/shell.qml").is_file()
+               for where in (config, Path("/etc/xdg")))
 
 
 def put_back():
@@ -250,6 +274,10 @@ def put_back():
         restored += 1
     subprocess.run(["systemctl", "--user", "disable", UNIT], capture_output=True, check=False)
     print(f"{UNIT}: disabled")
+    if not quickshell_to_fall_back_on():
+        print("\nThe files are back as they were, but there is no Quickshell left for them")
+        print("to start: the QML went when cae replaced it. `cae revert` puts the machine")
+        print("back on upstream caelestia, which brings its own shell.")
     return restored
 
 

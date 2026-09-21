@@ -280,6 +280,26 @@ fetch_newer_packages() {
 # runs itself, a quickshell that cannot start is a package nobody calls.
 quickshell_broken() { ! standalone && ! timeout 20 qs --version >/dev/null 2>&1; }
 
+# Whether there is still a Quickshell shell to fall back to. There used to
+# always be one — the QML lived in this checkout — but cae replaced all of it
+# and it left the repository, so only a packaged copy can still answer
+# `qs -c caelestia`, and a machine that has come this far rarely has one.
+# Worth asking before telling somebody to start it.
+quickshell_to_fall_back_on() {
+    command -v qs >/dev/null || return 1
+    [[ -f ${XDG_CONFIG_HOME:-$HOME/.config}/quickshell/caelestia/shell.qml ]] && return 0
+    [[ -f /etc/xdg/quickshell/caelestia/shell.qml ]]
+}
+
+# What to tell somebody whose desktop has nothing in it.
+no_shell_advice() {
+    if quickshell_to_fall_back_on; then
+        echo "caelestia shell -d"
+    else
+        echo "cae revert   (there is no Quickshell left to start: the QML went when cae replaced it)"
+    fi
+}
+
 # Root halves stamp their version in /etc/caelestia; only ones already
 # installed are upgraded, never silently enabled
 queue_root_half_upgrades() {
@@ -467,9 +487,9 @@ cmd_update() {
             start_shell >/dev/null 2>&1 || true
             die "Quickshell starts the session again. Report the log above; 'cae migrate' tries cae once it is fixed."
         fi
-        die "the shell is not running, and the session could not be put back. Start Quickshell by hand with: caelestia shell -d"
+        die "the shell is not running, and the session could not be put back. Try: $(no_shell_advice)"
     fi
-    die "the shell is not running. Start it by hand with: caelestia shell -d"
+    die "the shell is not running. Try: $(no_shell_advice)"
 }
 
 # Upstream's own packages. caelestia-shell pulls quickshell in itself.

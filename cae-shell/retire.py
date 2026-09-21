@@ -14,9 +14,9 @@ What stays, and why:
 
   * `caelestia++-cli` — `caelestia screenshot -r` is still on two keybinds,
     and the colour scheme is still its work.
-  * the QML in this checkout — it is the git tree the updater fast-forwards.
-    Deleting tracked files would stop the next release applying; with `qs`
-    gone nothing reads it, which is what retiring it means.
+  * nothing of the QML shell — it left the repository once cae had replaced
+    all of it, so there is none here to remove and none to go back to. `cae
+    revert` is the way back, and it brings upstream caelestia's own shell.
 
     retire.py            say what would go, take nothing
     retire.py --apply    take it, in one root call
@@ -220,8 +220,8 @@ def main():
     for _, described in going:
         print(f"    {described}")
     print(f"\n{KEPT} stays: two keybinds still call `caelestia screenshot`.")
-    print("The QML in this checkout stays: it is the git tree the updater fast-forwards,")
-    print("and with the runtime gone nothing reads it.")
+    print("There is no QML here to remove: it left the repository once cae had")
+    print("replaced all of it. `cae revert` is the way back, and brings its own shell.")
 
     if not args.apply:
         print("\nNothing has been taken. `--apply` takes it.")
