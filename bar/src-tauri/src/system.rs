@@ -106,12 +106,71 @@ fn read_memory() -> (f64, f64, f64) {
 /// The first backlight the kernel exposes. A laptop has one; a desktop with
 /// an external monitor has none, and its brightness is the monitor's own
 /// business rather than something the bar can reach.
+/// Where in sysfs each reading lives.
+///
+/// Found by walking `/sys`, which is why it is kept rather than done again
+/// every tick. A GPU does not appear between two ticks of a clock and
+/// neither does a battery; re-learning the same three paths once a second
+/// was most of what this sampler did, and nearly all of the syscalls it made.
+///
+/// Looked for again now and then all the same: a dock brings a battery and a
+/// screen with it, and a minute of not noticing is nothing.
+#[derive(Default)]
+pub struct Found {
+    looked: Option<std::time::Instant>,
+    gpu_busy: Option<PathBuf>,
+    battery: Option<PathBuf>,
+    backlight: Option<PathBuf>,
+    /// Everything that can say it is supplying power: the mains, and any USB
+    /// supply, since a dock or a charger counts as plugged in.
+    supplies: Vec<PathBuf>,
+}
+
+/// How long a walk of `/sys` is trusted for.
+const LOOK_AGAIN: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl Found {
+    fn fresh(&mut self) {
+        if self.looked.is_some_and(|looked| looked.elapsed() < LOOK_AGAIN) {
+            return;
+        }
+        self.looked = Some(std::time::Instant::now());
+        self.gpu_busy = find_gpu_busy();
+        self.battery = first_battery();
+        self.backlight = backlight();
+        self.supplies = power_supplies();
+    }
+}
+
+/// The first card whose driver will say how busy it is. amdgpu and i915 both
+/// do; nvidia does not, and gets nothing rather than a wrong number.
+fn find_gpu_busy() -> Option<PathBuf> {
+    fs::read_dir("/sys/class/drm")
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|card| card.path().join("device/gpu_busy_percent"))
+        .find(|path| path.is_file())
+}
+
+/// Everything that can be plugged in, which is not the battery itself.
+fn power_supplies() -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir("/sys/class/power_supply") else { return Vec::new() };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let kind = fs::read_to_string(path.join("type")).unwrap_or_default();
+            matches!(kind.trim(), "Mains" | "USB" | "USB_PD" | "USB_PD_DRP")
+        })
+        .collect()
+}
+
 fn backlight() -> Option<PathBuf> {
     fs::read_dir("/sys/class/backlight").ok()?.filter_map(Result::ok).map(|e| e.path()).next()
 }
 
-fn read_brightness() -> Option<i64> {
-    let path = backlight()?;
+fn read_brightness(found: &Found) -> Option<i64> {
+    let path = found.backlight.as_ref()?;
     let current: f64 = fs::read_to_string(path.join("brightness")).ok()?.trim().parse().ok()?;
     let max: f64 = fs::read_to_string(path.join("max_brightness")).ok()?.trim().parse().ok()?;
     if max <= 0.0 {
@@ -136,19 +195,10 @@ pub fn nudge_brightness(delta: i64) {
         .status();
 }
 
-/// How busy the GPU is, where the driver says so. amdgpu and i915 both expose
-/// this; nvidia does not, and gets nothing rather than a wrong number.
-fn read_gpu() -> Option<f64> {
-    let cards = fs::read_dir("/sys/class/drm").ok()?;
-    for card in cards.filter_map(Result::ok) {
-        let path = card.path().join("device/gpu_busy_percent");
-        if let Ok(busy) = fs::read_to_string(&path) {
-            if let Ok(percent) = busy.trim().parse::<f64>() {
-                return Some(percent.clamp(0.0, 100.0));
-            }
-        }
-    }
-    None
+/// How busy the GPU is, from the file found earlier.
+fn read_gpu(found: &Found) -> Option<f64> {
+    let busy = fs::read_to_string(found.gpu_busy.as_ref()?).ok()?;
+    Some(busy.trim().parse::<f64>().ok()?.clamp(0.0, 100.0))
 }
 
 fn first_battery() -> Option<PathBuf> {
@@ -170,24 +220,19 @@ fn first_battery() -> Option<PathBuf> {
 /// The mains supply is its own device in sysfs, separate from the battery.
 /// USB-C power delivery shows up here too — a dock or a phone charger is a
 /// `USB` supply that is online — and for "is it plugged in" those count.
-fn on_mains() -> bool {
-    let Ok(entries) = fs::read_dir("/sys/class/power_supply") else { return false };
-    entries.filter_map(Result::ok).any(|entry| {
-        let path = entry.path();
-        let kind = fs::read_to_string(path.join("type")).unwrap_or_default();
-        if !matches!(kind.trim(), "Mains" | "USB" | "USB_PD" | "USB_PD_DRP") {
-            return false;
-        }
-        fs::read_to_string(path.join("online")).is_ok_and(|online| online.trim() == "1")
-    })
+fn on_mains(found: &Found) -> bool {
+    found
+        .supplies
+        .iter()
+        .any(|path| fs::read_to_string(path.join("online")).is_ok_and(|online| online.trim() == "1"))
 }
 
-fn read_battery() -> Option<Battery> {
-    let path = first_battery()?;
+fn read_battery(found: &Found) -> Option<Battery> {
+    let path = found.battery.as_ref()?;
     let level = fs::read_to_string(path.join("capacity")).ok()?.trim().parse().ok()?;
     let status = fs::read_to_string(path.join("status")).unwrap_or_default();
     let charging = matches!(status.trim(), "Charging" | "Full");
-    Some(Battery { level, charging, on_mains: on_mains(), minutes: remaining(&path, charging) })
+    Some(Battery { level, charging, on_mains: on_mains(found), minutes: remaining(path, charging) })
 }
 
 /// Minutes left, from the charge counters.
@@ -255,16 +300,18 @@ fn wifi_strength(interface: &str) -> i64 {
 #[derive(Default)]
 pub struct Sampler {
     previous: CpuTimes,
+    found: Found,
 }
 
 impl Sampler {
     pub fn new() -> Sampler {
-        Sampler { previous: read_cpu_times() }
+        Sampler { previous: read_cpu_times(), found: Found::default() }
     }
 
     /// Everything here is read now except `levels`, which PipeWire reports
     /// as they change and the caller is holding the latest of.
     pub fn sample(&mut self, levels: &Levels) -> Snapshot {
+        self.found.fresh();
         let now = read_cpu_times();
         let busy = now.busy.saturating_sub(self.previous.busy) as f64;
         let total = now.total.saturating_sub(self.previous.total) as f64;
@@ -276,11 +323,11 @@ impl Sampler {
             memory,
             memory_used_gb: used,
             memory_total_gb: total_gb,
-            battery: read_battery(),
+            battery: read_battery(&self.found),
             volume: levels.volume.clone(),
             microphone: levels.microphone.clone(),
-            brightness: read_brightness(),
-            gpu: read_gpu(),
+            brightness: read_brightness(&self.found),
+            gpu: read_gpu(&self.found),
             network: read_network(),
         }
     }
@@ -289,6 +336,13 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A walk of `/sys` done now, for the tests that read what it finds.
+    fn found() -> Found {
+        let mut found = Found::default();
+        found.fresh();
+        found
+    }
 
     #[test]
     fn cpu_usage_is_a_percentage() {
@@ -319,20 +373,20 @@ mod tests {
         // a valid answer, not a failure.
         // A desktop returns None, and that is a valid answer rather than a
         // failure — the bar simply draws no battery slot.
-        assert_eq!(read_battery().is_some(), first_battery().is_some());
+        assert_eq!(read_battery(&found()).is_some(), first_battery().is_some());
     }
 
     #[test]
     fn brightness_is_a_percentage_or_nothing() {
         // A desktop has no backlight, and None is the right answer there.
-        if let Some(level) = read_brightness() {
+        if let Some(level) = read_brightness(&found()) {
             assert!((0..=100).contains(&level), "brightness was {level}");
         }
     }
 
     #[test]
     fn gpu_busy_is_a_percentage_or_nothing() {
-        if let Some(busy) = read_gpu() {
+        if let Some(busy) = read_gpu(&found()) {
             assert!((0.0..=100.0).contains(&busy), "gpu was {busy}");
         }
     }
@@ -354,7 +408,7 @@ mod tests {
     /// a battery that reports `Charging` cannot be running on nothing.
     #[test]
     fn charging_implies_a_charger_is_plugged_in() {
-        let Some(battery) = read_battery() else { return };
+        let Some(battery) = read_battery(&found()) else { return };
         if battery.charging {
             assert!(battery.on_mains, "the battery is charging but nothing is reported online");
         }
@@ -364,7 +418,7 @@ mod tests {
     /// and it must not read as "on battery".
     #[test]
     fn mains_is_read_independently_of_the_charge_status() {
-        let Some(battery) = read_battery() else { return };
-        assert_eq!(battery.on_mains, on_mains(), "the snapshot disagrees with sysfs");
+        let Some(battery) = read_battery(&found()) else { return };
+        assert_eq!(battery.on_mains, on_mains(&found()), "the snapshot disagrees with sysfs");
     }
 }
