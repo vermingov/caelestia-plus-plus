@@ -286,179 +286,180 @@ pub const PORTRAIT: Sticker = Sticker {
     across: 240.,
     down: 300.,
     parts: &[
+        // Shoulders, and a collar wide enough to sit a heavy head on.
         tint(
             Shape::Outline(&[
-                Step::Start(28., 300.),
-                Step::Line(44., 234.),
-                Step::Curve(58., 206., 96., 198.),
-                Step::Line(120., 192.),
-                Step::Line(144., 198.),
-                Step::Curve(182., 206., 196., 234.),
-                Step::Line(212., 300.),
+                Step::Start(14., 300.),
+                Step::Line(32., 238.),
+                Step::Curve(50., 212., 96., 204.),
+                Step::Line(120., 198.),
+                Step::Line(144., 204.),
+                Step::Curve(190., 212., 208., 238.),
+                Step::Line(226., 300.),
                 Step::Close,
             ]),
             SUIT,
             1.,
         ),
-        tint(Shape::Outline(&[Step::Start(96., 198.), Step::Line(120., 246.), Step::Line(84., 226.), Step::Close]), LAPEL, 1.),
-        tint(Shape::Outline(&[Step::Start(144., 198.), Step::Line(120., 246.), Step::Line(156., 226.), Step::Close]), LAPEL, 1.),
+        // The neck, thick, and in shadow under the jaw.
+        tint(Shape::Outline(&[Step::Start(97., 176.), Step::Line(97., 210.), Step::Line(143., 210.), Step::Line(143., 176.), Step::Close]), 0xc99b72, 1.),
+        tint(Shape::Outline(&[Step::Start(97., 176.), Step::Curve(120., 196., 143., 176.), Step::Line(143., 188.), Step::Curve(120., 204., 97., 188.), Step::Close]), 0xa87e5c, 1.),
+        // Shirt, then the lapels over it, then the tie.
         tint(
             Shape::Outline(&[
-                Step::Start(96., 198.),
-                Step::Line(120., 238.),
-                Step::Line(144., 198.),
-                Step::Line(133., 192.),
-                Step::Line(120., 199.),
-                Step::Line(107., 192.),
+                Step::Start(96., 204.),
+                Step::Line(120., 250.),
+                Step::Line(144., 204.),
+                Step::Line(132., 198.),
+                Step::Line(120., 206.),
+                Step::Line(108., 198.),
                 Step::Close,
             ]),
-            0xf4f6f8,
+            0xf2f5f8,
             1.,
         ),
+        tint(Shape::Outline(&[Step::Start(96., 204.), Step::Line(122., 256.), Step::Line(80., 232.), Step::Close]), LAPEL, 1.),
+        tint(Shape::Outline(&[Step::Start(144., 204.), Step::Line(118., 256.), Step::Line(160., 232.), Step::Close]), LAPEL, 1.),
         tint(
             Shape::Outline(&[
-                Step::Start(120., 202.),
-                Step::Line(111., 216.),
-                Step::Line(118., 268.),
-                Step::Line(120., 274.),
-                Step::Line(122., 268.),
-                Step::Line(129., 216.),
+                Step::Start(120., 208.),
+                Step::Line(110., 222.),
+                Step::Line(117., 278.),
+                Step::Line(120., 286.),
+                Step::Line(123., 278.),
+                Step::Line(130., 222.),
                 Step::Close,
             ]),
-            0x4a90d9,
+            0x2f5fa8,
             1.,
         ),
-        tint(
-            Shape::Outline(&[Step::Start(120., 202.), Step::Line(111., 216.), Step::Line(120., 224.), Step::Line(129., 216.), Step::Close]),
-            0x3a7cc4,
-            1.,
-        ),
+        tint(Shape::Outline(&[Step::Start(120., 208.), Step::Line(110., 222.), Step::Line(120., 231.), Step::Line(130., 222.), Step::Close]), 0x24497f, 1.),
+
+        // Ears, low and close to a wide skull.
+        tint(Shape::Oval { x: 54., y: 122., across: 12., down: 20., turn: 0. }, 0xdba97f, 1.),
+        tint(Shape::Oval { x: 186., y: 122., across: 12., down: 20., turn: 0. }, 0xdba97f, 1.),
+
+        // The head. Broad at the temples, square at the jaw, heavy at the
+        // chin: the shape is most of the likeness, and the old one was an
+        // egg, which is why nothing drawn on it helped.
         tint(
             Shape::Outline(&[
-                Step::Start(104., 164.),
-                Step::Line(104., 196.),
-                Step::Curve(120., 206., 136., 196.),
-                Step::Line(136., 164.),
+                Step::Start(56., 104.),
+                Step::Curve(56., 46., 120., 40.),
+                Step::Curve(184., 46., 184., 104.),
+                Step::Line(183., 126.),
+                Step::Curve(181., 150., 172., 160.),
+                Step::Curve(164., 176., 146., 186.),
+                Step::Curve(133., 194., 120., 194.),
+                Step::Curve(107., 194., 94., 186.),
+                Step::Curve(76., 176., 68., 160.),
+                Step::Curve(59., 150., 57., 126.),
                 Step::Close,
             ]),
-            0xdda87c,
+            0xe7bc93,
             1.,
         ),
-        tint(Shape::Oval { x: 62., y: 120., across: 11., down: 17., turn: 0. }, 0xe3af83, 1.),
-        tint(Shape::Oval { x: 178., y: 120., across: 11., down: 17., turn: 0. }, 0xe3af83, 1.),
+        // Jowls: the weight either side of the chin that a smooth jaw
+        // cannot suggest.
+        tint(Shape::Outline(&[Step::Start(70., 156.), Step::Curve(66., 176., 84., 184.), Step::Curve(76., 172., 78., 156.), Step::Close]), 0xdbaa80, 1.),
+        tint(Shape::Outline(&[Step::Start(170., 156.), Step::Curve(174., 176., 156., 184.), Step::Curve(164., 172., 162., 156.), Step::Close]), 0xdbaa80, 1.),
+
+        // The hair. White, parted low on his left, and gone from the
+        // temples — the high square forehead with a peak in the middle is
+        // the single most recognisable thing about the head.
         tint(
             Shape::Outline(&[
-                Step::Start(64., 92.),
-                Step::Curve(64., 44., 120., 42.),
-                Step::Curve(176., 44., 176., 92.),
-                Step::Line(176., 118.),
-                Step::Curve(176., 152., 158., 170.),
-                Step::Curve(140., 186., 120., 186.),
-                Step::Curve(100., 186., 82., 170.),
-                Step::Curve(64., 152., 64., 118.),
+                Step::Start(54., 112.),
+                Step::Curve(48., 74., 62., 56.),
+                Step::Curve(84., 32., 122., 34.),
+                Step::Curve(164., 36., 180., 60.),
+                Step::Curve(190., 78., 186., 112.),
+                Step::Curve(180., 96., 178., 84.),
+                Step::Curve(174., 70., 160., 64.),
+                // The receded corner on one side, and the sweep across.
+                Step::Curve(146., 58., 132., 62.),
+                Step::Curve(120., 66., 108., 64.),
+                Step::Curve(92., 62., 80., 74.),
+                Step::Curve(68., 86., 64., 102.),
+                Step::Curve(61., 108., 54., 112.),
                 Step::Close,
             ]),
-            0xeab88d,
+            0xe9eaed,
             1.,
         ),
+        // Nothing drawn on top of the hair. A parting line reads as a
+        // scratch at this size and a shaded sweep reads as a patch of
+        // something else; the silhouette is already saying which way it
+        // goes, and it is the only part of it anybody looks at.
+        // Sideburns down in front of each ear.
+        tint(Shape::Outline(&[Step::Start(54., 112.), Step::Curve(52., 124., 58., 134.), Step::Curve(64., 128., 64., 112.), Step::Curve(64., 100., 66., 94.), Step::Curve(57., 100., 54., 112.), Step::Close]), 0xd7dade, 1.),
+        tint(Shape::Outline(&[Step::Start(186., 112.), Step::Curve(188., 124., 182., 134.), Step::Curve(176., 128., 176., 112.), Step::Curve(176., 100., 174., 94.), Step::Curve(183., 100., 186., 112.), Step::Close]), 0xd7dade, 1.),
+
+        // Heavy lids and the bags under them: the eyes are hooded and tired,
+        // and drawing them wide and bright was half of why it read as
+        // somebody else entirely.
+        tint(Shape::Outline(&[Step::Start(74., 112.), Step::Curve(92., 104., 110., 112.), Step::Curve(92., 110., 74., 112.), Step::Close]), 0xd3a179, 1.),
+        tint(Shape::Outline(&[Step::Start(166., 112.), Step::Curve(148., 104., 130., 112.), Step::Curve(148., 110., 166., 112.), Step::Close]), 0xd3a179, 1.),
+
+        // Brows: low, straight, still dark, and closer together than they
+        // were.
+        tint(
+            Shape::Outline(&[Step::Start(74., 104.), Step::Curve(90., 96., 110., 103.), Step::Line(109., 110.), Step::Curve(91., 104., 76., 111.), Step::Close]),
+            0x6f6b64,
+            1.,
+        ),
+        tint(
+            Shape::Outline(&[Step::Start(166., 104.), Step::Curve(150., 96., 130., 103.), Step::Line(131., 110.), Step::Curve(149., 104., 164., 111.), Step::Close]),
+            0x6f6b64,
+            1.,
+        ),
+
+        // The eyes themselves, narrow.
+        tint(Shape::Outline(&[Step::Start(80., 120.), Step::Curve(92., 112., 106., 119.), Step::Curve(93., 127., 80., 120.), Step::Close]), 0xfbfbfa, 1.),
+        tint(Shape::Outline(&[Step::Start(160., 120.), Step::Curve(148., 112., 134., 119.), Step::Curve(147., 127., 160., 120.), Step::Close]), 0xfbfbfa, 1.),
+        tint(Shape::Round { x: 93., y: 119.5, radius: 4.2 }, 0x4a5f73, 1.),
+        tint(Shape::Round { x: 147., y: 119.5, radius: 4.2 }, 0x4a5f73, 1.),
+        tint(Shape::Round { x: 93., y: 119.5, radius: 1.9 }, 0x17171a, 1.),
+        tint(Shape::Round { x: 147., y: 119.5, radius: 1.9 }, 0x17171a, 1.),
+        // The bags.
+        line(Shape::Outline(&[Step::Start(82., 128.), Step::Curve(93., 133., 105., 128.)]), 0xc79a74, 1.6, 0.55),
+        line(Shape::Outline(&[Step::Start(158., 128.), Step::Curve(147., 133., 135., 128.)]), 0xc79a74, 1.6, 0.55),
+
+        // A long, straight nose that comes down further than it did, with a
+        // heavy tip.
         tint(
             Shape::Outline(&[
-                Step::Start(56., 118.),
-                Step::Curve(50., 70., 70., 50.),
-                Step::Curve(95., 26., 126., 28.),
-                Step::Curve(168., 30., 182., 60.),
-                Step::Curve(190., 80., 184., 118.),
-                Step::Curve(176., 100., 174., 88.),
-                Step::Curve(168., 72., 154., 64.),
-                Step::Curve(136., 56., 118., 58.),
-                Step::Curve(96., 58., 80., 70.),
-                Step::Curve(66., 82., 64., 100.),
-                Step::Curve(62., 110., 56., 118.),
+                Step::Start(117., 110.),
+                Step::Curve(112., 134., 106., 150.),
+                Step::Curve(110., 160., 120., 160.),
+                Step::Curve(130., 160., 134., 150.),
+                Step::Curve(128., 134., 123., 110.),
                 Step::Close,
             ]),
-            0xd9dadc,
+            0xdeae84,
             1.,
         ),
+        tint(Shape::Oval { x: 120., y: 155., across: 15., down: 7., turn: 0. }, 0xd2a179, 1.),
+
+        // The folds from the nose to the corners of the mouth, deep.
+        line(Shape::Outline(&[Step::Start(103., 152.), Step::Curve(97., 164., 100., 176.)]), CREASE, 2.8, 1.),
+        line(Shape::Outline(&[Step::Start(137., 152.), Step::Curve(143., 164., 140., 176.)]), CREASE, 2.8, 1.),
+
+        // A thin mouth, set, and turned down at the corners.
         tint(
             Shape::Outline(&[
-                Step::Start(56., 118.),
-                Step::Curve(54., 128., 58., 136.),
-                Step::Curve(64., 132., 64., 118.),
-                Step::Curve(64., 104., 66., 96.),
-                Step::Curve(58., 104., 56., 118.),
+                Step::Start(101., 170.),
+                Step::Curve(120., 166., 139., 170.),
+                Step::Curve(120., 176., 101., 170.),
                 Step::Close,
             ]),
-            0xc8c9cc,
+            0xa9705a,
             1.,
         ),
-        tint(
-            Shape::Outline(&[
-                Step::Start(184., 118.),
-                Step::Curve(186., 128., 182., 136.),
-                Step::Curve(176., 132., 176., 118.),
-                Step::Curve(176., 104., 174., 96.),
-                Step::Curve(182., 104., 184., 118.),
-                Step::Close,
-            ]),
-            0xc8c9cc,
-            1.,
-        ),
-        tint(
-            Shape::Outline(&[
-                Step::Start(78., 102.),
-                Step::Curve(92., 94., 108., 100.),
-                Step::Line(106., 108.),
-                Step::Curve(92., 102., 80., 108.),
-                Step::Close,
-            ]),
-            0x5a5450,
-            1.,
-        ),
-        tint(
-            Shape::Outline(&[
-                Step::Start(162., 102.),
-                Step::Curve(148., 94., 132., 100.),
-                Step::Line(134., 108.),
-                Step::Curve(148., 102., 160., 108.),
-                Step::Close,
-            ]),
-            0x5a5450,
-            1.,
-        ),
-        tint(
-            Shape::Outline(&[Step::Start(82., 116.), Step::Curve(93., 108., 106., 115.), Step::Curve(94., 124., 82., 116.), Step::Close]),
-            0xfdfdfd,
-            1.,
-        ),
-        tint(
-            Shape::Outline(&[Step::Start(158., 116.), Step::Curve(147., 108., 134., 115.), Step::Curve(146., 124., 158., 116.), Step::Close]),
-            0xfdfdfd,
-            1.,
-        ),
-        tint(Shape::Round { x: 94., y: 115.5, radius: 4.4 }, 0x4e6378, 1.),
-        tint(Shape::Round { x: 146., y: 115.5, radius: 4.4 }, 0x4e6378, 1.),
-        tint(Shape::Round { x: 94., y: 115.5, radius: 2. }, 0x1c1c1c, 1.),
-        tint(Shape::Round { x: 146., y: 115.5, radius: 2. }, 0x1c1c1c, 1.),
-        tint(
-            Shape::Outline(&[
-                Step::Start(118., 112.),
-                Step::Curve(115., 132., 110., 142.),
-                Step::Curve(114., 150., 120., 150.),
-                Step::Curve(126., 150., 130., 142.),
-                Step::Curve(125., 132., 122., 112.),
-                Step::Close,
-            ]),
-            0xdfa477,
-            1.,
-        ),
-        line(Shape::Outline(&[Step::Start(102., 148.), Step::Curve(106., 156., 112., 160.)]), CREASE, 2.4, 1.),
-        line(Shape::Outline(&[Step::Start(138., 148.), Step::Curve(134., 156., 128., 160.)]), CREASE, 2.4, 1.),
-        tint(
-            Shape::Outline(&[Step::Start(104., 164.), Step::Curve(120., 172., 136., 164.), Step::Curve(120., 168., 104., 164.), Step::Close]),
-            0xb0725c,
-            1.,
-        ),
-        line(Shape::Outline(&[Step::Start(104., 164.), Step::Curve(120., 173., 136., 164.)]), 0x9c6350, 2., 1.),
-        line(Shape::Outline(&[Step::Start(112., 176.), Step::Curve(120., 180., 128., 176.)]), CREASE, 2., 1.),
+        line(Shape::Outline(&[Step::Start(101., 170.), Step::Curve(120., 175., 139., 170.)]), 0x8e5b49, 2.2, 1.),
+        line(Shape::Outline(&[Step::Start(101., 170.), Step::Curve(99., 174., 100., 177.)]), 0x8e5b49, 2., 0.9),
+        line(Shape::Outline(&[Step::Start(139., 170.), Step::Curve(141., 174., 140., 177.)]), 0x8e5b49, 2., 0.9),
+        // The crease under the lip, and the weight of the chin.
+        line(Shape::Outline(&[Step::Start(110., 182.), Step::Curve(120., 186., 130., 182.)]), CREASE, 2., 0.8),
     ],
 };
