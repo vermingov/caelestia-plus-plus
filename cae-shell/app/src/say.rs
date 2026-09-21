@@ -20,11 +20,20 @@ use std::io::Write;
 
 use log::{Level, LevelFilter, Metadata, Record};
 
-struct ToStderr;
+/// What counts as ours, for the level asked for. Everything else is held at
+/// warnings whatever is asked, unless the asker says `all`.
+const OURS: [&str; 3] = ["cae_shell", "cae_core", "gpui"];
+
+struct ToStderr {
+    ours: LevelFilter,
+    theirs: LevelFilter,
+}
 
 impl log::Log for ToStderr {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= log::max_level()
+        let target = metadata.target();
+        let wanted = if OURS.iter().any(|ours| target.starts_with(ours)) { self.ours } else { self.theirs };
+        metadata.level() <= wanted
     }
 
     fn log(&self, record: &Record) {
@@ -45,11 +54,25 @@ impl log::Log for ToStderr {
 
 /// Installs it, if `CAE_LOG` asks for one.
 ///
-/// An unknown value is taken as `info` rather than ignored: somebody who set
-/// the variable wants to hear something.
+/// The level asked for is ours; everything under us is held at warnings.
+/// This is not tidiness. `debug` across the whole tree means naga, the
+/// shader compiler inside wgpu, prints its entire type-resolution trace for
+/// every shader it builds — thousands of lines at startup, which buries
+/// whatever was being looked for, rate-limits the journal so that the next
+/// thing is lost as well, and is slow enough to be mistaken for the shell
+/// being slow. Asking a question should not change the answer.
+///
+/// `CAE_LOG=all=debug` lifts that for the rare case where the question is
+/// actually about a library. An unknown value is taken as `info`: somebody
+/// who set the variable wants to hear something.
 pub fn start() {
     let Ok(asked) = std::env::var("CAE_LOG") else { return };
-    let level = match asked.trim().to_ascii_lowercase().as_str() {
+    let asked = asked.trim().to_ascii_lowercase();
+    let (everything, asked) = match asked.strip_prefix("all=") {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, asked),
+    };
+    let level = match asked.as_str() {
         "off" | "" => return,
         "error" => LevelFilter::Error,
         "warn" => LevelFilter::Warn,
@@ -57,8 +80,11 @@ pub fn start() {
         "trace" => LevelFilter::Trace,
         _ => LevelFilter::Info,
     };
-    if log::set_boxed_logger(Box::new(ToStderr)).is_ok() {
-        log::set_max_level(level);
-        log::log!(Level::Info, "cae: logging at {level}");
+    let theirs = if everything { level } else { level.min(LevelFilter::Warn) };
+    if log::set_boxed_logger(Box::new(ToStderr { ours: level, theirs })).is_ok() {
+        // The cap has to let the loudest of the two through; `enabled` does
+        // the rest.
+        log::set_max_level(level.max(theirs));
+        log::log!(Level::Info, "cae: logging at {level}, everything else at {theirs}");
     }
 }

@@ -74,7 +74,7 @@ pub fn ask(want: Want, cx: &mut App) {
     if !cx.default_global::<Up>().0.is_empty() {
         return;
     }
-    eprintln!("cae: picker asked for, freeze {}", want.freeze);
+    log::debug!("picker: asked for, freeze {}", want.freeze);
     let outputs = screen::outputs(cx);
     // Frozen before any surface is up, or the surfaces would be in the
     // picture. Each screen is grabbed on its own, because each is its own
@@ -249,7 +249,7 @@ impl Picker {
     /// Lets go: what is chosen is taken, unless it is too small to have been
     /// meant, in which case it is the window under the pointer.
     fn taken(&mut self, at: gpui::Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        eprintln!("cae: picker asked to finish at {at:?}, {:?} after opening", self.born.elapsed());
+        log::debug!("picker: asked to finish at {at:?}, {:?} after opening", self.born.elapsed());
         if self.born.elapsed() < SETTLING {
             log::debug!("picker: finished {:?} after opening, ignored", self.born.elapsed());
             self.from = None;
@@ -315,7 +315,7 @@ fn between(one: gpui::Point<Pixels>, other: gpui::Point<Pixels>) -> Bounds<Pixel
 /// freeze looked right and the shot was of something else, which is the
 /// worst way for this to be wrong.
 fn cut(still: &std::path::Path, region: Bounds<Pixels>) -> Option<PathBuf> {
-    eprintln!("cae: cutting {region:?} out of {}", still.display());
+    log::debug!("picker: cutting {region:?} out of {}", still.display());
     let whole = image::open(still).ok()?;
     let (x, y) = (f32::from(region.origin.x).max(0.) as u32, f32::from(region.origin.y).max(0.) as u32);
     let (width, height) = (f32::from(region.size.width) as u32, f32::from(region.size.height) as u32);
