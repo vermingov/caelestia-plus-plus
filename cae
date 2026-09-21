@@ -17,6 +17,9 @@
 # back to the commit it was on.
 set -euo pipefail
 
+# How this was called, kept for the hand-over in pull_checkout below.
+CAE_ARGV=("$@")
+
 REPO=vermingov/caelestia-plus-plus
 SHELL_DIR=${CAELESTIA_SHELL_DIR:-$HOME/.config/quickshell/caelestia}
 PKG_CACHE=$HOME/.cache/caelestia/packages
@@ -180,6 +183,20 @@ current_release_tag() {
     git -C "$SHELL_DIR" describe --tags --exact-match HEAD 2>/dev/null || true
 }
 
+# A release can replace this script and the manifest beside it. Bash has
+# already read what it is running, so without this the rest of the update is
+# carried out by the version being retired: it knows nothing of a migration
+# the release added, finds nothing left to pull, and says the machine is up to
+# date while leaving it on the old shell. That is how a desktop stays on
+# Quickshell through any number of updates. Start again, once, as the new one.
+hand_over_to_the_new_cae() {
+    [[ -z ${CAE_HANDED_OVER:-} ]] || return 0
+    git -C "$SHELL_DIR" diff --quiet "$PREVIOUS_HEAD" HEAD -- cae release.json && return 0
+
+    step "this release updates cae itself; starting again with the new one"
+    CAE_HANDED_OVER=1 exec bash "$SHELL_DIR/cae" ${CAE_ARGV[@]+"${CAE_ARGV[@]}"}
+}
+
 pull_checkout() {
     local behind tag target
     PREVIOUS_HEAD=$(git -C "$SHELL_DIR" rev-parse HEAD)
@@ -207,6 +224,7 @@ pull_checkout() {
     elif git -C "$SHELL_DIR" merge --ff-only "$target" >/dev/null 2>&1; then
         step "updated to $tag ($behind new commit(s)):"
         git -C "$SHELL_DIR" log --format="       %h %s" "$PREVIOUS_HEAD"..HEAD | head -10
+        hand_over_to_the_new_cae
     else
         warn "cannot fast-forward to $tag (local changes?); leaving the checkout alone"
     fi

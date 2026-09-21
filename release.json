@@ -37,8 +37,16 @@
             "label": "hand the session from Quickshell to cae",
             "says": "cae draws the whole desktop now, so the session no longer needs Quickshell to start it or to carry its keys. This installs cae-shell.service, stops execs.lua starting Quickshell, and repoints the caelestia:* keybinds at cae's door. A copy of each file it edits is kept beside it, and `cae-shell/standalone.py --undo` puts everything back.",
             "done": "python3 \"$SHELL_DIR/cae-shell/standalone.py\" | grep -q 'already points at cae'",
-            "run": "python3 \"$SHELL_DIR/cae-shell/standalone.py\" --apply",
-            "after": "the session starts cae at the next login; `cae restart` wakes it now"
+            "run": "python3 \"$SHELL_DIR/cae-shell/standalone.py\" --apply --now",
+            "after": "cae is drawing the desktop now, and starts with the session from here on"
+        },
+        {
+            "name": "retire-quickshell",
+            "label": "take Quickshell and the old QML shell off the machine",
+            "says": "cae has been drawing the desktop on its own; Quickshell and the QML it loaded are no longer started by anything. This removes the caelestia++-shell and caelestia++-quickshell packages, the scheduler override and version stamp their root half left behind, and the Tauri bar and launcher cae replaced. caelestia++-cli stays, because the screenshot keybinds still call it. It runs only while cae is enabled, running and on the screen, and refuses if anything else on the machine still needs the Quickshell runtime. `cae revert` puts it all back.",
+            "done": "python3 \"$SHELL_DIR/cae-shell/retire.py\" | grep -q 'already retired'",
+            "run": "python3 \"$SHELL_DIR/cae-shell/retire.py\" --apply",
+            "after": "the desktop is cae's alone; `cae status` no longer has a Quickshell to report"
         }
     ],
     "//migrations": "Changes to the machine that a release needs and a build cannot make: a unit to enable, a config line to retire. Read from the NEW checkout for the same reason `components` is. `done` is a test that must be true when there is nothing left to do \u2014 it is run before and after, so a migration that half-applied on a previous run is finished rather than repeated. `run` is the whole of it, and must be safe to run twice."
