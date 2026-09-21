@@ -18,6 +18,7 @@ itself if cae does not come up.
 """
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,29 @@ HERE = Path(__file__).resolve().parent
 
 HYPR = Path.home() / ".config/hypr/hyprland"
 KEPT = ".before-cae"
+
+# Where our own binaries are installed. A keybind is run by the compositor,
+# which was started by a display manager and inherited a PATH from a login
+# shell that never read anybody's profile — so ~/.local/bin is routinely not
+# on it, and a keybind saying `cae-shell launcher` does nothing at all, with
+# nowhere for it to say so. The Quickshell globals these replace went over an
+# IPC socket and never needed a PATH, which is why nothing warned of it.
+BIN = Path(os.environ.get("XDG_BIN_HOME") or Path.home() / ".local/bin")
+
+
+def spell(command):
+    """A command written so that any PATH can run it.
+
+    Ours by absolute path; a packaged one — `caelestia` — left alone, since
+    it lives where every PATH looks and hard-coding /usr/bin would break a
+    machine that has it somewhere else.
+    """
+    name, _, rest = command.partition(" ")
+    ours = BIN / name
+    if not ours.is_file():
+        return command
+    return f"{ours} {rest}".rstrip()
+
 
 # Each Quickshell global, and the command that reaches cae instead.
 VERBS = {
@@ -63,7 +87,7 @@ STOPPED = [
 # What the session runs in Quickshell's place. Only execs.lua gets it, and
 # only if it has the line this replaces.
 QUICKSHELL_EXEC = 'hl.exec_cmd("caelestia shell -d")'
-STARTS = 'hl.exec_cmd("cae-session")'
+STARTS_NAME = "cae-session"
 
 
 def changed(text):
@@ -75,9 +99,14 @@ def changed(text):
             if starts in line and not line.lstrip().startswith("--"):
                 line = line.replace(starts, f"-- {why}: {starts}")
         for name, command in VERBS.items():
+            wanted = spell(command)
             shortcut = f'hl.dsp.global("caelestia:{name}")'
             if shortcut in line:
-                line = line.replace(shortcut, f'hl.dsp.exec_cmd("{command}")')
+                line = line.replace(shortcut, f'hl.dsp.exec_cmd("{wanted}")')
+            # An earlier version wrote these by bare name, which the
+            # compositor's PATH cannot find. Same keybind, spelled so it runs.
+            elif wanted != command and f'"{command}"' in line:
+                line = line.replace(f'"{command}"', f'"{wanted}"')
         if line != was:
             notes.append((number, was.rstrip(), line.rstrip()))
         out.append(line)
@@ -90,11 +119,12 @@ def changed(text):
     # already been commented out — a machine left half moved by an earlier
     # version has nothing else to add it.
     at = next((i for i, line in enumerate(out) if QUICKSHELL_EXEC in line), None)
-    if at is not None and not any(STARTS in line for line in out):
+    starts = f'hl.exec_cmd("{spell(STARTS_NAME)}")'
+    if at is not None and not any(STARTS_NAME in line for line in out):
         indent = out[at][: len(out[at]) - len(out[at].lstrip())]
         if not out[at].endswith("\n"):
             out[at] += "\n"
-        added = f"{indent}{STARTS}\n"
+        added = f"{indent}{starts}\n"
         out.insert(at + 1, added)
         notes.append((at + 2, "", added.rstrip()))
 
