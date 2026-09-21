@@ -274,10 +274,14 @@ impl Render for Pane {
                         // one shape continuing out of another, rather than a
                         // second shape parked under the first.
                         rounded_b={px(15.)}
-                        bg={theme::hanging()}
+                        bg={theme::pane()}
                         shadow={theme::hanging_shadows()}
                         text_color={theme::text()}
                     >
+                        // The bar's last colour, fading out into the glass:
+                        // under the contents, so it darkens the material and
+                        // not what is written on it.
+                        <div class="absolute w-full" left={px(0.)} top={px(0.)} h={theme::JOIN} bg={theme::join()} />
                         <div class="absolute flex flex-col" left={px(0.)} top={px(1.)} w={WIDTH} h={HEIGHT}>
                             {head}
                             <div class="flex-none h-[1px]" bg={theme::white(0.06)} />

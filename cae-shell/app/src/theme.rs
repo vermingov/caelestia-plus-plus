@@ -187,39 +187,26 @@ pub fn pane() -> Background {
     linear_gradient(160., linear_color_stop(rgba(0x1a1a1eb8), 0.), linear_color_stop(rgba(0x0d0d0fc2), 0.42))
 }
 
-/// A panel that hangs off the bar, for one that has to read as the bar
-/// opening rather than as a second surface parked under it.
+/// The short blend at the top of a drawer, over the glass and under the
+/// contents.
 ///
-/// Two things gave it away. A pane's own gradient starts at the light end,
-/// and the bar's has just finished at the dark one, so the shared edge had a
-/// step across it in the wrong direction — the panel was lighter than the
-/// thing it hangs from. And the hairline a floating pane draws inside its
-/// edge was drawn along that edge too, which is a window's outline exactly
-/// where there should be no edge at all.
+/// A drawer is the same glass as the quick menu — the same colour, the same
+/// blur behind it — because they are the same kind of thing and a darker one
+/// hanging off the bar looked like neither. But that glass begins at its
+/// light end, and the bar's has just finished at its dark one, so meeting it
+/// straight puts a step across the join in the wrong direction.
 ///
-/// So this begins where `face` ends, and carries no rim.
-pub fn hanging() -> Background {
-    // As dense as the bar, and falling off as sharply.
-    //
-    // A pane is thinner because the compositor blurs what is behind it;
-    // nothing blurs behind this, for the same reason nothing blurs behind the
-    // bar, so it carries its own body exactly as the pill does.
-    //
-    // The fall has to happen near the top rather than over the whole height.
-    // The bar's glass loses ten levels in its thirty-eight pixels, which is
-    // what makes it read as lit from above; the same two colours spread down
-    // four hundred and fifty lose five, which reads as one flat colour beside
-    // it. So the second stop comes at a third of the way down and the rest
-    // holds, and the two surfaces catch the light the same way.
-    // Starting a shade under the glass's own end, not at it: the bar darkens
-    // its last rows with the shadow it casts inside its edge, so matching the
-    // colour `face` ends on leaves the drawer three levels lighter than the
-    // row above it — little, and enough to draw a line across a join that is
-    // supposed to have none.
-    linear_gradient(180., linear_color_stop(rgba(0x0a0a0ce0), 0.), linear_color_stop(rgba(0x050508ea), 0.33))
+/// So the first inch of the drawer is the colour the bar ended on, fading out
+/// into the glass underneath. The join has nothing to see and the rest is the
+/// quick menu's material.
+pub fn join() -> Background {
+    linear_gradient(180., linear_color_stop(rgba(0x0a0a0cf2), 0.), linear_color_stop(rgba(0x0a0a0c00), 1.))
 }
 
-/// Its shadow, and not one pixel of it above the drawer's own top edge.
+/// How deep that blend runs.
+pub const JOIN: Pixels = px(64.);
+
+/// A drawer's shadow, and not one pixel of it above the drawer's own top edge.
 ///
 /// This surface is an overlay and the bar is not, so it is drawn over the
 /// bar: a shadow that reaches upward is painted onto the thing the drawer is
@@ -228,7 +215,8 @@ pub fn hanging() -> Background {
 /// join it was meant to hide being the one thing it drew attention to.
 ///
 /// Each is offset further than it spreads, so every one of them falls away
-/// below. No inset hairline either: see `hanging`.
+/// below. No inset hairline either: that is a window's outline, and it was
+/// being drawn along the one edge that is supposed to be no edge at all.
 pub fn hanging_shadows() -> Vec<BoxShadow> {
     vec![
         BoxShadow::new(px(0.), px(26.), hsla(0., 0., 0., 0.5)).blur_radius(px(36.)).spread_radius(px(-14.)),

@@ -106,11 +106,11 @@ LAYER_RULES = [
      'hl.layer_rule({ match = { namespace = "caelestia-panel" }, blur = true, ignore_alpha = 0.6, animation = "fade" })'),
     ("caelestia-bar",
      'hl.layer_rule({ match = { namespace = "caelestia-bar" }, animation = "slide top" })'),
-    # Neither blurred nor faded: it hangs off the bar, which is not blurred
-    # either, and it opens itself. A compositor fade over the top of that
+    # Blurred like the quick menu, because it is the same glass, but never
+    # faded: it opens itself, and a compositor fade over the top of that
     # dissolves it in rather than letting it grow.
     ("caelestia-drawer",
-     'hl.layer_rule({ match = { namespace = "caelestia-drawer" }, no_anim = true })'),
+     'hl.layer_rule({ match = { namespace = "caelestia-drawer" }, blur = true, ignore_alpha = 0.6, no_anim = true })'),
     ("caelestia-(features-menu",
      'hl.layer_rule({ match = { namespace = "caelestia-(features-menu|firewall-(panel|prompt)|security-center|protection-prompt|setup-prompt)" }, animation = "fade" })'),
 ]
