@@ -1,11 +1,14 @@
-//! The dashboard: what the day and the machine are doing, a reach into the
-//! corner away.
+//! The dashboard: what the day and the machine are doing, a reach up away.
 //!
-//! It rises from the foot of the screen, at the left, where the QML shell's
-//! did. Like everything else here it is a window only while it is up. What
-//! is always there is a strip two pixels tall along the edge under it, which
-//! is how reaching for it is heard; between uses the dashboard is that strip
-//! and the last forecast.
+//! It comes down out of the middle of the bar, square where the two meet, so
+//! that it reads as the bar opening rather than as a panel that happens to be
+//! near it. The bar reserves its own height, so anchoring to the top puts
+//! this immediately beneath it without either knowing the other's numbers.
+//!
+//! Like everything else here it is a window only while it is up. What is
+//! always there is a strip two pixels tall under the bar, which is how
+//! reaching for it is heard; between uses the dashboard is that strip and the
+//! last forecast.
 
 mod forecast;
 mod home;
@@ -37,10 +40,19 @@ const PIECE: &str = "dashboard";
 /// The name the compositor already blurs behind and fades in: a panel's.
 const NAMESPACE: &str = "caelestia-panel";
 
-/// The strip along the foot of the screen that opens it: as wide as the
-/// reach for a corner is, and thin enough to cost the window above it
-/// nothing but its bottom row of pixels.
-const EDGE: Size<gpui::Pixels> = Size { width: px(420.), height: px(2.) };
+/// How far down the bar's own surface reaches. Both of this module's
+/// surfaces step over it themselves rather than asking the compositor to
+/// keep them clear of it: a layer surface that respects exclusive zones is
+/// placed by the compositor, and the two that matter here do not agree about
+/// where that puts a surface anchored on one edge only.
+const BAR: gpui::Pixels = px(50.);
+
+/// The strip under the middle of the bar that opens it: wide enough to be
+/// reached for without aiming, and thin enough to cost the window below it
+/// nothing but its top row of pixels. Its surface carries the bar's height
+/// above that strip, which nothing is drawn in and nothing can be clicked
+/// through.
+const EDGE: Size<gpui::Pixels> = Size { width: px(420.), height: px(50. + 2.) };
 
 /// Which of its pages the dashboard is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,7 +178,14 @@ fn surface(display: Option<DisplayId>, size: Size<gpui::Pixels>) -> WindowOption
         kind: WindowKind::LayerShell(LayerShellOptions {
             namespace: NAMESPACE.to_string(),
             layer: Layer::Overlay,
-            anchor: Anchor::BOTTOM | Anchor::LEFT,
+            // The top, and neither side: anchored on one axis only, the
+            // compositor centres it on the other.
+            anchor: Anchor::TOP,
+            // Placed at the very top and stepping over the bar itself. -1 is
+            // "ignore every exclusive zone", which is the only placement both
+            // compositors agree on; the height of the bar is then a number
+            // this module holds rather than one it hopes for.
+            exclusive_zone: Some(px(-1.)),
             // Never the keyboard: it opens because the pointer came near,
             // over whatever was being typed into.
             keyboard_interactivity: KeyboardInteractivity::None,
@@ -256,7 +275,9 @@ impl Render for Edge {
         rsx! {
             <div
                 id="edge"
-                class="size-full"
+                class="absolute w-full"
+                top={BAR}
+                bottom={px(0.)}
                 // Any movement in it, rather than arriving in it: a window is
                 // born believing the pointer is at its corner, which for one
                 // this thin is inside it.

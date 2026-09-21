@@ -17,14 +17,16 @@ use crate::ui::{pointer, rsx};
 
 pub const WIDTH: Pixels = px(900.);
 pub const HEIGHT: Pixels = px(448.);
-/// How far it stands off the edges of the screen, which is how far the bar
-/// does.
-const FLOAT: Pixels = px(12.);
-/// How far below its resting place it starts.
+/// How far above its resting place it starts, so it comes out from under
+/// the bar rather than appearing already there.
 const TRAVEL: f32 = 18.;
-/// The float, the pane, and 48 above and to the right for the shadow it
-/// casts. In numbers, because pixels cannot be added up in a constant.
-pub const SURFACE: Size<Pixels> = Size { width: px(12. + 900. + 48.), height: px(12. + 448. + 48.) };
+/// Room for the shadow it casts: to both sides and below. Nothing above,
+/// because its top edge is the bar's bottom edge. In numbers, because pixels
+/// cannot be added up in a constant.
+const SHADOW: f32 = 48.;
+/// How far down the bar reaches, stepped over rather than asked about.
+const BAR: f32 = 50.;
+pub const SURFACE: Size<Pixels> = Size { width: px(48. + 900. + 48.), height: px(50. + 448. + 48.) };
 
 const HEAD: Pixels = px(46.);
 const TAB: Pixels = px(132.);
@@ -187,9 +189,10 @@ impl Pane {
 /// gap between it and the two edges of the screen it stands off. With the
 /// gap left out, a pointer resting on the edge it was opened from would be
 /// on nothing, and the pane would close under it.
+/// Only the pane takes the pointer; the shadow's room around it does not, or
+/// the dashboard would hold a hover a hand's width away from itself.
 fn reach(window: &Window) {
-    let surface = window.viewport_size();
-    let region = Bounds::new(point(px(0.), surface.height - FLOAT - HEIGHT), Size::new(FLOAT + WIDTH, FLOAT + HEIGHT));
+    let region = Bounds::new(point(px(SHADOW), px(BAR)), Size::new(WIDTH, HEIGHT));
     window.set_input_region(Some(&[region]));
 }
 
@@ -246,10 +249,10 @@ impl Render for Pane {
                 <div
                     id="dashboard"
                     class="absolute flex"
-                    left={px(0.)}
-                    bottom={px(0.)}
-                    w={FLOAT + WIDTH}
-                    h={FLOAT + HEIGHT}
+                    left={px(SHADOW)}
+                    top={px(BAR)}
+                    w={WIDTH}
+                    h={HEIGHT}
                     onHover={cx.listener(|pane, hovered: &bool, window, cx| pane.hovered(*hovered, window, cx))}
                 >
                     <div
@@ -258,12 +261,15 @@ impl Render for Pane {
                         // from the one it is in, and the one it is in is what
                         // knows whether the pointer is here at all.
                         class="absolute flex flex-col overflow-hidden"
-                        left={FLOAT}
-                        bottom={FLOAT - px(TRAVEL * (1. - shown))}
+                        left={px(0.)}
+                        top={px(-TRAVEL * (1. - shown))}
                         w={WIDTH}
                         h={HEIGHT}
                         opacity={shown}
-                        rounded={px(15.)}
+                        // Square where it meets the bar, round where it ends:
+                        // one shape continuing out of another, rather than a
+                        // second shape parked under the first.
+                        rounded_b={px(15.)}
                         bg={theme::pane()}
                         shadow={theme::pane_shadows()}
                         text_color={theme::text()}
