@@ -39,3 +39,28 @@ echo
 echo "Installed $target"
 echo "  falls back to: $python_cli"
 echo "  undo with:     $here/install.sh --uninstall"
+
+# A release can only reach a machine whose `cae` predates migrations through
+# something it runs out of the new checkout, and this is one of the few: the
+# updater builds the CLI from whatever it has just pulled. If that updater
+# cannot offer migrations, it is about to finish and report the machine up to
+# date while leaving the desktop on Quickshell, so say so where it will be
+# seen — its own output is thrown away.
+if [[ -z ${CAE_CAN_MIGRATE:-} ]] && command -v notify-send >/dev/null; then
+    root=$(cd "$here/.." && pwd)
+    if python3 - "$root" 2>/dev/null <<'PENDING'
+import json, subprocess, sys, os
+root = sys.argv[1]
+steps = json.load(open(f"{root}/release.json")).get("migrations", [])
+env = {**os.environ, "SHELL_DIR": root}
+# Pending means at least one step whose own test says it is not done yet.
+sys.exit(0 if any(
+    step.get("done") and subprocess.run(["bash", "-c", step["done"]], env=env,
+                                        capture_output=True).returncode != 0
+    for step in steps) else 1)
+PENDING
+    then
+        notify-send -u critical -a Caelestia++ "Caelestia++ has one step left" \
+            "This release moves the desktop off Quickshell. Run 'cae' once more to finish it." || true
+    fi
+fi

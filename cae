@@ -20,6 +20,12 @@ set -euo pipefail
 # How this was called, kept for the hand-over in pull_checkout below.
 CAE_ARGV=("$@")
 
+# Says to anything this runs out of the new checkout that migrations are in
+# hand. A `cae` from before they existed sets nothing, and an installer that
+# sees nothing knows the run it is part of will not offer them — which is the
+# only way a release has of reaching a machine still on the old script.
+export CAE_CAN_MIGRATE=1
+
 REPO=vermingov/caelestia-plus-plus
 SHELL_DIR=${CAELESTIA_SHELL_DIR:-$HOME/.config/quickshell/caelestia}
 PKG_CACHE=$HOME/.cache/caelestia/packages
