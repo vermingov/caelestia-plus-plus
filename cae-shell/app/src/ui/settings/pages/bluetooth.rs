@@ -86,7 +86,7 @@ impl Bluetooth {
     }
 
     fn power(&mut self, on: bool, cx: &mut Context<Self>) {
-        cx.background_spawn(async move { services::set_bluetooth(on) }).detach();
+        crate::feeds::act(cx, move || services::set_bluetooth(on));
         self.look(SETTLED, cx);
     }
 
@@ -324,10 +324,10 @@ pub struct Pairing {
 
 impl Pairing {
     pub fn new(reach: &Reach, cx: &mut Context<Self>) -> Pairing {
-        cx.background_spawn(async { services::set_discovering(true) }).detach();
+        crate::feeds::act(cx, || services::set_discovering(true));
         // Scanning is a mode the adapter stays in, and costs battery on both
         // sides: it ends with the page that asked for it.
-        cx.on_release(|_, cx| cx.background_spawn(async { services::set_discovering(false) }).detach()).detach();
+        cx.on_release(|_, cx| crate::feeds::act(cx, || services::set_discovering(false))).detach();
 
         cx.spawn(async move |page, cx| {
             loop {

@@ -141,7 +141,7 @@ impl Menu {
             shown.enabled = on;
         }
         cx.notify();
-        cx.background_spawn(async move { features::set(id, on) }).detach();
+        crate::feeds::act(cx, move || features::set(id, on));
     }
 
     fn leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {

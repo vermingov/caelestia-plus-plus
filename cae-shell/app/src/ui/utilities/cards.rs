@@ -321,7 +321,7 @@ impl Render for Toggles {
                 cx.notify();
             })),
             switch("bluetooth", "bluetooth", bluetooth, move |_, _, cx: &mut App| {
-                cx.background_spawn(async move { services::set_bluetooth(!bluetooth) }).detach();
+                crate::feeds::act(cx, move || services::set_bluetooth(!bluetooth));
             }),
             switch("mic", if muted { "mic_off" } else { "mic" }, !muted, |_, _, cx: &mut App| {
                 cx.background_spawn(async { volume::toggle_microphone() }).detach();

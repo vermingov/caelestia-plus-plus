@@ -87,6 +87,28 @@ impl Sooner {
     }
 }
 
+/// Does something that changes what the slow feed reports, off the thread
+/// that draws, and has the feed look again the moment it is done.
+///
+/// Every such action goes through here rather than spawning for itself.
+/// Spawning is the easy half and the half that gets remembered; asking the
+/// feed to look again is the half that makes the switch move, and four
+/// separate call sites were written without it before this existed — each
+/// one a toggle that sat still for up to a tick and read as a dead click.
+///
+/// Taken from the global rather than a handle, so a view with no reason to
+/// hold the feeds can still act without one being threaded to it.
+pub fn act(cx: &mut App, work: impl FnOnce() + Send + 'static) {
+    let sooner = cx.try_global::<Feeds>().map(|feeds| feeds.sooner.clone());
+    cx.background_spawn(async move {
+        work();
+        if let Some(sooner) = sooner {
+            sooner.ask();
+        }
+    })
+    .detach();
+}
+
 /// Where anything that opens something of its own finds them: a window opened
 /// from a button on a panel is not handed down a tree the way a bar is.
 impl Global for Feeds {}
