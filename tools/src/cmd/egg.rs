@@ -296,12 +296,48 @@ fn hyprctl(args: &[&str]) -> Option<String> {
 
 /// A hung or missing shell must never take the watcher down with it: nothing
 /// restarts this.
+/// What each egg is called at cae's door, which is not what it was called
+/// over Quickshell's IPC.
+fn verb(target: &str) -> &'static str {
+    match target {
+        "israelEgg" => "cinema",
+        _ => "egg",
+    }
+}
+
+/// Knocks, and goes on knocking until somebody answers.
+///
+/// cae first. This asked Quickshell and only Quickshell, which was right for
+/// as long as Quickshell drew the eggs and silently wrong from the moment it
+/// stopped: the word was typed, the watcher saw it, and the knock went to a
+/// shell that is not there. Nothing failed loudly enough to notice, because
+/// a watcher that pops nothing looks exactly like a watcher that saw nothing.
 fn pop(target: &str) {
-    let _ = std::process::Command::new("qs")
-        .args(["-c", "caelestia", "ipc", "call", target, "pop"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    // Beside this program rather than off PATH. The shell spawns the watcher,
+    // and what the shell's own PATH holds depends on how the session was
+    // started — a Hyprland from a display manager has no ~/.local/bin on it,
+    // and a knock that cannot find its program is the same silence as no
+    // knock at all. The two are installed together, so the sibling is exact.
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|me| me.parent().map(|dir| dir.join("cae-shell")))
+        .filter(|path| path.is_file())
+        .map_or_else(|| "cae-shell".to_string(), |path| path.display().to_string());
+
+    let knocks: [(&str, Vec<String>); 2] = [
+        (beside.as_str(), vec![verb(target).to_string()]),
+        ("qs", vec!["-c".into(), "caelestia".into(), "ipc".into(), "call".into(), target.into(), "pop".into()]),
+    ];
+    for (program, args) in knocks {
+        let answered = std::process::Command::new(program)
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if answered.is_ok_and(|code| code.success()) {
+            return;
+        }
+    }
 }
 
 /// One watcher at a time.
