@@ -43,8 +43,23 @@ const MAX_FPS: u64 = 15;
 
 /// Rises fast, falls slowly: a spectrum that decays at the rate it attacks
 /// reads as flickering rather than as sound.
-const ATTACK: f32 = 0.45;
-const DECAY: f32 = 0.12;
+///
+/// Not too fast, though. At 0.45 a bar was most of the way to a new level in
+/// one frame, which is not reacting to the music so much as following the
+/// analyser's own noise — every window of a real signal differs from the last
+/// whether or not anything audible changed, and at that rate all of it shows.
+const ATTACK: f32 = 0.26;
+const DECAY: f32 = 0.10;
+
+/// How much of each bar is its neighbours.
+///
+/// The envelope above smooths each bar through time and leaves it deaf to the
+/// ones beside it, so a band whose peak lands a bin to the left of another's
+/// jumps while its neighbour does not, and the row reads as a picket fence
+/// rattling rather than a shape moving. A little of each side turns the
+/// same numbers into a curve. Little: at much more than this a kick drum
+/// lifts the whole row and the thing stops meaning anything.
+const NEIGHBOURS: f32 = 0.22;
 
 /// How long the recorder may write nothing before whatever was playing is
 /// taken to have stopped. Its buffers are 20ms apart, so this is several
@@ -172,6 +187,7 @@ impl Analyser {
         let mut imaginary = vec![0.0; WINDOW];
         fft(&mut real, &mut imaginary);
 
+        let mut heard = [0.0f32; BARS];
         for bar in 0..BARS {
             let (from, to) = (self.edges[bar], self.edges[bar + 1].max(self.edges[bar] + 1));
             let mut peak = 0.0f32;
@@ -188,10 +204,22 @@ impl Analyser {
             // Treble carries far less energy than bass and would otherwise
             // never leave the floor.
             let tilt = 1.0 + 0.9 * (bar as f32 / BARS as f32);
-            let level = (level * tilt).clamp(0.0, 1.0);
+            heard[bar] = (level * tilt).clamp(0.0, 1.0);
+        }
 
-            let rate = if level > self.levels[bar] { ATTACK } else { DECAY };
-            self.levels[bar] += (level - self.levels[bar]) * rate;
+        // Across, then through time. The ends lean on the one neighbour they
+        // have rather than on a nought that is not there, which would pull
+        // the first and last bars down for no reason.
+        let mut shaped = heard;
+        for bar in 0..BARS {
+            let left = heard[bar.saturating_sub(1)];
+            let right = heard[(bar + 1).min(BARS - 1)];
+            shaped[bar] = heard[bar] * (1.0 - NEIGHBOURS) + (left + right) / 2.0 * NEIGHBOURS;
+        }
+
+        for bar in 0..BARS {
+            let rate = if shaped[bar] > self.levels[bar] { ATTACK } else { DECAY };
+            self.levels[bar] += (shaped[bar] - self.levels[bar]) * rate;
         }
         self.levels
     }
@@ -459,6 +487,53 @@ mod tests {
         // transform is smearing energy across every band.
         let far = bars[..expected.saturating_sub(3)].iter().fold(0.0f32, |peak, l| peak.max(*l));
         assert!(far < bars[loudest] * 0.5, "bass bands reached {far} on a 1kHz tone");
+    }
+
+    #[test]
+    fn a_bar_no_longer_jumps_most_of_the_way_in_one_frame() {
+        // The complaint this answers is "too reactive". A bar that arrives
+        // in one or two frames is following the analyser's noise as much as
+        // the music: every window of a real signal differs from the last
+        // whether or not anything audible changed.
+        let mut analyser = Analyser::new();
+        let loud = tone();
+        let reached = |analyser: &mut Analyser, frames: usize| {
+            let mut last = [0.0; BARS];
+            for _ in 0..frames {
+                last = analyser.frame(&loud);
+            }
+            last.iter().cloned().fold(0.0f32, f32::max)
+        };
+        let after_one = reached(&mut analyser, 1);
+        assert!(after_one < 0.45, "a single frame takes it to {after_one}, which is a jump not a rise");
+
+        // It still gets there, and well within the time a note lasts.
+        let mut analyser = Analyser::new();
+        let after_fifteen = reached(&mut analyser, 15);
+        assert!(after_fifteen > 0.7, "a second of the same tone only reaches {after_fifteen}");
+    }
+
+    #[test]
+    fn a_bar_is_pulled_toward_the_ones_beside_it() {
+        // One band loud and its neighbours silent is what a picket fence
+        // looks like. The neighbours should come up with it and it should
+        // come down toward them, or the row rattles instead of moving.
+        let mut analyser = Analyser::new();
+        let mut spike = vec![0.0f32; WINDOW];
+        for (at, sample) in spike.iter_mut().enumerate() {
+            *sample = (at as f32 * std::f32::consts::TAU * 1000.0 / RATE as f32).sin() * 0.5;
+        }
+        let mut bars = [0.0; BARS];
+        for _ in 0..40 {
+            bars = analyser.frame(&spike);
+        }
+        let loudest = bars.iter().cloned().fold(0.0f32, f32::max);
+        let at = bars.iter().position(|level| *level == loudest).unwrap();
+        let beside = [at.saturating_sub(1), (at + 1).min(BARS - 1)]
+            .iter()
+            .map(|near| bars[*near])
+            .fold(0.0f32, f32::max);
+        assert!(beside > loudest * 0.15, "the neighbours of a loud band sit at {beside} against {loudest}");
     }
 
     #[test]
