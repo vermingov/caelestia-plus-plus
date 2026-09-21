@@ -378,13 +378,24 @@ fn furniture(stage: &Stage, window: &mut Window) {
 /// nothing is kept between frames. It is most of what separates "shapes
 /// drawn on a screen" from "something filmed".
 fn grain(stage: &Stage, window: &mut Window, still: &Cam) {
-    const SPECKS: usize = 900;
+    // Half what it was. A speck is a path, and a path is a search of every
+    // path already painted this frame unless something says otherwise —
+    // which is what the layer below is for. See `sparks`.
+    const SPECKS: usize = 420;
     // A new scatter roughly every other frame: grain that changes every
     // frame at sixty fizzes, and grain that never changes is dirt on the
     // lens.
     let roll = (stage.now / 33) as u32;
     let strength = 0.055 * stage.reveal * stage.fading;
 
+    // One layer for the lot. GPUI works out a draw order for every primitive
+    // by searching a tree of everything painted before it, so four hundred
+    // loose specks cost four hundred searches that each get slower; inside a
+    // layer they are promised not to overlap each other and share one place
+    // in that order. It is the difference between this playing and this
+    // stuttering, and the same is true of every crowd in the piece.
+    let cover = Bounds::new(still.origin, gpui::size(px(stage.width), px(stage.height)));
+    window.paint_layer(cover, |window| {
     for speck in 0..SPECKS {
         let seed = (speck as u32).wrapping_mul(2_246_822_519).wrapping_add(roll.wrapping_mul(2_654_435_761));
         let mut state = seed | 1;
@@ -399,6 +410,7 @@ fn grain(stage: &Stage, window: &mut Window, still: &Cam) {
         let (colour, alpha) = if bright > 0.82 { (0xffffff, strength * 1.5) } else { (0x000000, strength) };
         paint::rect(window, still, (x, y, 1.6, 1.6), 0., shade(colour, alpha * bright.max(0.35)));
     }
+    });
 }
 
 #[cfg(test)]

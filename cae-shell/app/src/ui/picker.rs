@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use cae_core::hypr;
 use gpui::{
@@ -205,13 +206,26 @@ pub struct Picker {
     /// What would be taken if it were let go of now.
     chosen: Option<Bounds<Pixels>>,
     focus: FocusHandle,
+    /// When this surface came up.
+    ///
+    /// On a desk with three screens the picker opened and was gone in the
+    /// same instant, having taken whatever was under the pointer. Something
+    /// arrives at a surface that has only just been born and is read as a
+    /// choice; which event it is has not been pinned down — it is not one
+    /// the handlers here ever see logged — so this refuses to be finished by
+    /// anything at all for a moment after opening. Nobody presses a key and
+    /// picks a region a fifth of a second later, so nothing real is lost.
+    born: Instant,
 }
+
+/// How long the picker ignores being told it is finished.
+const SETTLING: Duration = Duration::from_millis(220);
 
 impl Picker {
     fn new(at: Rc<Screen>, window: &mut Window, cx: &mut Context<Self>) -> Picker {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        Picker { at, from: None, chosen: None, focus }
+        Picker { at, from: None, chosen: None, focus, born: Instant::now() }
     }
 
     /// The window under `at`, if any: the topmost, since the list is in the
@@ -234,6 +248,11 @@ impl Picker {
     /// Lets go: what is chosen is taken, unless it is too small to have been
     /// meant, in which case it is the window under the pointer.
     fn taken(&mut self, at: gpui::Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.born.elapsed() < SETTLING {
+            log::debug!("picker: finished {:?} after opening, ignored", self.born.elapsed());
+            self.from = None;
+            return;
+        }
         // A release with no press before it is not a choice. A surface is
         // born believing the pointer is already inside it, and on a desk with
         // several screens one of the pickers is handed a release that belongs
