@@ -227,6 +227,52 @@ fn shake_at(now: u128) -> (f32, f32) {
     (0., 0.)
 }
 
+/// Where the camera stands for each act, and how it moves through it.
+///
+/// There used to be one move for the whole thing: a five per cent push in
+/// over twenty-six seconds, the same from the first frame to the last. That
+/// is not a camera, it is a zoom nobody asked for, and it is why five quite
+/// different acts all felt like the same shot.
+///
+/// Each act gets its own now, and each begins where the last one left off
+/// rather than snapping back, so the picture is always moving and never
+/// jumps. In scale, and in how far it is pushed off centre as a fraction of
+/// the picture.
+fn shot(now: u128, width: f32, height: f32) -> (f32, (f32, f32)) {
+    // (when it starts, how long the move takes, scale at the end, where it
+    // ends up). The scale each act starts at is the one before it, so a cut
+    // changes what is on screen without changing where the camera is.
+    let moves: [(u128, u128, f32, (f32, f32)); 5] = [
+        // The star: creeping in, dead centre, letting it hang there.
+        (0, FLAG, 1.10, (0., 0.)),
+        // The flag: drifting along the cloth, as though reading it.
+        (FLAG, TANK - FLAG, 1.16, (-0.045, 0.01)),
+        // The tank: pulled back to put the ground in, and tracking with it.
+        (TANK, FACE - TANK, 0.98, (0.05, 0.035)),
+        // The face: in, hard, and off the middle so it is not a portrait
+        // shot but a look at somebody.
+        (FACE, WAKE - FACE, 1.30, (-0.02, -0.02)),
+        // The waking: the slowest of the five, still going at the end.
+        (WAKE, TRACK - WAKE, 1.46, (0.015, 0.)),
+    ];
+
+    let mut scale = 1.;
+    let mut at = (0., 0.);
+    for (from, over, to_scale, to_at) in moves {
+        if now <= from {
+            break;
+        }
+        let along = in_out_sine(through(now, from, over));
+        let (was_scale, was_at) = (scale, at);
+        scale = was_scale + (to_scale - was_scale) * along;
+        at = (was_at.0 + (to_at.0 - was_at.0) * along, was_at.1 + (to_at.1 - was_at.1) * along);
+        if now < from + over {
+            break;
+        }
+    }
+    (scale, (at.0 * width, at.1 * height))
+}
+
 impl Stage {
     fn at(now: u128, bounds: Bounds<Pixels>) -> Stage {
         let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
@@ -236,7 +282,9 @@ impl Stage {
             Some(cut) if now < cut + 680 => 1.03 - 0.03 * out_cubic(through(now, cut + 130, 550)),
             _ => 1.,
         };
-        let shift = shake_at(now);
+        let (framing, framed_at) = shot(now, width, height);
+        let shake = shake_at(now);
+        let shift = (shake.0 + framed_at.0, shake.1 + framed_at.1);
         Stage {
             now,
             width,
@@ -245,7 +293,7 @@ impl Stage {
             reveal: out_cubic(through(now, 0, 1400)),
             fading: 1. - in_quad(through(now, TRACK, FADE)),
             pulse: breathe(now, 3200),
-            cam: Cam::new(bounds.origin, (width / 2., height / 2.), drift * pump, shift),
+            cam: Cam::new(bounds.origin, (width / 2., height / 2.), drift * pump * framing, shift),
         }
     }
 
@@ -368,6 +416,52 @@ mod tests {
     }
 
     #[test]
+    fn the_camera_never_jumps_and_never_stops() {
+        // Every act hands the camera to the next where it left it. If one
+        // started from its own numbers instead, the cut would move the
+        // camera as well as the picture, which reads as a glitch rather than
+        // an edit — and it is invisible in a still, so it has to be counted.
+        let (w, h) = (1920., 1080.);
+        let mut worst = 0.;
+        let mut still_for = 0;
+        let mut longest_still = 0;
+        let mut last = shot(0, w, h);
+        for now in (16..TRACK).step_by(16) {
+            let this = shot(now, w, h);
+            let jump = (this.0 - last.0).abs() * 1000.
+                + (this.1.0 - last.1.0).abs()
+                + (this.1.1 - last.1.1).abs();
+            if jump > worst {
+                worst = jump;
+            }
+            // "Moving" is generous: a tenth of a pixel a frame is still a
+            // camera, a flat zero for seconds on end is a held frame.
+            if jump < 0.02 {
+                still_for += 1;
+                longest_still = longest_still.max(still_for);
+            } else {
+                still_for = 0;
+            }
+            last = this;
+        }
+        assert!(worst < 6., "the camera jumps by {worst} in one frame somewhere");
+        assert!(longest_still < 90, "the camera sits perfectly still for {longest_still} frames");
+    }
+
+    #[test]
+    fn every_act_is_framed_differently() {
+        // Five acts that all sit at the same scale in the same place are
+        // five acts that look like one shot, which is what this replaced.
+        let (w, h) = (1920., 1080.);
+        let framings: Vec<(f32, (f32, f32))> =
+            [FLAG, TANK, FACE, WAKE, TRACK - 200].iter().map(|at| shot(at - 100, w, h)).collect();
+        for (one, other) in framings.iter().zip(framings.iter().skip(1)) {
+            let apart = (one.0 - other.0).abs() * 400. + (one.1.0 - other.1.0).abs() + (one.1.1 - other.1.1).abs();
+            assert!(apart > 8., "two acts end up framed the same: {one:?} and {other:?}");
+        }
+    }
+
+    #[test]
     fn the_flash_is_over_long_before_the_act_is() {
         let bright = |now| Stage { now, ..Stage::at(now, Bounds::new(point(px(0.), px(0.)), Size::new(px(1920.), px(1080.)))) }.flash();
         assert_eq!(bright(FLAG - 1), 0.);
@@ -377,11 +471,17 @@ mod tests {
     }
 
     #[test]
-    fn the_picture_is_pushed_in_slowly_and_stops() {
+    fn the_picture_starts_where_it_is_and_is_well_inside_by_the_end() {
+        // This used to say the whole piece was one five per cent push in and
+        // that it stopped. It is five moves now, so what is worth holding is
+        // the shape of the whole: it opens on the picture as it is, and it
+        // has travelled a long way in by the time the track runs out.
         let scale = |now| Stage::at(now, Bounds::new(point(px(0.), px(0.)), Size::new(px(1920.), px(1080.)))).cam.scale;
-        assert!((scale(0) - 1.).abs() < 0.001);
-        assert!(scale(TRACK) > 1.03 && scale(TRACK) < 1.05);
-        assert!((scale(PUSH_IN * 2) - 1.05).abs() < 0.001, "it stops where it was told to");
+        assert!((scale(0) - 1.).abs() < 0.001, "it opens where the desktop is");
+        assert!(scale(TRACK) > 1.4, "by the end it is well in, got {}", scale(TRACK));
+        assert!(scale(TRACK) < 1.9, "and not so far in that the picture is lost, got {}", scale(TRACK));
+        // The slow global drift is still underneath all five, and still stops.
+        assert!(scale(PUSH_IN * 2) > scale(TRACK) - 0.001);
     }
 
     #[test]
