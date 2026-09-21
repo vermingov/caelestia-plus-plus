@@ -17,9 +17,6 @@ use crate::ui::{pointer, rsx};
 
 pub const WIDTH: Pixels = px(900.);
 pub const HEIGHT: Pixels = px(448.);
-/// How far above its resting place it starts, so it comes out from under
-/// the bar rather than appearing already there.
-const TRAVEL: f32 = 18.;
 /// Room for the shadow it casts: to both sides and below. Nothing above,
 /// because its top edge is the bar's bottom edge. In numbers, because pixels
 /// cannot be added up in a constant.
@@ -260,23 +257,32 @@ impl Render for Pane {
                         // Not occluding: a box that occludes takes the pointer
                         // from the one it is in, and the one it is in is what
                         // knows whether the pointer is here at all.
-                        class="absolute flex flex-col overflow-hidden"
+                        class="absolute overflow-hidden"
                         left={px(0.)}
-                        top={px(-TRAVEL * (1. - shown))}
+                        // Up one pixel, over the hairline the bar draws inside
+                        // its own bottom edge. That line is the bar saying
+                        // where it ends, and this is meant to be where it does
+                        // not.
+                        top={px(-1.)}
                         w={WIDTH}
-                        h={HEIGHT}
-                        opacity={shown}
+                        // It grows downward out of the bar rather than
+                        // appearing and fading up: the height is the
+                        // animation, and what is inside keeps its own so the
+                        // contents are uncovered rather than squashed.
+                        h={px(1.) + HEIGHT * shown}
                         // Square where it meets the bar, round where it ends:
                         // one shape continuing out of another, rather than a
                         // second shape parked under the first.
                         rounded_b={px(15.)}
-                        bg={theme::pane()}
-                        shadow={theme::pane_shadows()}
+                        bg={theme::hanging()}
+                        shadow={theme::hanging_shadows()}
                         text_color={theme::text()}
                     >
-                        {head}
-                        <div class="flex-none h-[1px]" bg={theme::white(0.06)} />
-                        <div class="flex flex-1 min-h-[0px]">{page}</div>
+                        <div class="absolute flex flex-col" left={px(0.)} top={px(1.)} w={WIDTH} h={HEIGHT}>
+                            {head}
+                            <div class="flex-none h-[1px]" bg={theme::white(0.06)} />
+                            <div class="flex flex-1 min-h-[0px]">{page}</div>
+                        </div>
                     </div>
                 </div>
                 <canvas class="absolute size-full" prepaint={|_, window: &mut Window, _: &mut App| reach(window)} paint={|_, _, _, _| ()} />

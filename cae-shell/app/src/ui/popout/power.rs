@@ -3,7 +3,7 @@
 //! desktop there is no battery and the rest is the whole of it.
 
 use cae_core::{services, system};
-use gpui::{AppContext, Context, Div, IntoElement, Render, Styled, Window, div, prelude::*, px, rgba};
+use gpui::{Context, Div, IntoElement, Render, Styled, Window, div, prelude::*, px, rgba};
 
 use super::pieces::{column, detail, headline, meter_in, switch, warning};
 use super::simple::feature_name;

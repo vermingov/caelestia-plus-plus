@@ -187,6 +187,30 @@ pub fn pane() -> Background {
     linear_gradient(160., linear_color_stop(rgba(0x1a1a1eb8), 0.), linear_color_stop(rgba(0x0d0d0fc2), 0.42))
 }
 
+/// A panel that hangs off the bar, for one that has to read as the bar
+/// opening rather than as a second surface parked under it.
+///
+/// Two things gave it away. A pane's own gradient starts at the light end,
+/// and the bar's has just finished at the dark one, so the shared edge had a
+/// step across it in the wrong direction — the panel was lighter than the
+/// thing it hangs from. And the hairline a floating pane draws inside its
+/// edge was drawn along that edge too, which is a window's outline exactly
+/// where there should be no edge at all.
+///
+/// So this begins where `face` ends, and carries no rim.
+pub fn hanging() -> Background {
+    linear_gradient(180., linear_color_stop(rgba(0x0d0d0fe0), 0.), linear_color_stop(rgba(0x0d0d0fc2), 1.))
+}
+
+/// Its shadow, cast downward and to the sides. No inset hairline: see
+/// `hanging`.
+pub fn hanging_shadows() -> Vec<BoxShadow> {
+    vec![
+        BoxShadow::new(px(0.), px(20.), hsla(0., 0., 0., 0.5)).blur_radius(px(48.)).spread_radius(px(-10.)),
+        BoxShadow::new(px(0.), px(4.), hsla(0., 0., 0., 0.42)).blur_radius(px(14.)).spread_radius(px(-4.)),
+    ]
+}
+
 /// A window's surface: the same glass again, and the densest of the three.
 /// A window is read for minutes rather than glanced at, over whatever happens
 /// to be behind it, and with no promise of a blur: the compositor turns that
