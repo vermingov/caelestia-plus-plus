@@ -37,7 +37,15 @@ impl Bluetooth {
     /// Does something to the adapter or a device, and looks again once it
     /// has had time to take.
     fn ask(&mut self, wait: u64, work: impl FnOnce() + Send + 'static, cx: &mut Context<Self>) {
-        cx.background_spawn(async move { work() }).detach();
+        // `look` fetches the devices again; the adapter's own switches come
+        // from the slow feed, which has to be told to ask again or the
+        // toggle sits where it was until the next tick.
+        let sooner = self.feeds.sooner.clone();
+        cx.background_spawn(async move {
+            work();
+            sooner.ask();
+        })
+        .detach();
         self.look(Duration::from_millis(wait), cx);
     }
 }

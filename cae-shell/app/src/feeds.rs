@@ -64,6 +64,27 @@ pub struct Feeds {
     pub guards: Entity<Feed<Vec<guards::Detail>>>,
     /// The guards themselves, for saying a word back to one.
     pub watcher: guards::Watcher,
+    /// Wakes the slow feed early.
+    ///
+    /// Everything on that feed is a question put to another program, asked
+    /// at the rate a stale answer would be noticed at. That rate is far too
+    /// slow for an answer the person has just changed themselves: a power
+    /// profile picked by hand sat unchanged on the screen for up to five
+    /// seconds, which reads as the click having missed.
+    pub sooner: Sooner,
+}
+
+/// A nudge to a sampling thread, and the waiting half it sleeps on.
+///
+/// One sender kept in `Feeds`, so anything holding the feeds can ask for the
+/// answers to be re-read now. A missed nudge costs a tick, never a hang.
+#[derive(Clone)]
+pub struct Sooner(std::sync::mpsc::Sender<()>);
+
+impl Sooner {
+    pub fn ask(&self) {
+        let _ = self.0.send(());
+    }
 }
 
 /// Where anything that opens something of its own finds them: a window opened
@@ -124,6 +145,7 @@ impl Feeds {
     pub fn start(cx: &mut App, serving: bool) -> Feeds {
         let watcher = guards::Watcher::start();
         let server = if serving { notifs::start() } else { notifs::Notifs::new() };
+        let (sooner, asked) = std::sync::mpsc::channel();
 
         let feeds = Feeds {
             hypr: cx.new(|_| Feed { value: hypr::read_state() }),
@@ -138,6 +160,7 @@ impl Feeds {
             serving,
             guards: cx.new(|_| Feed { value: watcher.detail() }),
             watcher: watcher.clone(),
+            sooner: Sooner(sooner),
         };
 
         pump(cx, &feeds.hypr, false, |tx| hypr::watch(move |state| drop(tx.unbounded_send(state))));
@@ -164,7 +187,7 @@ impl Feeds {
                 }
             }
         });
-        pump(cx, &feeds.services, false, move |tx| sample_services(tx, watcher));
+        pump(cx, &feeds.services, false, move |tx| sample_services(tx, watcher, asked));
         pump(cx, &feeds.settings, false, watch_settings);
         // Nothing draws this: it says so once, the way the shell it replaced
         // did, and the settings show what there is to know.
@@ -223,7 +246,11 @@ fn sample_system(tx: UnboundedSender<system::Snapshot>) {
 }
 
 /// The slow feed: power profile, the two guards, feature modes, bluetooth.
-fn sample_services(tx: UnboundedSender<services::Snapshot>, watcher: guards::Watcher) {
+fn sample_services(
+    tx: UnboundedSender<services::Snapshot>,
+    watcher: guards::Watcher,
+    asked: std::sync::mpsc::Receiver<()>,
+) {
     let mut last = None;
     loop {
         let snapshot = services::read(watcher.read());
@@ -233,7 +260,13 @@ fn sample_services(tx: UnboundedSender<services::Snapshot>, watcher: guards::Wat
                 return;
             }
         }
-        std::thread::sleep(SLOW_TICK);
+        // A tick, or sooner if somebody changed one of these themselves. A
+        // nudge that arrives while the answers are being read is not lost:
+        // the channel holds it and the next wait returns at once.
+        match asked.recv_timeout(SLOW_TICK) {
+            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        }
     }
 }
 

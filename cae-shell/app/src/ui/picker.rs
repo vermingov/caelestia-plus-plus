@@ -130,15 +130,40 @@ fn done(window: &mut Window, cx: &mut App) {
 }
 
 /// A still of one screen, kept where the pictures are.
+///
+/// Under a name of its own each time. GPUI holds what it has drawn by the
+/// path it came from, so a still written over the last one was never looked
+/// at again: the picker came up showing whatever had been on that screen the
+/// time before — a different workspace, usually — and froze the selection
+/// over a picture of the past. A picture of the wrong moment is worse than
+/// no freeze at all, because nothing about it looks wrong.
 fn freeze(name: &str) -> Option<PathBuf> {
     let cache = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?
         .join("caelestia/picker");
     std::fs::create_dir_all(&cache).ok()?;
-    let still = cache.join(format!("{name}.png"));
+
+    let still = somewhere_new(&cache, name);
     let grabbed = std::process::Command::new("grim").args(["-l", "0", "-o", name]).arg(&still).status();
     grabbed.is_ok_and(|status| status.success()).then_some(still)
+}
+
+/// A path for this screen's still that has not been drawn from before, with
+/// the last one — and anything a run that was killed left behind — taken
+/// away first, so the pictures do not pile up one per screenshot.
+fn somewhere_new(cache: &std::path::Path, name: &str) -> PathBuf {
+    if let Ok(entries) = std::fs::read_dir(cache) {
+        for stale in entries.flatten() {
+            if stale.file_name().to_string_lossy().starts_with(name) {
+                let _ = std::fs::remove_file(stale.path());
+            }
+        }
+    }
+    let moment = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    cache.join(format!("{name}-{moment}.png"))
 }
 
 fn surface(display: DisplayId) -> WindowOptions {
@@ -319,6 +344,29 @@ fn shade(chosen: Option<Bounds<Pixels>>) -> Vec<gpui::Div> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_still_is_never_written_where_one_was_drawn_from_before() {
+        let cache = std::env::temp_dir().join(format!("cae-picker-{}", std::process::id()));
+        std::fs::create_dir_all(&cache).unwrap();
+
+        // What every earlier version wrote, and what a killed run leaves.
+        std::fs::write(cache.join("eDP-1.png"), b"old").unwrap();
+        std::fs::write(cache.join("eDP-1-123.png"), b"older").unwrap();
+        // Another screen's, which is not this one's to tidy.
+        std::fs::write(cache.join("HDMI-A-1-9.png"), b"theirs").unwrap();
+
+        let first = somewhere_new(&cache, "eDP-1");
+        assert!(!first.exists(), "a picture is already there to be drawn from");
+        assert!(cache.join("HDMI-A-1-9.png").exists(), "another screen's still was swept");
+        std::fs::write(&first, b"new").unwrap();
+
+        let second = somewhere_new(&cache, "eDP-1");
+        assert_ne!(first, second, "the same path twice is the stale picture bug");
+        assert!(!first.exists(), "the last still was left behind");
+
+        std::fs::remove_dir_all(&cache).ok();
+    }
 
     #[test]
     fn a_drag_makes_the_same_rectangle_whichever_way_it_is_pulled() {

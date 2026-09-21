@@ -30,11 +30,16 @@ impl Power {
     /// two cannot both be driving.
     fn choose(&mut self, profile: String, cx: &mut Context<Self>) {
         let dynamic = self.feeds.services.read(cx).value.power.dynamic;
+        // The profile is read back on the slow feed, which is far too slow
+        // for something the person has just clicked: without the nudge the
+        // dial stayed where it was for up to a tick, which reads as a miss.
+        let sooner = self.feeds.sooner.clone();
         cx.background_spawn(async move {
             if dynamic {
                 services::set_dynamic(false);
             }
             services::set_power_profile(&profile);
+            sooner.ask();
         })
         .detach();
     }
@@ -134,6 +139,7 @@ impl Render for Power {
         let services = self.feeds.services.read(cx).value.clone();
         let power = &services.power;
         let dynamic = power.dynamic;
+        let sooner = self.feeds.sooner.clone();
 
         let tier = match power.dynamic_tier.as_str() {
             "yield" => "paused — Max performance on",
@@ -179,7 +185,14 @@ impl Render for Power {
                         <div
                             base={dial("auto_mode", dynamic)}
                             id="auto"
-                            onClick={move |_, _, cx| cx.background_spawn(async move { services::set_dynamic(!dynamic) }).detach()}
+                            onClick={move |_, _, cx| {
+                                let sooner = sooner.clone();
+                                cx.background_spawn(async move {
+                                    services::set_dynamic(!dynamic);
+                                    sooner.ask();
+                                })
+                                .detach()
+                            }}
                         />
                     </div>
                 })}
