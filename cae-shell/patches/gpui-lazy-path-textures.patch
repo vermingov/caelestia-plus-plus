@@ -1,0 +1,32 @@
+GPUI makes two textures the size of the window for drawing paths the first
+time a window draws anything at all: one to rasterize into, and an MSAA one
+four times its size to resolve from. It makes them whether the scene has a
+path in it or not, and keeps them for as long as the window lives.
+
+For a shell that is a lot of video memory spent on nothing. Most of its
+windows have no path in them, and some are the size of a screen — the lock,
+the screenshot picker — where the two come to forty-six megabytes a screen.
+
+So they are made the first time a frame has a path to draw. A frame without
+one never looks at them, and the code that draws paths already copes with
+their not being there.
+
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -1338,8 +1331,14 @@ impl WgpuRenderer {
+             }
+         };
+ 
+-        // Now that we know the surface is healthy, ensure intermediate textures exist
+-        self.ensure_intermediate_textures();
++        // Now that we know the surface is healthy, ensure intermediate textures
++        // exist — if anything is going to be drawn into them. They are the
++        // size of the window, and the MSAA one four times over: for a window
++        // the size of a screen that is tens of megabytes of video memory, kept
++        // for as long as the window lives, for a scene with no paths in it.
++        if !scene.paths.is_empty() {
++            self.ensure_intermediate_textures();
++        }
+ 
+         let frame_view = frame
+             .texture

@@ -30,8 +30,13 @@ patches="$here/patches"
 rev=$(sed -n 's/.*zed", rev = "\([0-9a-f]*\)".*/\1/p' "$here/app/Cargo.toml" | head -1)
 [[ -n $rev ]] || { echo "vendor: no gpui revision in app/Cargo.toml" >&2; exit 1; }
 
-if [[ -f $fork/.caelestia-patched && $(cat "$fork/.caelestia-patched") == "$rev" ]]; then
-    echo "vendor: $fork is already $rev with the patch"
+# What the copy is made of: the revision, and the patches by their contents.
+# A patch added or changed is a different copy, which a machine that already
+# has one must make again — keyed on the revision alone, a new patch never
+# reached anybody who had built the shell before it.
+made_of="$rev $(cat "$patches"/*.patch | sha256sum | cut -c1-16)"
+if [[ -f $fork/.caelestia-patched && $(cat "$fork/.caelestia-patched") == "$made_of" ]]; then
+    echo "vendor: $fork is already $rev with the patches"
     exit 0
 fi
 
@@ -93,9 +98,9 @@ for patch_file in "$patches"/*.patch; do
     echo ">> Applying $(basename "$patch_file")"
     # Fuzz off: a patch that lands in roughly the right place is how a
     # fix silently stops being applied after an upstream bump.
-    patch -p1 -F0 -d "$staging" < "$patch_file"
+    patch -p1 -F0 --no-backup-if-mismatch -d "$staging" < "$patch_file"
 done
-printf '%s\n' "$rev" > "$staging/.caelestia-patched"
+printf '%s\n' "$made_of" > "$staging/.caelestia-patched"
 
 rm -rf "$fork"
 mkdir -p "$(dirname "$fork")"
