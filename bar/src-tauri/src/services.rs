@@ -316,9 +316,7 @@ fn read_bluetooth() -> Bluetooth {
 pub fn set_discovering(on: bool) {
     // `scan on` blocks holding the adapter, so it is left running and killed
     // by the matching `scan off` rather than waited on.
-    let _ = std::process::Command::new("sh")
-        .args(["-c", &format!("setsid -f bluetoothctl scan {} >/dev/null 2>&1", if on { "on" } else { "off" })])
-        .spawn();
+    crate::children::detached(std::process::Command::new("setsid").args(["-f", "bluetoothctl", "scan", if on { "on" } else { "off" }]));
 }
 
 pub fn forget_device(address: &str) {

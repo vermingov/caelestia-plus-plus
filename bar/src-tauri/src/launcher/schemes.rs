@@ -81,17 +81,7 @@ pub fn apply_variant(variant: &str) {
 /// nothing, but it takes long enough that waiting would hold the launcher
 /// open past its close animation.
 fn spawn(args: &[&str]) {
-    let joined: Vec<String> = args.iter().map(|a| shell_quote(a)).collect();
-    let _ = Command::new("sh")
-        .args(["-c", &format!("setsid -f caelestia {} >/dev/null 2>&1", joined.join(" "))])
-        .spawn();
-}
-
-fn shell_quote(word: &str) -> String {
-    if word.chars().all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c)) {
-        return word.to_string();
-    }
-    format!("'{}'", word.replace('\'', r"'\''"))
+    crate::children::detached(Command::new("setsid").args(["-f", "caelestia"]).args(args));
 }
 
 #[cfg(test)]
@@ -112,12 +102,5 @@ mod tests {
         let (scheme, variant) = current();
         assert!(!scheme.trim().is_empty(), "no current scheme reported");
         assert!(!variant.is_empty());
-    }
-
-    #[test]
-    fn arguments_with_spaces_survive_the_shell() {
-        assert_eq!(shell_quote("mocha"), "mocha");
-        assert_eq!(shell_quote("two words"), "'two words'");
-        assert_eq!(shell_quote("it's"), r"'it'\''s'");
     }
 }

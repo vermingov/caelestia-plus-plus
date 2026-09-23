@@ -28,6 +28,15 @@ ExecStart=%h/.local/bin/cae-shell
 # log rather than spin.
 Restart=on-failure
 RestartSec=1s
+# Stopping the shell stops the shell, and nothing it started for somebody.
+# Apps are started in scopes of their own, but one started by an older
+# shell, or one that forked before it moved itself (as Chromium does), is
+# still in this unit's group — and the default ends every process in the
+# group on a restart, so updating the shell used to close the apps it had
+# opened. The shell's own helpers do not need it: the recorder and the
+# volume follower die with the thread that started them, and the lid holder
+# goes when its pipe to the shell closes.
+KillMode=process
 Slice=session.slice
 # The bar is what the screen is drawn from; it should not wait behind a
 # compile.

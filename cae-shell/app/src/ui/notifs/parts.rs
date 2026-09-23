@@ -235,15 +235,15 @@ pub fn body(id: u32, text: &str) -> impl IntoElement + use<> {
 ///
 /// The address was written by whoever sent the notification, so it is never
 /// handed to a shell: only to `xdg-open`, as one argument, and only if it is
-/// the kind of link a notification has any business containing. Waited for,
-/// away from the thread that draws, because a child that is never waited on
-/// stays in the process table for as long as the shell runs.
+/// the kind of link a notification has any business containing. Started the
+/// way an app is, away from the thread that draws: the browser it opens may
+/// be starting for the first time.
 fn open_link(address: String, cx: &App) {
     let lower = address.to_ascii_lowercase();
     if !["https://", "http://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme)) {
         return;
     }
-    cx.background_spawn(async move { drop(std::process::Command::new("xdg-open").arg(address).status()) }).detach();
+    cx.background_spawn(async move { cae_core::children::launch("xdg-open", &["xdg-open", &address]) }).detach();
 }
 
 #[cfg(test)]

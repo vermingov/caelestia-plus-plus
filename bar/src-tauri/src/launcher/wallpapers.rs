@@ -108,10 +108,7 @@ pub fn current() -> Option<String> {
 /// Detached, like a scheme change: setting a wallpaper regenerates a palette
 /// and rewrites every themed config, which outlasts the launcher's close.
 pub fn set(path: &str) {
-    let quoted = format!("'{}'", path.replace('\'', r"'\''"));
-    let _ = std::process::Command::new("sh")
-        .args(["-c", &format!("setsid -f caelestia wallpaper -f {quoted} >/dev/null 2>&1")])
-        .spawn();
+    crate::children::detached(std::process::Command::new("setsid").args(["-f", "caelestia", "wallpaper", "-f", path]));
 }
 
 /// Enough SHA-256 to find a cache directory. The CLI names them by the hash

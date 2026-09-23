@@ -78,8 +78,11 @@ pub fn toggle_pause() {
     ask(&["-p"]);
 }
 
+/// In a scope of its own, as an app is: a recording must not end because
+/// the shell restarted in the middle of it.
 fn ask(how: &[&str]) {
-    let _ = std::process::Command::new("setsid").args(["-f", "caelestia", "record"]).args(how).status();
+    let argv: Vec<&str> = ["caelestia", "record"].into_iter().chain(how.iter().copied()).collect();
+    crate::children::launch("recorder", &argv);
 }
 
 /// Plays one, with whatever the settings say plays video, or with whatever
@@ -92,8 +95,9 @@ pub fn play(recording: &Path) {
     if words.is_empty() {
         words.push("xdg-open".to_string());
     }
-    let (program, arguments) = words.split_first().expect("one word at least");
-    let _ = std::process::Command::new("setsid").arg("-f").arg(program).args(arguments).arg(recording).status();
+    let recording = recording.to_string_lossy();
+    let argv: Vec<&str> = words.iter().map(String::as_str).chain([recording.as_ref()]).collect();
+    crate::children::launch(argv[0], &argv);
 }
 
 /// Every recording there is, newest first.

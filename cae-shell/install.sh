@@ -120,6 +120,13 @@ echo ">> Building cae-shell"
 cargo build --release --manifest-path "$here/Cargo.toml" --bin cae-shell
 built="$here/target/release/cae-shell"
 
+# An installed unit follows the checkout, so that an update carries what
+# changed in how the shell is run, and before the restart that would use it.
+if [[ -f $service ]] && ! cmp -s "$here/cae-shell.service" "$service"; then
+    install -m644 "$here/cae-shell.service" "$service"
+    systemctl --user daemon-reload
+fi
+
 # Nothing to do, and so nothing to restart: a build that changed nothing is
 # what most runs of this are.
 if [[ -x $target ]] && cmp -s "$built" "$target"; then

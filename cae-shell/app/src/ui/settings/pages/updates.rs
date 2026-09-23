@@ -53,7 +53,10 @@ impl Updates {
         let terminal = self.reach.store.read(cx).terminal();
         cx.background_spawn(async move {
             let run = "cae; printf '\\nEnter closes this window. '; read -r _";
-            let _ = std::process::Command::new("setsid").arg("-f").args(&terminal).args(["sh", "-c", run]).status();
+            // In a scope of its own: the update ends by restarting the shell,
+            // and a terminal that was part of the shell's service went with it.
+            let argv: Vec<&str> = terminal.iter().map(String::as_str).chain(["sh", "-c", run]).collect();
+            cae_core::children::launch("cae-update", &argv);
         })
         .detach();
     }

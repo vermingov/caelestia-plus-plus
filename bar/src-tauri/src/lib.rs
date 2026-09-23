@@ -486,9 +486,7 @@ fn diag(window: WebviewWindow, message: String) {
 
 #[tauri::command(async)]
 fn run(command: String) {
-    let _ = std::process::Command::new("sh")
-        .args(["-c", &format!("setsid -f {command} >/dev/null 2>&1")])
-        .spawn();
+    children::launch("caelestia-bar", &["sh", "-c", &command]);
 }
 
 pub fn start() {

@@ -36,20 +36,10 @@ pub fn run(action: &Action, config: &Config) -> Outcome {
     }
 }
 
-/// Out of this process's tree, so nothing it starts dies with the launcher or
-/// inherits its layer-surface environment.
+/// Out of this process's tree and out of its service, so nothing it starts
+/// dies with the launcher. As argv, with no shell in between to re-read it.
 fn spawn(argv: &[&str]) {
-    let joined: Vec<String> = argv.iter().map(|a| quote(a)).collect();
-    let _ = std::process::Command::new("sh")
-        .args(["-c", &format!("setsid -f {} >/dev/null 2>&1", joined.join(" "))])
-        .spawn();
-}
-
-fn quote(word: &str) -> String {
-    if !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:=".contains(c)) {
-        return word.to_string();
-    }
-    format!("'{}'", word.replace('\'', r"'\''"))
+    crate::children::launch(argv[0], argv);
 }
 
 #[cfg(test)]
@@ -82,15 +72,6 @@ mod tests {
     fn an_action_with_no_command_does_nothing() {
         let config = Config::load();
         assert!(matches!(run(&action(&[]), &config), Outcome::Nothing));
-    }
-
-    #[test]
-    fn arguments_survive_the_shell_intact() {
-        assert_eq!(quote("firefox"), "firefox");
-        assert_eq!(quote("--new-window"), "--new-window");
-        assert_eq!(quote("two words"), "'two words'");
-        assert_eq!(quote(""), "''");
-        assert_eq!(quote("rm -rf ~; echo"), r"'rm -rf ~; echo'");
     }
 
     #[test]

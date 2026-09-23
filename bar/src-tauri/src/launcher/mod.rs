@@ -389,7 +389,7 @@ impl Launcher {
                         entry.exec.clone()
                     };
                     // On the graphics card it was given, if it was given one.
-                    spawn_detached(&format!("{}{command}", crate::gpus::launch_prefix(id)));
+                    spawn_detached(id, &format!("{}{command}", crate::gpus::launch_prefix(id)));
                     self.usage.record(id);
                 }
             }
@@ -428,7 +428,7 @@ impl Launcher {
         }
         let terminal = self.config.terminal.join(" ");
         let quoted = expression.replace('\'', r"'\''");
-        spawn_detached(&format!("{terminal} fish -C \"exec qalc -i '{quoted}'\""));
+        spawn_detached("qalc", &format!("{terminal} fish -C \"exec qalc -i '{quoted}'\""));
         true
     }
 }
@@ -464,15 +464,11 @@ fn copy_to_clipboard(text: &str) {
     let _ = child.wait();
 }
 
-/// Out of this process's tree: the launcher hides immediately, and nothing it
-/// starts should die with it or inherit its layer-surface environment.
-fn spawn_detached(command: &str) {
-    if let Err(e) = std::process::Command::new("sh")
-        .args(["-c", &format!("setsid -f {command} >/dev/null 2>&1")])
-        .spawn()
-    {
-        eprintln!("caelestia-launcher: cannot start {command}: {e}");
-    }
+/// Out of this process's tree and out of its service: the launcher hides
+/// immediately, and nothing it starts should die with it. `name` is what the
+/// app is, for the scope it runs in.
+fn spawn_detached(name: &str, command: &str) {
+    crate::children::launch(name, &["sh", "-c", command]);
 }
 
 #[cfg(feature = "tauri-ui")]
