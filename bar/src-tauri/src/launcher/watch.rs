@@ -7,15 +7,20 @@
 //! installs an app, so that write is the signal worth listening to.
 //!
 //! Watching costs one inotify descriptor per directory and wakes nothing up
-//! until a file appears, so it is cheaper than the rebuild-on-close it
-//! replaces.
+//! until a file is written, so it is cheaper than the rebuild-on-close it
+//! replaces. Asked of the kernel directly, for the four things that change
+//! which entries there are and nothing else: the watcher this replaced also
+//! heard every time anything so much as opened an entry to read it.
 
+use std::fs::File;
+use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 #[cfg(feature = "tauri-ui")]
 use std::sync::Mutex;
 use std::time::Duration;
 
-use notify::{Event, EventKind, RecursiveMode, Watcher};
 #[cfg(feature = "tauri-ui")]
 use tauri::{AppHandle, Manager};
 
@@ -29,13 +34,30 @@ use super::Launcher;
 /// end of it is the difference between one rebuild and two hundred.
 const SETTLE: Duration = Duration::from_millis(250);
 
-/// Whether an event can change which apps exist. A plain write to an entry
-/// already listed still counts — an update can rename one or hide it.
-fn touches_entries(event: &Event) -> bool {
-    if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)) {
-        return false;
+/// A file appearing, being written, going, or being renamed in or out.
+const CHANGES: u32 =
+    libc::IN_CREATE | libc::IN_CLOSE_WRITE | libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_MOVED_TO;
+
+/// The fixed part of an `inotify_event`; the name follows it, `len` bytes.
+const HEADER: usize = std::mem::size_of::<libc::inotify_event>();
+
+/// Whether a buffer of events says anything about a desktop entry. A plain
+/// write to an entry already listed still counts — an update can rename one
+/// or hide it — and a queue that overflowed may have said anything.
+fn touches_entries(events: &[u8]) -> bool {
+    let mut at = 0;
+    while at + HEADER <= events.len() {
+        // SAFETY: the kernel writes whole events, and the header is read
+        // unaligned from within the bounds just checked.
+        let event = unsafe { std::ptr::read_unaligned(events[at..].as_ptr().cast::<libc::inotify_event>()) };
+        let name = &events[at + HEADER..(at + HEADER + event.len as usize).min(events.len())];
+        let name = &name[..name.iter().position(|byte| *byte == 0).unwrap_or(name.len())];
+        if event.mask & libc::IN_Q_OVERFLOW != 0 || name.ends_with(b".desktop") {
+            return true;
+        }
+        at += HEADER + event.len as usize;
     }
-    event.paths.iter().any(|p| p.extension().and_then(|e| e.to_str()) == Some("desktop"))
+    false
 }
 
 /// Calls `on_change` once per burst of desktop-entry changes under `dirs`,
@@ -44,27 +66,52 @@ fn touches_entries(event: &Event) -> bool {
 /// Split out from the thread below so the debouncing and the filtering can be
 /// tested against a real directory rather than reasoned about.
 pub fn watch_dirs(dirs: Vec<PathBuf>, mut on_change: impl FnMut()) -> Result<(), String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut watcher = notify::recommended_watcher(tx).map_err(|e| e.to_string())?;
+    // SAFETY: a plain system call; the descriptor is owned from here on.
+    let descriptor = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    // SAFETY: a descriptor just made and owned by nothing else.
+    let mut inotify = unsafe { File::from_raw_fd(descriptor) };
 
     // A directory that does not exist yet is not an error: plenty of machines
     // have no `~/.local/share/applications` until something writes one. The
     // rest are still watched.
-    let watched = dirs.iter().filter(|dir| watcher.watch(dir, RecursiveMode::NonRecursive).is_ok()).count();
+    let watched = dirs
+        .iter()
+        .filter_map(|dir| std::ffi::CString::new(dir.as_os_str().as_bytes()).ok())
+        // SAFETY: a valid descriptor and a NUL-terminated path.
+        .filter(|dir| unsafe { libc::inotify_add_watch(inotify.as_raw_fd(), dir.as_ptr(), CHANGES) } >= 0)
+        .count();
     if watched == 0 {
         return Err("no application directory could be watched".to_string());
     }
 
-    while let Ok(event) = rx.recv() {
-        if !event.map(|e| touches_entries(&e)).unwrap_or(false) {
+    // Room for a few dozen events with long names at a time.
+    let mut events = vec![0u8; 16 * 1024];
+    loop {
+        let read = read_events(&mut inotify, &mut events)?;
+        if !touches_entries(&events[..read]) {
             continue;
         }
         // Drain the rest of the burst before reading anything, so a
         // multi-package install rebuilds the list once.
-        while rx.recv_timeout(SETTLE).is_ok() {}
+        while crate::children::readable(&inotify, Some(SETTLE)) {
+            read_events(&mut inotify, &mut events)?;
+        }
         on_change();
     }
-    Ok(())
+}
+
+/// The next events there are, waiting for them. A read cut short by a
+/// signal is read again rather than taken for the end of watching.
+fn read_events(inotify: &mut File, events: &mut [u8]) -> Result<usize, String> {
+    loop {
+        match inotify.read(events) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            read => return read.map_err(|error| error.to_string()),
+        }
+    }
 }
 
 /// Watches every directory the app list is built from and swaps in a fresh

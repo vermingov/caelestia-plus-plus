@@ -19,8 +19,6 @@ png = "0.17"
 # Small copies of wallpapers, for a page of them. The version and the formats
 # GPUI already builds, so nothing is compiled for it twice.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-# Watching the desktop-entry directories for the launcher.
-notify = { version = "7", default-features = false }
 # Asking whether that is the password, the way everything else on the machine
 # asks: the same rules, the same lockout, and no need for the shell to be
 # privileged.
