@@ -67,6 +67,9 @@ pub struct State {
     /// and what the launcher reads to stay out of it.
     #[serde(skip)]
     pub fullscreen: Vec<String>,
+    /// Every output there is, by name, as the compositor last said.
+    #[serde(skip)]
+    pub outputs: Vec<String>,
 }
 
 /// What is in front of the person: the focused workspace, and the special
@@ -396,23 +399,42 @@ pub fn read_state() -> State {
         .collect();
     workspaces.sort_by_key(|w| w.id);
 
-    let active = serde_json::from_str::<serde_json::Value>(&active_window)
+    State {
+        view: View { workspace: focused_id, special: open_special },
+        workspaces,
+        specials,
+        active: parse_active(&active_window),
+        keyboard: read_keyboard(),
+        desktops: seen_desktops(&monitors, &clients),
+        fullscreen: screens_taken_whole(&monitors, &clients),
+        outputs: monitors
+            .iter()
+            .filter_map(|monitor| monitor.get("name").and_then(serde_json::Value::as_str).map(str::to_string))
+            .collect(),
+    }
+}
+
+/// What is in front, from `j/activewindow`'s reply.
+fn parse_active(reply: &str) -> Active {
+    serde_json::from_str::<serde_json::Value>(reply)
         .ok()
         .map(|w| Active {
             title: w.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
             class: w.get("class").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    State {
-        view: View { workspace: focused_id, special: open_special },
-        workspaces,
-        specials,
-        active,
-        keyboard: read_keyboard(),
-        desktops: seen_desktops(&monitors, &clients),
-        fullscreen: screens_taken_whole(&monitors, &clients),
-    }
+/// `last`, with what a window's new title can have changed read again: the
+/// title in front, and the keyboard's locks, which Hyprland announces with
+/// no event of their own and were only ever seen in passing.
+///
+/// Two small questions where the whole picture is six, one of them every
+/// window there is. A terminal that animates its title, as a running agent
+/// or a progress bar does, retitles its window several times a second, all
+/// day.
+fn read_retitled(last: &State) -> State {
+    State { active: parse_active(&request("j/activewindow").unwrap_or_default()), keyboard: read_keyboard(), ..last.clone() }
 }
 
 /// The outputs with nothing lying on their desktop: no window on the
@@ -428,7 +450,9 @@ fn screens_taken_whole(monitors: &[serde_json::Value], clients: &[serde_json::Va
     let id_of = |owner: &serde_json::Value, workspace: &str| owner.get(workspace).and_then(|w| w.get("id")).and_then(serde_json::Value::as_i64);
     let whole = |client: &&serde_json::Value| {
         let flag = |name: &str| client.get(name).and_then(serde_json::Value::as_bool).unwrap_or(false);
-        let fullscreen = client.get("fullscreen").and_then(serde_json::Value::as_i64).unwrap_or(0) > 0;
+        // The mode is 1 for maximised and 2 for fullscreen, both when both.
+        // Maximised still has the bar above it and the launcher over it.
+        let fullscreen = client.get("fullscreen").and_then(serde_json::Value::as_i64).unwrap_or(0) & 2 != 0;
         flag("mapped") && !flag("hidden") && fullscreen
     };
     let taken: Vec<i64> = clients.iter().filter(whole).filter_map(|client| id_of(client, "workspace")).collect();
@@ -598,15 +622,15 @@ pub fn watch(mut on_change: impl FnMut(State)) {
         last = fresh.clone();
         on_change(fresh);
 
-        for line in BufReader::new(stream).lines().map_while(Result::ok) {
-            let name = line.split(">>").next().unwrap_or_default();
-            if !INTERESTING.iter().any(|e| name.starts_with(e)) {
-                continue;
-            }
-            let fresh = read_state();
-            // Hyprland is chatty — a single window move is several lines. Only
-            // a change that the bar would actually draw differently is worth
-            // waking the webview for.
+        let mut events = BufReader::new(stream);
+        while let Some(burst) = next_burst(&mut events, INTERESTING) {
+            let fresh = match burst {
+                Burst::Nothing => continue,
+                Burst::Retitled => read_retitled(&last),
+                Burst::Moved => read_state(),
+            };
+            // Only a change that the bar would actually draw differently is
+            // worth waking it for.
             if fresh != last {
                 last = fresh.clone();
                 on_change(fresh);
@@ -615,9 +639,103 @@ pub fn watch(mut on_change: impl FnMut(State)) {
     }
 }
 
+/// What a run of event lines can have changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Burst {
+    Nothing,
+    /// Only windows' titles.
+    Retitled,
+    /// Anything else the bar draws.
+    Moved,
+}
+
+fn burst_of(line: &str, interesting: &[&str]) -> Burst {
+    let name = line.split(">>").next().unwrap_or_default();
+    if name.starts_with("windowtitle") {
+        Burst::Retitled
+    } else if interesting.iter().any(|event| name.starts_with(event)) {
+        Burst::Moved
+    } else {
+        Burst::Nothing
+    }
+}
+
+/// How long the rest of a burst is waited for once its first line is in.
+/// Hyprland says one action in several lines — a workspace switch is
+/// `workspace`, `workspacev2`, `activewindow`, `activewindowv2` and more —
+/// written one after another; each used to cost a full reading of the state.
+const BURST: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// Reads one burst of event lines and says what it can have changed, or
+/// nothing once the stream has ended.
+fn next_burst(events: &mut BufReader<UnixStream>, interesting: &[&str]) -> Option<Burst> {
+    let mut burst = None;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        // The end of the stream ends the burst; it is the end of everything
+        // only once the burst it cut short has been said.
+        if events.read_line(&mut line).unwrap_or(0) == 0 {
+            return burst;
+        }
+        let this = burst_of(&line, interesting);
+        burst = Some(burst.map_or(this, |so_far| so_far.max(this)));
+        // Whatever is already buffered is part of it, and so is whatever
+        // arrives within the moment it takes Hyprland to write the rest.
+        if events.buffer().is_empty() && !crate::children::readable(events.get_ref(), Some(BURST)) {
+            return burst;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const WATCHED: &[&str] = &["workspace", "activewindow", "windowtitle", "fullscreen"];
+
+    /// Everything written before the reader looks is one burst, and costs
+    /// one reading of the state whatever it is made of.
+    #[test]
+    fn a_switch_of_workspace_is_read_once_not_once_a_line() {
+        let (mut hyprland, shell) = UnixStream::pair().unwrap();
+        hyprland.write_all(b"workspace>>2\nworkspacev2>>2,2\nactivewindow>>kitty,fish\nactivewindowv2>>55b0\n").unwrap();
+        let mut events = BufReader::new(shell);
+        assert_eq!(next_burst(&mut events, WATCHED), Some(Burst::Moved));
+
+        drop(hyprland);
+        assert_eq!(next_burst(&mut events, WATCHED), None, "the end of the stream is the end");
+    }
+
+    #[test]
+    fn a_burst_of_titles_is_only_a_retitling() {
+        let (mut hyprland, shell) = UnixStream::pair().unwrap();
+        hyprland.write_all(b"windowtitle>>55b0\nwindowtitlev2>>55b0,working\n").unwrap();
+        let mut events = BufReader::new(shell);
+        assert_eq!(next_burst(&mut events, WATCHED), Some(Burst::Retitled));
+
+        // A title that comes with anything else is read in full.
+        hyprland.write_all(b"windowtitlev2>>55b0,done\nfullscreen>>1\n").unwrap();
+        assert_eq!(next_burst(&mut events, WATCHED), Some(Burst::Moved));
+
+        hyprland.write_all(b"submap>>resize\n").unwrap();
+        assert_eq!(next_burst(&mut events, WATCHED), Some(Burst::Nothing));
+    }
+
+    /// Lines that come apart in time are bursts of their own, so the second
+    /// change is not waited for behind the first.
+    #[test]
+    fn lines_that_come_apart_are_bursts_of_their_own() {
+        let (mut hyprland, shell) = UnixStream::pair().unwrap();
+        let mut events = BufReader::new(shell);
+        hyprland.write_all(b"windowtitle>>55b0\n").unwrap();
+        assert_eq!(next_burst(&mut events, WATCHED), Some(Burst::Retitled));
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            hyprland.write_all(b"workspace>>3\n").unwrap();
+        });
+        assert_eq!(next_burst(&mut events, WATCHED), Some(Burst::Moved));
+    }
 
     #[test]
     fn a_known_layout_becomes_its_code() {
@@ -658,7 +776,10 @@ mod tests {
         assert_eq!(screens_taken_whole(&monitors, &[window(1, false, 0)]), [] as [&str; 0]);
         assert_eq!(screens_taken_whole(&monitors, &[window(1, false, 2)]), ["eDP-1"]);
         // A fullscreen window is counted whether or not it floats.
-        assert_eq!(screens_taken_whole(&monitors, &[window(4, true, 1)]), ["DP-2"]);
+        assert_eq!(screens_taken_whole(&monitors, &[window(4, true, 2)]), ["DP-2"]);
+        // A maximised one leaves the bar in view, and is not.
+        assert_eq!(screens_taken_whole(&monitors, &[window(4, false, 1)]), [] as [&str; 0]);
+        assert_eq!(screens_taken_whole(&monitors, &[window(4, false, 3)]), ["DP-2"]);
         // One screen taken says nothing about the other.
         assert_eq!(screens_taken_whole(&monitors, &[window(4, false, 2)]), ["DP-2"]);
 
