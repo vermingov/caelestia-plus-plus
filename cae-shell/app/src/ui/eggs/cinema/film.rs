@@ -33,18 +33,34 @@ static PLAYING: AtomicBool = AtomicBool::new(false);
 /// Plays it on the output somebody is looking at, as Hyprland says, or on
 /// the first there is where nothing says. Does nothing while it is already
 /// playing.
+///
+/// A cinema that cannot play says why, in a notification: typing the word
+/// and seeing nothing at all is indistinguishable from the word not having
+/// been heard.
 pub fn play() {
     if PLAYING.swap(true, Ordering::AcqRel) {
         return;
     }
     let started = std::thread::Builder::new().name("cinema".to_string()).spawn(move || {
+        // Let go of it however this ends, a panic included, or it would
+        // never play again until the shell restarted.
+        let _playing = Playing;
         if let Err(error) = run(cae_core::hypr::focused_monitor()) {
             eprintln!("cae: the cinema: {error}");
+            cae_core::tell::tell("The cinema could not play", &error, "movie", cae_core::tell::How::Warned);
         }
-        PLAYING.store(false, Ordering::Release);
     });
     if let Err(error) = started {
         eprintln!("cae: the cinema could not start: {error}");
+        PLAYING.store(false, Ordering::Release);
+    }
+}
+
+/// While it lives, the cinema is playing.
+struct Playing;
+
+impl Drop for Playing {
+    fn drop(&mut self) {
         PLAYING.store(false, Ordering::Release);
     }
 }
