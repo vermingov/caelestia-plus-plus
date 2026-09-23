@@ -7,7 +7,7 @@
 //! the shell has always written, and asks for the same installer. Keeping
 //! the lid open is a `systemd-inhibit` held for as long as the switch is on.
 
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 use crate::{services, tell};
@@ -184,8 +184,8 @@ fn install(feature: &str) {
         .status();
 }
 
-/// What holds the lid open: one `systemd-inhibit` that sleeps, for as long
-/// as the switch is on.
+/// What holds the lid open: one `systemd-inhibit`, for as long as the switch
+/// is on.
 fn holder() -> &'static Mutex<Option<Child>> {
     static HOLDER: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
     HOLDER.get_or_init(|| Mutex::new(None))
@@ -200,25 +200,20 @@ fn hold_the_lid(on: bool) {
     if !on {
         return;
     }
-    let mut asking = Command::new("systemd-inhibit");
-    asking.args([
-        "--what=handle-lid-switch:sleep:idle",
-        "--who=Caelestia",
-        "--why=Stay awake on lid close",
-        "sleep",
-        "infinity",
-    ]);
-    // It must not outlive the shell. Killing it on the way out covers an
-    // orderly exit; this covers the rest, because the signal comes from the
-    // kernel rather than from anything the dying process still has to run.
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        asking.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-            Ok(())
-        });
-    }
-    let started = asking.spawn();
+    // Held for as long as `cat` has a pipe from this process to read, which
+    // is for as long as this process lives, however it ends: the kernel
+    // closes the pipe, `cat` reads the end of it, and the inhibitor goes.
+    //
+    // Not the parent-death signal it was. That follows the thread that
+    // started the child, not the process, and this is started from a thread
+    // that ends straight after — so at every startup the holder was killed
+    // the moment it was made, and the switch said on while the lid was not
+    // held at all.
+    let started = Command::new("systemd-inhibit")
+        .args(["--what=handle-lid-switch:sleep:idle", "--who=Caelestia", "--why=Stay awake on lid close", "cat"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn();
     *held = started.map_err(|error| eprintln!("cae: cannot hold the lid open: {error}")).ok();
 }
 
