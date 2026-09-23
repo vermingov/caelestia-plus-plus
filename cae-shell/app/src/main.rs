@@ -47,6 +47,43 @@ fn tame_the_heap() {
     }
 }
 
+/// Puts the directory this was installed in at the front of the PATH that
+/// everything it starts is given, when the session left it off.
+///
+/// The shell's own programs are installed beside it — `caelestia`,
+/// `caelestia-tools` — and it runs them by name. A Hyprland started from a
+/// display manager hands on a PATH without ~/.local/bin, and a systemd user
+/// service is given systemd's, which never had it. So the easter-egg watcher
+/// could not be found, the old script standing in for it could not find the
+/// shell to knock on either, and typing the word did nothing at all. Where a
+/// packaged `caelestia` is installed too, it was that one that ran, not the
+/// one built with this shell. The QML shell looked in ~/.local/bin before
+/// PATH for the same reason.
+///
+/// Only where it is missing altogether: a PATH that has it somewhere is the
+/// user's, in the order they chose.
+fn find_our_own_first() {
+    let Some(home) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)) else {
+        return;
+    };
+    let Some(path) = with_first(std::env::var_os("PATH").as_deref(), &home) else { return };
+    // SAFETY: called before any thread is started, so nothing can be reading
+    // the environment while it changes.
+    unsafe { std::env::set_var("PATH", path) };
+}
+
+/// `path` with `home` in front of it, or nothing when there is nothing to
+/// change. An empty or missing PATH is left alone: the lookup falls back to
+/// the system's own directories then, and a PATH of just `home` would lose
+/// them.
+fn with_first(path: Option<&std::ffi::OsStr>, home: &std::path::Path) -> Option<std::ffi::OsString> {
+    let path = path.filter(|path| !path.is_empty())?;
+    if std::env::split_paths(path).any(|entry| entry == home) {
+        return None;
+    }
+    std::env::join_paths(std::iter::once(home.to_path_buf()).chain(std::env::split_paths(path))).ok()
+}
+
 /// Asks the kernel to end this process when the shell that started it dies.
 ///
 /// While cae is taking Quickshell's place a piece at a time, Quickshell is
@@ -113,6 +150,7 @@ fn main() {
         std::process::exit(1);
     }
 
+    find_our_own_first();
     say::start();
     tame_the_heap();
     die_with_the_shell();
@@ -172,4 +210,37 @@ fn main() {
             ui::eggs::watch();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    use super::*;
+
+    const HOME: &str = "/home/someone/.local/bin";
+
+    fn first(path: &str) -> Option<String> {
+        with_first(Some(OsStr::new(path)), Path::new(HOME)).map(|path| path.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn a_session_without_it_is_given_it_first() {
+        // What a systemd user service is handed on a display-manager session.
+        assert_eq!(first("/usr/local/bin:/usr/bin").as_deref(), Some("/home/someone/.local/bin:/usr/local/bin:/usr/bin"));
+    }
+
+    #[test]
+    fn a_path_that_has_it_anywhere_is_left_in_its_own_order() {
+        assert_eq!(first("/home/someone/.local/bin:/usr/bin"), None);
+        assert_eq!(first("/usr/bin:/home/someone/.local/bin"), None);
+        assert_eq!(first("/usr/bin:/home/someone/.local/bin/"), None, "a trailing slash is the same directory");
+    }
+
+    #[test]
+    fn no_path_is_not_made_into_a_path_of_one() {
+        assert_eq!(first(""), None);
+        assert_eq!(with_first(None, Path::new(HOME)), None);
+    }
 }
