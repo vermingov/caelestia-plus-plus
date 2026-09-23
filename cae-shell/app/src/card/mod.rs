@@ -1,50 +1,34 @@
 //! The graphics card, spoken to directly.
 //!
 //! The rest of the shell draws through wgpu, and for a window that changes
-//! when somebody does something that is the right tool. The background
-//! changes sixty times a second for as long as the desktop is in view, and
-//! at that rate what wgpu does around every frame — tracking each resource,
+//! when somebody does something that is the right tool. What is drawn here
+//! changes sixty times a second — the background's helix, the cinema — and
+//! at that rate what wgpu does around every frame, tracking each resource,
 //! validating each command, making an encoder and a view and a staging
-//! buffer — cost more than the drawing did: half a millisecond of processor
-//! a frame. Here a frame is a handful of calls to the driver and a copy into
-//! memory the card reads directly.
+//! buffer, cost more than the drawing did. Here a frame is a handful of calls
+//! to the driver and a copy into memory the card reads directly.
 //!
-//! What lives here is made once: the device, the three pipelines and what a
-//! picture is uploaded with. A screen's own swapchain is `paint::Canvas`.
+//! What lives here is what any of that needs: the instance, the device, the
+//! memory a frame writes, pictures, render passes and pipelines, and a
+//! canvas for a Wayland surface of the drawer's own (`canvas`), whose frames
+//! reach the compositor handed over directly where it and the card can do
+//! that (`direct`) and through a swapchain everywhere else (`chain`). What is
+//! drawn, and with which shaders, is the drawer's.
 
-use std::ffi::c_void;
+mod canvas;
+mod chain;
+mod direct;
+mod frame;
+
+use std::ffi::{CStr, c_void};
 use std::ptr::NonNull;
 use std::rc::Rc;
 
 use ash::vk;
-use bytemuck::{Pod, Zeroable};
 
-/// What the two shaders are compiled from, once, when the card is chosen.
-const SCENE: &str = include_str!("scene.wgsl");
-const PICTURE: &str = include_str!("picture.wgsl");
-
-/// The immediates the scene's shaders read, in the order `scene.wgsl`
-/// declares them.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
-pub struct Scene {
-    pub size: [f32; 2],
-    pub axis_origin: [f32; 2],
-    pub axis_direction: [f32; 2],
-    pub linearise: f32,
-    pub spare: f32,
-    pub deep: [f32; 4],
-    pub primary: [f32; 4],
-    pub hot: [f32; 4],
-}
-
-/// The picture shader's immediates: how far one picture has taken over from
-/// the one before it.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
-pub struct Change {
-    pub done: f32,
-}
+pub use canvas::{Canvas, Spec};
+pub use direct::{ARGB8888, Wayland, XRGB8888};
+pub use frame::{Fault, Frame, Painted};
 
 /// The loader and the instance: what a surface is made with, before there is
 /// a card to show it.
@@ -59,7 +43,7 @@ impl Vulkan {
     pub fn new() -> Result<Rc<Vulkan>, String> {
         // SAFETY: loading the system's Vulkan loader, which is what it is for.
         let entry = unsafe { ash::Entry::load() }.map_err(|error| format!("no Vulkan here: {error}"))?;
-        let application = vk::ApplicationInfo::default().application_name(c"cae background").api_version(vk::API_VERSION_1_1);
+        let application = vk::ApplicationInfo::default().application_name(c"cae").api_version(vk::API_VERSION_1_1);
         let extensions = [ash::khr::surface::NAME.as_ptr(), ash::khr::wayland_surface::NAME.as_ptr()];
         let asked = vk::InstanceCreateInfo::default().application_info(&application).enabled_extension_names(&extensions);
         // SAFETY: a well-formed create info whose pointers outlive the call.
@@ -89,7 +73,7 @@ impl Drop for Vulkan {
     }
 }
 
-/// The card chosen to show the background, and everything made on it once.
+/// The card chosen to draw on, and what every drawer needs made on it.
 pub struct Card {
     pub vulkan: Rc<Vulkan>,
     pub physical: vk::PhysicalDevice,
@@ -101,23 +85,10 @@ pub struct Card {
     /// Whether the surface encodes what it is given, in which case the
     /// shaders must hand it linear light.
     pub encodes: bool,
-    pub render_pass: vk::RenderPass,
-    /// The same drawing, for an image handed straight to the compositor
-    /// rather than through a swapchain: it ends in a layout another process
-    /// may read, not the one presenting wants.
-    pub render_pass_out: vk::RenderPass,
     /// How an image's memory is handed to another process, where the card
     /// can do that.
     pub exports: Option<ash::khr::external_memory_fd::Device>,
-    pub scene_layout: vk::PipelineLayout,
-    pub backdrop: vk::Pipeline,
-    pub shapes: vk::Pipeline,
-    picture_set_layout: vk::DescriptorSetLayout,
-    pub picture_layout: vk::PipelineLayout,
-    pub picture: vk::Pipeline,
-    sampler: vk::Sampler,
     pub commands: vk::CommandPool,
-    descriptors: vk::DescriptorPool,
 }
 
 impl Card {
@@ -151,7 +122,7 @@ impl Card {
             .into_iter()
             .filter_map(|physical| Some((physical, can_show(physical)?)))
             .min_by_key(|(physical, _)| thrift(*physical))
-            .ok_or("no graphics card here can show the background")?;
+            .ok_or("no graphics card here can show it")?;
 
         let priorities = [1.0];
         let queues = [vk::DeviceQueueCreateInfo::default().queue_family_index(family).queue_priorities(&priorities)];
@@ -170,6 +141,45 @@ impl Card {
         // create info.
         let device = unsafe { instance.create_device(physical, &asked, None) }.map_err(|error| format!("the card refused a device: {error}"))?;
         Card::on(vulkan, physical, device, family, surface, exports).map(Rc::new)
+    }
+
+    /// Everything that follows the device, made in the order it is needed.
+    fn on(vulkan: &Rc<Vulkan>, physical: vk::PhysicalDevice, device: ash::Device, family: u32, surface: vk::SurfaceKHR, exports: bool) -> Result<Card, String> {
+        let instance = &vulkan.instance;
+        // SAFETY: a device just made on the instance, and a live surface.
+        let (queue, memory, formats) = unsafe {
+            (
+                device.get_device_queue(family, 0),
+                instance.get_physical_device_memory_properties(physical),
+                vulkan.surfaces.get_physical_device_surface_formats(physical, surface).unwrap_or_default(),
+            )
+        };
+        // What is drawn is already what the screen should show, so a surface
+        // that would encode it a second time is the second choice, and the
+        // shaders are told when they have been given one.
+        let given = [vk::Format::B8G8R8A8_UNORM, vk::Format::R8G8B8A8_UNORM];
+        let encoded = [vk::Format::B8G8R8A8_SRGB, vk::Format::R8G8B8A8_SRGB];
+        let pick = given.iter().chain(&encoded).find_map(|wanted| formats.iter().find(|offered| offered.format == *wanted).copied());
+        let pool = vk::CommandPoolCreateInfo::default().queue_family_index(family).flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        // SAFETY: a live device and a well-formed create info.
+        let commands = pick.map(|_| unsafe { device.create_command_pool(&pool, None) });
+        let (Some(format), Some(Ok(commands))) = (pick, commands) else {
+            // SAFETY: nothing has been made on the device that is still alive.
+            unsafe { device.destroy_device(None) };
+            return Err("the screen takes no format this draws in, or the card no commands".to_string());
+        };
+        Ok(Card {
+            vulkan: vulkan.clone(),
+            physical,
+            swapchains: ash::khr::swapchain::Device::new(instance, &device),
+            exports: exports.then(|| ash::khr::external_memory_fd::Device::new(instance, &device)),
+            device,
+            queue,
+            memory,
+            encodes: encoded.contains(&format.format),
+            format,
+            commands,
+        })
     }
 
     /// The memory type that `wanted` allows and has `flags`.
@@ -214,9 +224,8 @@ impl Card {
         }
     }
 
-    /// `pixels`, uploaded, for a picture pipeline to sample: cut to the size
-    /// of the screen already, and taken as they are, or decoded on the way
-    /// in where the surface will encode them again.
+    /// `pixels`, uploaded, for a shader to sample: taken as they are, or
+    /// decoded on the way in where the surface will encode them again.
     pub fn picture(self: &Rc<Card>, pixels: &image::RgbaImage) -> Result<Picture, String> {
         let (width, height) = pixels.dimensions();
         let format = if self.encodes { vk::Format::R8G8B8A8_SRGB } else { vk::Format::R8G8B8A8_UNORM };
@@ -351,210 +360,77 @@ impl Card {
         }
     }
 
-    /// A set binding two pictures for the picture pipeline: the one taking
-    /// over and the one it takes over from.
-    pub fn bind_pictures(&self, before: vk::ImageView, after: vk::ImageView) -> Result<vk::DescriptorSet, String> {
-        let layouts = [self.picture_set_layout];
-        let asked = vk::DescriptorSetAllocateInfo::default().descriptor_pool(self.descriptors).set_layouts(&layouts);
-        // SAFETY: a live device and pool; the set is freed by `free_set`.
-        let set = unsafe { self.device.allocate_descriptor_sets(&asked) }.map_err(|error| error.to_string())?[0];
-        self.rebind(set, before, after);
-        Ok(set)
-    }
-
-    pub fn rebind(&self, set: vk::DescriptorSet, before: vk::ImageView, after: vk::ImageView) {
-        let image = |view| [vk::DescriptorImageInfo::default().image_view(view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-        let (before, after) = (image(before), image(after));
-        let sampler = [vk::DescriptorImageInfo::default().sampler(self.sampler)];
-        let writes = [
-            vk::WriteDescriptorSet::default().dst_set(set).dst_binding(0).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&before),
-            vk::WriteDescriptorSet::default().dst_set(set).dst_binding(1).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&after),
-            vk::WriteDescriptorSet::default().dst_set(set).dst_binding(2).descriptor_type(vk::DescriptorType::SAMPLER).image_info(&sampler),
-        ];
-        // SAFETY: a set of this card's and views that are alive; a set is
-        // only rewritten once nothing in flight reads it.
-        unsafe { self.device.update_descriptor_sets(&writes, &[]) };
-    }
-
-    pub fn free_set(&self, set: vk::DescriptorSet) {
-        // SAFETY: a set from this pool that nothing in flight uses.
-        let _ = unsafe { self.device.free_descriptor_sets(self.descriptors, &[set]) };
+    /// The two render passes a canvas's frames are drawn in: one ending in
+    /// the layout a swapchain presents from, one in a layout another process
+    /// may read. `clearing` starts each frame from nothing, for a surface
+    /// that is seen through; without it the drawer covers every pixel itself.
+    pub fn passes(self: &Rc<Card>, clearing: bool) -> Result<Passes, String> {
+        let load = if clearing { vk::AttachmentLoadOp::CLEAR } else { vk::AttachmentLoadOp::DONT_CARE };
+        let attachment = [vk::AttachmentDescription::default()
+            .format(self.format.format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(load)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)];
+        let colour = [vk::AttachmentReference { attachment: 0, layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL }];
+        let subpass = [vk::SubpassDescription::default().pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS).color_attachments(&colour)];
+        let after_acquiring = [vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)];
+        let handed_over = [attachment[0].final_layout(vk::ImageLayout::GENERAL)];
+        let mut passes = Passes { card: self.clone(), presented: vk::RenderPass::null(), handed: vk::RenderPass::null() };
+        // SAFETY: a live device and create infos whose pointers outlive each
+        // call; what is made belongs to `passes`, which destroys it.
+        unsafe {
+            let presented = vk::RenderPassCreateInfo::default().attachments(&attachment).subpasses(&subpass).dependencies(&after_acquiring);
+            passes.presented = self.device.create_render_pass(&presented, None).map_err(|error| error.to_string())?;
+            let handed = vk::RenderPassCreateInfo::default().attachments(&handed_over).subpasses(&subpass);
+            passes.handed = self.device.create_render_pass(&handed, None).map_err(|error| error.to_string())?;
+        }
+        Ok(passes)
     }
 }
 
 impl Drop for Card {
     fn drop(&mut self) {
-        // SAFETY: every canvas, picture and buffer holds an `Rc` of the card,
-        // so all of them are gone, and the wait leaves nothing in flight.
+        // SAFETY: everything made on the card holds an `Rc` of it, so all of
+        // it is gone, and the wait leaves nothing in flight.
         unsafe {
             let _ = self.device.device_wait_idle();
-            self.device.destroy_descriptor_pool(self.descriptors, None);
             self.device.destroy_command_pool(self.commands, None);
-            self.device.destroy_sampler(self.sampler, None);
-            for pipeline in [self.backdrop, self.shapes, self.picture] {
-                self.device.destroy_pipeline(pipeline, None);
-            }
-            self.device.destroy_pipeline_layout(self.scene_layout, None);
-            self.device.destroy_pipeline_layout(self.picture_layout, None);
-            self.device.destroy_descriptor_set_layout(self.picture_set_layout, None);
-            self.device.destroy_render_pass(self.render_pass, None);
-            self.device.destroy_render_pass(self.render_pass_out, None);
             self.device.destroy_device(None);
         }
     }
 }
 
-impl Card {
-    /// Everything that follows the device, made in the order it is needed.
-    fn on(
-        vulkan: &Rc<Vulkan>,
-        physical: vk::PhysicalDevice,
-        device: ash::Device,
-        family: u32,
-        surface: vk::SurfaceKHR,
-        exports: bool,
-    ) -> Result<Card, String> {
-        let instance = &vulkan.instance;
-        // SAFETY: a device just made on the instance, and a live surface.
-        let (queue, memory, formats) = unsafe {
-            (
-                device.get_device_queue(family, 0),
-                instance.get_physical_device_memory_properties(physical),
-                vulkan.surfaces.get_physical_device_surface_formats(physical, surface).unwrap_or_default(),
-            )
-        };
-        // What is drawn is already what the screen should show, so a surface
-        // that would encode it a second time is the second choice, and the
-        // shaders are told when they have been given one.
-        let given = [vk::Format::B8G8R8A8_UNORM, vk::Format::R8G8B8A8_UNORM];
-        let encoded = [vk::Format::B8G8R8A8_SRGB, vk::Format::R8G8B8A8_SRGB];
-        let pick = given.iter().chain(&encoded).find_map(|wanted| formats.iter().find(|offered| offered.format == *wanted).copied());
-        let Some(format) = pick else {
-            // SAFETY: nothing has been made on the device yet.
-            unsafe { device.destroy_device(None) };
-            return Err("the screen takes no format the background is drawn in".to_string());
-        };
-        let encodes = encoded.contains(&format.format);
+/// A canvas's two render passes; see `Card::passes`. A pipeline made for
+/// one draws in the other too: they differ only in what happens after.
+pub struct Passes {
+    card: Rc<Card>,
+    pub presented: vk::RenderPass,
+    pub handed: vk::RenderPass,
+}
 
-        let mut card = Card {
-            vulkan: vulkan.clone(),
-            physical,
-            swapchains: ash::khr::swapchain::Device::new(instance, &device),
-            exports: exports.then(|| ash::khr::external_memory_fd::Device::new(instance, &device)),
-            device,
-            queue,
-            memory,
-            format,
-            encodes,
-            render_pass: vk::RenderPass::null(),
-            render_pass_out: vk::RenderPass::null(),
-            scene_layout: vk::PipelineLayout::null(),
-            backdrop: vk::Pipeline::null(),
-            shapes: vk::Pipeline::null(),
-            picture_set_layout: vk::DescriptorSetLayout::null(),
-            picture_layout: vk::PipelineLayout::null(),
-            picture: vk::Pipeline::null(),
-            sampler: vk::Sampler::null(),
-            commands: vk::CommandPool::null(),
-            descriptors: vk::DescriptorPool::null(),
-        };
-        // Everything below is destroyed by the card's `Drop` if it fails part
-        // of the way: destroying a null handle is allowed and does nothing.
-        card.fill(family)?;
-        Ok(card)
-    }
-
-    fn fill(&mut self, family: u32) -> Result<(), String> {
-        let card = self;
-        let device = &card.device;
-        let failed = |error: vk::Result| error.to_string();
-        // SAFETY: a live device, and create infos whose pointers outlive
-        // each call.
+impl Drop for Passes {
+    fn drop(&mut self) {
+        // SAFETY: nothing in flight is drawn in them: every canvas holding
+        // them waits for its frames before it goes.
         unsafe {
-            card.commands = device
-                .create_command_pool(&vk::CommandPoolCreateInfo::default().queue_family_index(family).flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER), None)
-                .map_err(failed)?;
-            let sizes = [
-                vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 16 },
-                vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: 8 },
-            ];
-            card.descriptors = device
-                .create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(8).pool_sizes(&sizes).flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET), None)
-                .map_err(failed)?;
-            card.sampler = device
-                .create_sampler(&vk::SamplerCreateInfo::default().mag_filter(vk::Filter::LINEAR).min_filter(vk::Filter::LINEAR), None)
-                .map_err(failed)?;
-
-            // One colour attachment, drawn over whole: the backdrop covers
-            // every pixel, so nothing need be cleared or kept from before.
-            let attachment = [vk::AttachmentDescription::default()
-                .format(card.format.format)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                .initial_layout(vk::ImageLayout::UNDEFINED)
-                .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)];
-            let colour = [vk::AttachmentReference { attachment: 0, layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL }];
-            let subpass = [vk::SubpassDescription::default().pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS).color_attachments(&colour)];
-            let after_acquiring = [vk::SubpassDependency::default()
-                .src_subpass(vk::SUBPASS_EXTERNAL)
-                .dst_subpass(0)
-                .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)];
-            card.render_pass = device
-                .create_render_pass(&vk::RenderPassCreateInfo::default().attachments(&attachment).subpasses(&subpass).dependencies(&after_acquiring), None)
-                .map_err(failed)?;
-            let handed_over = [attachment[0].final_layout(vk::ImageLayout::GENERAL)];
-            card.render_pass_out = device
-                .create_render_pass(&vk::RenderPassCreateInfo::default().attachments(&handed_over).subpasses(&subpass), None)
-                .map_err(failed)?;
-
-            let immediates = |size: usize, stages| [vk::PushConstantRange::default().stage_flags(stages).offset(0).size(size as u32)];
-            let scene_immediates = immediates(size_of::<Scene>(), vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
-            card.scene_layout = device
-                .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&scene_immediates), None)
-                .map_err(failed)?;
-            let bindings = [
-                (0, vk::DescriptorType::SAMPLED_IMAGE),
-                (1, vk::DescriptorType::SAMPLED_IMAGE),
-                (2, vk::DescriptorType::SAMPLER),
-            ]
-            .map(|(binding, kind)| {
-                vk::DescriptorSetLayoutBinding::default().binding(binding).descriptor_type(kind).descriptor_count(1).stage_flags(vk::ShaderStageFlags::FRAGMENT)
-            });
-            card.picture_set_layout = device
-                .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None)
-                .map_err(failed)?;
-            let picture_immediates = immediates(size_of::<Change>(), vk::ShaderStageFlags::FRAGMENT);
-            let set_layouts = [card.picture_set_layout];
-            card.picture_layout = device
-                .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts).push_constant_ranges(&picture_immediates), None)
-                .map_err(failed)?;
+            self.card.device.destroy_render_pass(self.presented, None);
+            self.card.device.destroy_render_pass(self.handed, None);
         }
-
-        let scene = shader(&card.device, SCENE)?;
-        let picture = shader(&card.device, PICTURE)?;
-        let made = (|| -> Result<(), String> {
-            card.backdrop = pipeline(card, card.scene_layout, scene, (c"cover", c"backdrop"), Draws::Screen)?;
-            card.shapes = pipeline(card, card.scene_layout, scene, (c"outline", c"shade"), Draws::Shapes)?;
-            card.picture = pipeline(card, card.picture_layout, picture, (c"cover", c"paint"), Draws::Screen)?;
-            Ok(())
-        })();
-        // SAFETY: modules are only needed while pipelines are made.
-        unsafe {
-            card.device.destroy_shader_module(scene, None);
-            card.device.destroy_shader_module(picture, None);
-        }
-        made
     }
 }
 
 /// WGSL compiled to SPIR-V, by the same compiler wgpu uses, and handed to
 /// the driver as a module.
-fn shader(device: &ash::Device, source: &str) -> Result<vk::ShaderModule, String> {
+pub fn shader(device: &ash::Device, source: &str) -> Result<vk::ShaderModule, String> {
     let module = naga::front::wgsl::parse_str(source).map_err(|error| error.emit_to_string(source))?;
     let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::IMMEDIATES)
         .validate(&module)
@@ -567,27 +443,43 @@ fn shader(device: &ash::Device, source: &str) -> Result<vk::ShaderModule, String
 }
 
 /// What a pipeline is fed.
-enum Draws {
-    /// One triangle over the whole screen, from nothing.
+pub enum Feed {
+    /// One triangle over the whole target, made up from nothing.
     Screen,
-    /// A strip of four corners per shape, from the shapes buffer, laid over
-    /// what is there by how much each covers.
-    Shapes,
+    /// A strip of four corners per instance, each instance `vec4s` of four
+    /// floats from the buffer at binding nought, at locations from nought.
+    Instances { vec4s: u32 },
 }
 
-fn pipeline(card: &Card, layout: vk::PipelineLayout, module: vk::ShaderModule, (vertex, fragment): (&std::ffi::CStr, &std::ffi::CStr), draws: Draws) -> Result<vk::Pipeline, String> {
+/// A pipeline as a drawer describes it.
+pub struct Pipe<'a> {
+    pub layout: vk::PipelineLayout,
+    pub module: vk::ShaderModule,
+    pub vertex: &'a CStr,
+    pub fragment: &'a CStr,
+    pub feed: Feed,
+    /// Laid over what is there, premultiplied, rather than replacing it.
+    pub blend: bool,
+}
+
+pub fn pipeline(card: &Card, pass: vk::RenderPass, pipe: &Pipe) -> Result<vk::Pipeline, String> {
     let stages = [
-        vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(module).name(vertex),
-        vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(module).name(fragment),
+        vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(pipe.module).name(pipe.vertex),
+        vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(pipe.module).name(pipe.fragment),
     ];
-    let shape_binding = [vk::VertexInputBindingDescription { binding: 0, stride: size_of::<super::helix::Shape>() as u32, input_rate: vk::VertexInputRate::INSTANCE }];
-    let shape_attributes = [0, 1, 2, 3].map(|location| vk::VertexInputAttributeDescription { location, binding: 0, format: vk::Format::R32G32B32A32_SFLOAT, offset: location * 16 });
-    let (input, topology, blend) = match draws {
-        Draws::Screen => (vk::PipelineVertexInputStateCreateInfo::default(), vk::PrimitiveTopology::TRIANGLE_LIST, false),
-        Draws::Shapes => (
-            vk::PipelineVertexInputStateCreateInfo::default().vertex_binding_descriptions(&shape_binding).vertex_attribute_descriptions(&shape_attributes),
+    let vec4s = match pipe.feed {
+        Feed::Screen => 0,
+        Feed::Instances { vec4s } => vec4s,
+    };
+    let binding = [vk::VertexInputBindingDescription { binding: 0, stride: vec4s * 16, input_rate: vk::VertexInputRate::INSTANCE }];
+    let attributes: Vec<vk::VertexInputAttributeDescription> = (0..vec4s)
+        .map(|location| vk::VertexInputAttributeDescription { location, binding: 0, format: vk::Format::R32G32B32A32_SFLOAT, offset: location * 16 })
+        .collect();
+    let (input, topology) = match pipe.feed {
+        Feed::Screen => (vk::PipelineVertexInputStateCreateInfo::default(), vk::PrimitiveTopology::TRIANGLE_LIST),
+        Feed::Instances { .. } => (
+            vk::PipelineVertexInputStateCreateInfo::default().vertex_binding_descriptions(&binding).vertex_attribute_descriptions(&attributes),
             vk::PrimitiveTopology::TRIANGLE_STRIP,
-            true,
         ),
     };
     let assembly = vk::PipelineInputAssemblyStateCreateInfo::default().topology(topology);
@@ -595,9 +487,9 @@ fn pipeline(card: &Card, layout: vk::PipelineLayout, module: vk::ShaderModule, (
     let raster = vk::PipelineRasterizationStateCreateInfo::default().polygon_mode(vk::PolygonMode::FILL).cull_mode(vk::CullModeFlags::NONE).line_width(1.);
     let samples = vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(vk::SampleCountFlags::TYPE_1);
     // Premultiplied: what a shape covers replaces as much of what is behind,
-    // and a glow adds light without covering anything.
+    // and light that covers nothing is added to it.
     let over = [vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(blend)
+        .blend_enable(pipe.blend)
         .src_color_blend_factor(vk::BlendFactor::ONE)
         .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
         .color_blend_op(vk::BlendOp::ADD)
@@ -617,8 +509,8 @@ fn pipeline(card: &Card, layout: vk::PipelineLayout, module: vk::ShaderModule, (
         .multisample_state(&samples)
         .color_blend_state(&blending)
         .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(card.render_pass);
+        .layout(pipe.layout)
+        .render_pass(pass);
     // SAFETY: a live device, and a create info whose pointers outlive the call.
     unsafe { card.device.create_graphics_pipelines(vk::PipelineCache::null(), &[asked], None) }
         .map(|made| made[0])
@@ -658,7 +550,8 @@ impl Drop for Mapped {
 }
 
 /// What an image handed to the compositor is drawn in: what Wayland calls
-/// XRGB8888, which every compositor that takes a dma-buf takes.
+/// XRGB8888 or ARGB8888 depending on whether it is seen through, and which
+/// every compositor that takes a dma-buf takes.
 pub const OUT_FORMAT: vk::Format = vk::Format::B8G8R8A8_UNORM;
 
 /// An image of the card's that the compositor reads directly.
@@ -717,4 +610,3 @@ impl Drop for Picture {
         }
     }
 }
-

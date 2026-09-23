@@ -16,57 +16,64 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ash::vk;
-use wayland_client::QueueHandle;
 use wayland_client::protocol::{wl_buffer, wl_surface};
+use wayland_client::{Dispatch, QueueHandle};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1};
 
-use super::card::{Card, Exported, Mapped, Scene};
-use super::desk::Desk;
-use super::paint::{Fault, Frame, PATIENCE, Painted, draw};
+use super::frame::{Fault, Frame, PATIENCE, Painted, draw};
+use super::{Card, Exported, Mapped, Spec};
 
 /// Two: one on the screen, one being drawn. A frame is only drawn once the
 /// compositor has shown the last, so a third would never be used.
 const IMAGES: usize = 2;
 
-/// XRGB8888 as a fourcc, which is what the images are drawn in.
-const XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
+/// The images as fourccs: XRGB8888 where nothing is to be seen through,
+/// ARGB8888, premultiplied as Wayland's always are, where it is.
+pub const XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
+pub const ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
 
-/// What handing over needs from the Wayland side.
-pub struct Wayland<'a> {
+/// What handing over needs from the Wayland side, whose state is `D`.
+pub struct Wayland<'a, D> {
     pub dmabuf: &'a zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
-    pub queue: &'a QueueHandle<Desk>,
+    pub queue: &'a QueueHandle<D>,
     pub surface: &'a wl_surface::WlSurface,
 }
 
 /// One image, its buffer on the surface, and what draws it.
-struct Out {
-    frame: Frame,
+struct Out<K> {
+    frame: Frame<K>,
     buffer: wl_buffer::WlBuffer,
     /// Whether the compositor still has it.
     held: Arc<AtomicBool>,
     _image: Exported,
 }
 
-pub struct Handed {
+pub struct Handed<K> {
     card: Rc<Card>,
     surface: wl_surface::WlSurface,
     extent: vk::Extent2D,
-    outs: Vec<Out>,
+    pass: vk::RenderPass,
+    outs: Vec<Out<K>>,
 }
 
-impl Handed {
-    pub fn new(card: &Rc<Card>, (width, height): (u32, u32), wayland: &Wayland) -> Result<Handed, Fault> {
+impl<K: Copy + PartialEq> Handed<K> {
+    pub fn new<D>(card: &Rc<Card>, (width, height): (u32, u32), wayland: &Wayland<D>, spec: &Spec) -> Result<Handed<K>, Fault>
+    where
+        D: Dispatch<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1, ()> + Dispatch<wl_buffer::WlBuffer, Arc<AtomicBool>> + 'static,
+    {
         let extent = vk::Extent2D { width, height };
-        let mut handed = Handed { card: card.clone(), surface: wayland.surface.clone(), extent, outs: Vec::new() };
+        let pass = spec.passes.handed;
+        let fourcc = if spec.see_through { ARGB8888 } else { XRGB8888 };
+        let mut handed = Handed { card: card.clone(), surface: wayland.surface.clone(), extent, pass, outs: Vec::new() };
         for _ in 0..IMAGES {
             let mut image = card.exported(width, height)?;
-            let frame = Frame::new(card, image.view, extent, card.render_pass_out)?;
+            let frame = Frame::new(card, image.view, extent, pass, spec.room)?;
             let fd = image.fd.take().ok_or("an image with no memory to hand over")?;
             let held = Arc::new(AtomicBool::new(false));
             let params = wayland.dmabuf.create_params(wayland.queue, ());
             params.add(fd.as_fd(), 0, image.offset as u32, image.stride as u32, 0, 0);
             let flags = zwp_linux_buffer_params_v1::Flags::empty();
-            let buffer = params.create_immed(width as i32, height as i32, XRGB8888, flags, wayland.queue, held.clone());
+            let buffer = params.create_immed(width as i32, height as i32, fourcc, flags, wayland.queue, held.clone());
             params.destroy();
             // The compositor has its own copy of the descriptor by now; this
             // one closes as it drops.
@@ -79,13 +86,7 @@ impl Handed {
     /// Draws a frame into whichever image the compositor is not holding and
     /// the card is done with, and hands it over, calling `sending` just
     /// before, as a swapchain would.
-    pub fn paint(
-        &mut self,
-        sending: impl FnOnce(),
-        scene: Option<Scene>,
-        fill: impl FnOnce(&Mapped),
-        record: impl FnOnce(&Card, &Frame),
-    ) -> Result<Painted, Fault> {
+    pub fn paint(&mut self, sending: impl FnOnce(), key: Option<K>, fill: impl FnOnce(&Mapped), record: impl FnOnce(&Card, &Frame<K>)) -> Result<Painted, Fault> {
         let device = &self.card.device;
         // SAFETY: fences of this target's own.
         let free = self.outs.iter().position(|out| {
@@ -93,7 +94,7 @@ impl Handed {
         });
         let Some(at) = free else { return Ok(Painted::NotNow) };
         let out = &mut self.outs[at];
-        draw(&self.card, &mut out.frame, self.extent, self.card.render_pass_out, scene, fill, record, &[], &[])?;
+        draw(&self.card, &mut out.frame, self.extent, self.pass, key, fill, record, &[], &[])?;
         // The compositor reads what it is given at once, and nothing tells it
         // to wait for the card: so the card is waited for here. A fraction of
         // a millisecond, spent asleep.
@@ -107,7 +108,9 @@ impl Handed {
         out.held.store(true, Ordering::Release);
         Ok(Painted::Shown)
     }
+}
 
+impl<K> Handed<K> {
     /// Waits until the card is done with every image.
     pub fn idle(&self) {
         let fences: Vec<vk::Fence> = self.outs.iter().map(|out| out.frame.done).collect();
@@ -116,7 +119,7 @@ impl Handed {
     }
 }
 
-impl Drop for Handed {
+impl<K> Drop for Handed<K> {
     fn drop(&mut self) {
         self.idle();
         for out in self.outs.drain(..) {

@@ -16,34 +16,40 @@
 //! over from another and not again. The rest of the time, which is most of a
 //! working day, the thread sleeps until somebody writes to it.
 
-mod card;
-mod desk;
-mod direct;
 mod helix;
+mod kit;
 mod paint;
 
 use std::ffi::c_void;
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_compositor, wl_output};
-use wayland_client::{Connection, EventQueue, Proxy, QueueHandle};
+use wayland_client::protocol::wl_compositor;
+use wayland_client::{Connection, Proxy, QueueHandle};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1;
 
-use desk::{Desk, Sheet};
+use crate::card::{self, Painted};
+use crate::desk::{self, Layer, Plan};
 pub use helix::Colours;
 use helix::Helix;
-use paint::{Painted, Painter};
+use paint::{Canvas, Painter};
+
+/// The compositor's side of the background: a surface under everything on
+/// every screen, each drawn on as a `Canvas`.
+type Desk = desk::Desk<Canvas>;
+type Sheet = desk::Sheet<Canvas>;
 
 /// The most one frame may move the helix on. A frame that was late must not
 /// make it jump.
 const LONGEST_STEP: f64 = 0.25;
+
+/// The name Quickshell's background went by, so that a compositor rule
+/// written for that one holds for this one.
+const NAMESPACE: &str = "caelestia-background";
 
 /// How long one picture takes to take over from another.
 const CHANGE: Duration = Duration::from_millis(700);
@@ -151,34 +157,6 @@ fn cut(picture: &image::DynamicImage, (width, height): (u32, u32)) -> image::Rgb
     picture.resize_to_fill(width, height, image::imageops::FilterType::CatmullRom).into_rgba8()
 }
 
-/// The compositor's globals bound, and a screen for every output there is
-/// already. One that comes later is an event.
-fn open(connection: &Connection) -> Result<(EventQueue<Desk>, Desk), String> {
-    let (globals, mut events) = registry_queue_init::<Desk>(connection).map_err(|error| error.to_string())?;
-    let queue = events.handle();
-    let missing = |error: wayland_client::globals::BindError| format!("the compositor lacks something: {error}");
-    let mut desk = Desk::new(
-        globals.bind(&queue, 4..=6, ()).map_err(missing)?,
-        globals.bind(&queue, 1..=4, ()).map_err(missing)?,
-        globals.bind(&queue, 1..=1, ()).map_err(missing)?,
-        globals.bind(&queue, 1..=1, ()).ok(),
-        // Version three exactly: the one that lists what it takes as a
-        // format and a modifier at a time, which is all this asks of it.
-        globals.bind(&queue, 3..=3, ()).ok(),
-    );
-    let outputs: Vec<(u32, u32)> = globals.contents().with_list(|all| {
-        let is_output = |global: &&wayland_client::globals::Global| global.interface == wl_output::WlOutput::interface().name;
-        all.iter().filter(is_output).map(|global| (global.name, global.version)).collect()
-    });
-    for (name, version) in outputs {
-        desk.output_came(globals.registry(), name, version, &queue);
-    }
-    // What the compositor takes as a dma-buf is said as the global is bound:
-    // heard now, before the first screen is given anything to draw on.
-    events.roundtrip(&mut desk).map_err(|error| error.to_string())?;
-    Ok((events, desk))
-}
-
 /// What the thread keeps between one frame and the next.
 struct Work {
     display: NonNull<c_void>,
@@ -254,7 +232,7 @@ impl Work {
         let size = canvas.size();
         let (shapes, axis) = self.helix.frame(size, time, colours);
         let with_alpha = |[r, g, b]: [f32; 3]| [r, g, b, 1.];
-        let scene = card::Scene {
+        let scene = kit::Scene {
             size: [size.0 as f32, size.1 as f32],
             axis_origin: axis.origin,
             axis_direction: axis.direction,
@@ -340,14 +318,14 @@ impl Work {
     /// Hangs the picture at `path` on every screen that does not have it,
     /// and says whether that was any of them.
     fn hang(&mut self, desk: &mut Desk, path: &Path) -> bool {
-        let mut without: Vec<&mut Sheet> =
-            desk.sheets().filter(|sheet| sheet.canvas.is_some() && sheet.hung.as_deref() != Some(path)).collect();
+        let mut without: Vec<&mut Canvas> =
+            desk.sheets().filter_map(|sheet| sheet.canvas.as_mut()).filter(|canvas| canvas.hung_from.as_deref() != Some(path)).collect();
         if without.is_empty() {
             return false;
         }
         // Whatever comes of it: a picture that cannot be opened is not
         // opened again with every frame.
-        without.iter_mut().for_each(|sheet| sheet.hung = Some(path.to_path_buf()));
+        without.iter_mut().for_each(|canvas| canvas.hung_from = Some(path.to_path_buf()));
         // Opened for as long as it takes to cut, and not kept: a photograph
         // opened up is a hundred megabytes.
         let picture = match image::open(path) {
@@ -357,8 +335,7 @@ impl Work {
                 return false;
             }
         };
-        for sheet in without {
-            let canvas = sheet.canvas.as_mut().expect("kept for having one");
+        for canvas in without {
             let pixels = cut(&picture, canvas.size());
             self.painter.hang(canvas, &pixels);
         }
@@ -382,13 +359,12 @@ impl Work {
             // before it destroys its surface.
             sheet.canvas = Some(unsafe { self.painter.canvas(self.display, surface) }?);
         }
-        sheet.fill(compositor, &self.queue);
-        // A picture on it was cut for the size it had.
-        sheet.hung = None;
+        sheet.fill(compositor, &self.queue, false);
         // A frame asked for before is answered all the same; until then the
-        // new one is drawn on as soon as it can be.
+        // new one is drawn on as soon as it can be. A picture hung on it was
+        // cut for the size it had, and goes with the size.
         sheet.asked = false;
-        let wayland = dmabuf.map(|dmabuf| direct::Wayland { dmabuf, queue: &self.queue, surface: &sheet.surface });
+        let wayland = dmabuf.map(|dmabuf| card::Wayland { dmabuf, queue: &self.queue, surface: &sheet.surface });
         self.painter.size(sheet.canvas.as_mut().expect("just made"), pixels, wayland)
     }
 }
@@ -461,7 +437,8 @@ fn rest(told: &Mutex<Told>, woken: &mut UnixStream, how_long: Duration) -> bool 
 
 fn run(told: &Mutex<Told>, woken: &mut UnixStream) -> Result<(), String> {
     let connection = Connection::connect_to_env().map_err(|error| error.to_string())?;
-    let (mut events, mut desk) = open(&connection)?;
+    let plan = Plan { layer: Layer::Background, namespace: NAMESPACE, on: None, see_through: false };
+    let (mut events, mut desk) = desk::open(&connection, plan)?;
     let mut work = Work {
         display: NonNull::new(connection.backend().display_ptr().cast::<c_void>()).ok_or("the connection has no display")?,
         queue: events.handle(),
@@ -486,35 +463,6 @@ fn run(told: &Mutex<Told>, woken: &mut UnixStream) -> Result<(), String> {
             told.wishes.clone()
         };
         work.show(&mut desk, &wishes)?;
-        wait(&connection, &events, woken, work.again)?;
+        desk::wait(&connection, &events, Some(woken), work.again)?;
     }
-}
-
-/// Sleeps until the compositor says something, somebody writes to `woken`,
-/// or it is `until`.
-fn wait(connection: &Connection, events: &EventQueue<Desk>, woken: &mut UnixStream, until: Option<Instant>) -> Result<(), String> {
-    connection.flush().map_err(|error| error.to_string())?;
-    // Nothing to wait for when something has already arrived.
-    let Some(reading) = events.prepare_read() else { return Ok(()) };
-
-    let listen = |fd: i32| libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
-    let mut heard = [listen(reading.connection_fd().as_raw_fd()), listen(woken.as_raw_fd())];
-    // Rounded up: a wait that ends a fraction early is a loop that spins.
-    let patience = until.map_or(-1, |until| until.saturating_duration_since(Instant::now()).as_millis() as i32 + 1);
-    // SAFETY: two descriptors that are open for as long as the call.
-    unsafe { libc::poll(heard.as_mut_ptr(), heard.len() as libc::nfds_t, patience) };
-
-    let [compositor, waker] = heard.map(|fd| fd.revents);
-    if compositor & (libc::POLLERR | libc::POLLHUP) != 0 {
-        return Err("the compositor has gone".to_string());
-    }
-    if compositor & libc::POLLIN != 0 {
-        reading.read().map_err(|error| error.to_string())?;
-    }
-    if waker != 0 {
-        // Only that it was written to matters, not how often.
-        let mut written = [0; 64];
-        while woken.read(&mut written).is_ok_and(|read| read == written.len()) {}
-    }
-    Ok(())
 }
