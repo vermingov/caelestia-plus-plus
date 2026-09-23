@@ -76,22 +76,34 @@ terminal or over ssh, `loginctl unlock-session`.
 
 ## The background
 
-Not GPUI's. The helix is a fragment shader, which GPUI has no way to run, and
-a picture the size of a screen is one it would keep a second copy of in
-memory. So the background has a thread, a Wayland connection and a
-layer-shell surface of its own under everything (`app/src/background/easel`),
-and draws there with the wgpu the rest of the shell is already drawn with.
-It shares nothing with the interface but what it is told to show: the
-wallpaper `caelestia wallpaper` last set, where `background.wallpaperEnabled`
-says so and the file is there, and otherwise the helix (`dnaEnabled`, in the
-scheme's primary colour or `dnaCustomColor`).
+Not GPUI's. The helix is a lit, focused scene of a few hundred shapes sixty
+times a second, and a picture the size of a screen is one GPUI would keep a
+second copy of in memory. So the background has a thread, a Wayland
+connection and a layer-shell surface of its own under everything
+(`app/src/background/easel`), and draws there on Vulkan directly — through
+wgpu, the per-frame bookkeeping cost more than the drawing. It shares nothing
+with the interface but what it is told to show: the wallpaper `caelestia
+wallpaper` last set, where `background.wallpaperEnabled` says so and the
+file is there, and otherwise the helix (`dnaEnabled`, in the scheme's primary
+colour or `dnaCustomColor`).
 
-The helix turns only on a screen whose desktop can be seen, which is one with
-nothing tiled or fullscreen on the workspace it shows: thirty frames a second
-at half the screen's size, fifteen on the battery, about one percent of a
-core. Under a window the thread sleeps until it is written to. A picture is
-cut to each screen's own pixels as it is hung, drawn while it takes over from
-the last one, and not again.
+The helix is a model of the molecule rather than a picture of one: B-DNA's
+proportions, ten and a half base pairs a turn and a wide and a narrow groove,
+seen through a lens that keeps its middle sharp and lets its ends go soft,
+the far one into the dark. Its shapes are worked out on the processor and
+sorted from far to near; the card shades each where it lies, and nothing is
+worked out for a pixel no shape covers.
+
+It turns only on a screen whose desktop can be seen, which is one with
+nothing tiled or fullscreen on the workspace it shows, and only when the
+compositor asks for a frame: at the screen's rate up to sixty a second, and
+not at all while the screen is off or the session is locked. Its commands
+are recorded once per image; a frame writes the shapes and hands the image
+to the compositor as a dma-buf, or through a swapchain where the compositor
+or the card cannot take that (`CAE_BACKGROUND_SWAPCHAIN=1` asks for the
+swapchain regardless). About one percent of a core while it turns, nothing
+while it does not. A picture is cut to each screen's own pixels as it is
+hung, drawn while it takes over from the last one, and not again.
 
 ## The utilities
 

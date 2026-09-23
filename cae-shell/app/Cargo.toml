@@ -43,6 +43,13 @@ lyon = "1.0"
 # and draws on it with wgpu. All of these are what GPUI is built on already,
 # at the versions it uses: nothing new is compiled.
 wgpu = "29"
+# The background itself is drawn on Vulkan directly: sixty frames a second
+# through wgpu cost more in wgpu than in drawing. The versions wgpu is built
+# on, so again nothing new is compiled: its Vulkan binding, the shader
+# compiler that turns the WGSL into SPIR-V, and plain-data casts.
+ash = "0.38"
+naga = { version = "29", features = ["wgsl-in", "spv-out"] }
+bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 raw-window-handle = "0.6"
 wayland-client = "0.31"

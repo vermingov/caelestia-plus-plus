@@ -7,24 +7,19 @@ mod clock;
 mod easel;
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use cae_core::launcher::wallpapers;
 use cae_core::{config, scheme};
-use gpui::{App, AppContext, AsyncApp, Context};
+use gpui::{App, AppContext, Context};
 
 use crate::feeds::Feeds;
 use crate::ours;
+use crate::ui::lock;
 
 const PIECE: &str = "background";
 
 /// The mark's own red, which is what the helix was first drawn in.
 const RED: [f32; 3] = [1., 0.329, 0.286];
-
-/// Thirty frames a second, and fifteen on the battery: it is a slow thing,
-/// and half as many frames is half the work.
-const ON_MAINS: Duration = Duration::from_millis(33);
-const ON_BATTERY: Duration = Duration::from_millis(66);
 
 /// What the settings ask to have behind everything, which may be nothing.
 ///
@@ -123,12 +118,9 @@ impl Background {
             (self.easel, self.wished) = (None, None);
             return;
         };
-        let on_battery = self.feeds.system.read(cx).value.battery.as_ref().is_some_and(|battery| !battery.on_mains);
-        let wishes = easel::Wishes {
-            showing,
-            seen: self.feeds.hypr.read(cx).value.desktops.clone(),
-            frame: if on_battery { ON_BATTERY } else { ON_MAINS },
-        };
+        // Locked, nothing of the desktop is seen, whatever lies on it.
+        let seen = if lock::is_locked(cx) { Vec::new() } else { self.feeds.hypr.read(cx).value.desktops.clone() };
+        let wishes = easel::Wishes { showing, seen };
         if self.wished.as_ref() == Some(&wishes) {
             return;
         }
@@ -144,7 +136,6 @@ impl Background {
 pub fn keep(cx: &mut App, feeds: &Feeds) {
     let background = cx.new(|cx| {
         cx.observe(&feeds.hypr, |background: &mut Background, _, cx| background.follow(cx)).detach();
-        cx.observe(&feeds.system, |background: &mut Background, _, cx| background.follow(cx)).detach();
         cx.observe(&feeds.settings, |background: &mut Background, _, cx| {
             background.asked_for = asked_for();
             background.follow(cx);
@@ -153,17 +144,23 @@ pub fn keep(cx: &mut App, feeds: &Feeds) {
         Background { feeds: feeds.clone(), asked_for: asked_for(), easel: None, wished: None, clocks: clock::keep(cx, feeds) }
     });
 
-    // Quickshell is asked again every so often whether the background is
-    // still its own, and nothing above happens on a quiet desktop to ask it.
-    // The loop holds the entity, which is what keeps it.
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        loop {
-            background.update(cx, |background, cx| background.follow(cx));
-            cx.background_executor().timer(Duration::from_secs(5)).await;
-        }
-    })
-    .detach();
+    background.update(cx, |background, cx| background.follow(cx));
+    // Nothing above happens on a quiet desktop, so the first moment it is
+    // known to be this shell's is a moment to look again.
+    let later = background.downgrade();
+    ours::once_ours(PIECE, cx, move |cx| drop(later.update(cx, |background, cx| background.follow(cx))));
+    // Nor when the session is locked, which hides every desktop at once.
+    let locking = background.downgrade();
+    lock::observe(cx, move |cx| drop(locking.update(cx, |background, cx| background.follow(cx))));
+    cx.set_global(Kept { _background: background });
 }
+
+/// What keeps the background for the life of the shell: held, never read.
+struct Kept {
+    _background: gpui::Entity<Background>,
+}
+
+impl gpui::Global for Kept {}
 
 #[cfg(test)]
 mod tests {

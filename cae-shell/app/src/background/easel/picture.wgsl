@@ -8,10 +8,11 @@ struct Change {
     done: f32,
 };
 
-@group(0) @binding(0) var<uniform> change: Change;
-@group(0) @binding(1) var before: texture_2d<f32>;
-@group(0) @binding(2) var after: texture_2d<f32>;
-@group(0) @binding(3) var pixels: sampler;
+var<immediate> change: Change;
+
+@group(0) @binding(0) var before: texture_2d<f32>;
+@group(0) @binding(1) var after: texture_2d<f32>;
+@group(0) @binding(2) var pixels: sampler;
 
 struct Corner {
     @builtin(position) position: vec4<f32>,
@@ -20,10 +21,10 @@ struct Corner {
 
 // One triangle that covers the screen, with (0, 0) at the top left of it.
 @vertex
-fn corner(@builtin(vertex_index) index: u32) -> Corner {
+fn cover(@builtin(vertex_index) index: u32) -> Corner {
     let x = f32(i32(index & 1u) * 4 - 1);
     let y = f32(i32(index >> 1u) * 4 - 1);
-    return Corner(vec4<f32>(x, y, 0.0, 1.0), vec2<f32>(x * 0.5 + 0.5, 0.5 - y * 0.5));
+    return Corner(vec4<f32>(x, y, 0.0, 1.0), vec2<f32>(x * 0.5 + 0.5, y * 0.5 + 0.5));
 }
 
 @fragment

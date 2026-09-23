@@ -716,6 +716,8 @@ dependencies = [
 name = "cae"
 version = "0.1.0"
 dependencies = [
+ "ash",
+ "bytemuck",
  "cae-core",
  "futures",
  "gpui",
@@ -725,6 +727,7 @@ dependencies = [
  "libc",
  "log",
  "lyon",
+ "naga",
  "raw-window-handle",
  "serde_json",
  "unicode-segmentation",

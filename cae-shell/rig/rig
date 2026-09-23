@@ -42,7 +42,8 @@ CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/cae-rig
 # compositor's goes two directories deeper than this.
 RUN=/tmp/cae-rig-$(id -u)
 # Spelt the way it will appear in a process list, which is what stops it.
-CAE=$(readlink -m "$HERE/../target/fast/cae-shell")
+# RIG_SHELL=PATH tries another build, a profiling one for instance.
+CAE=$(readlink -m "${RIG_SHELL:-$HERE/../target/fast/cae-shell}")
 USER_RUN=/run/user/$(id -u)
 # Where the shell inside keeps its settings: a home of its own.
 KEPT=$CACHE/home

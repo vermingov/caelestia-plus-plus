@@ -1,10 +1,15 @@
 //! The compositor's side of the background: a connection of its own, and on
 //! every screen a surface under everything else.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
 use wayland_client::globals::GlobalListContents;
-use wayland_client::protocol::{wl_compositor, wl_output, wl_region, wl_registry, wl_surface};
+use wayland_client::protocol::{wl_buffer, wl_callback, wl_compositor, wl_output, wl_region, wl_registry, wl_surface};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, delegate_noop};
 use wayland_protocols::wp::fractional_scale::v1::client::{wp_fractional_scale_manager_v1, wp_fractional_scale_v1};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -35,6 +40,12 @@ pub struct Sheet {
     /// How many of the screen's pixels one of those units is, in 120ths,
     /// where the compositor says so to a surface rather than of an output.
     scale: Option<u32>,
+    /// Whether the compositor has been asked to say when it wants the next
+    /// frame, and has not said yet. It says so at the screen's rate while
+    /// the surface is shown, and not while the screen is off.
+    pub asked: bool,
+    /// When a frame last went to the compositor.
+    pub drawn: Option<Instant>,
 }
 
 impl Sheet {
@@ -46,6 +57,13 @@ impl Sheet {
         // client round.
         let scaled = |length: u32| (length * scale + 60) / 120;
         (scaled(self.size.0), scaled(self.size.1))
+    }
+
+    /// Asks the compositor to say when it wants the next frame. Goes out
+    /// with the next commit, whoever makes it.
+    pub fn ask(&mut self, queue: &QueueHandle<Desk>, global: u32) {
+        self.surface.frame(queue, global);
+        self.asked = true;
     }
 
     /// Has the compositor stretch whatever is drawn to the size it gave, and
@@ -74,7 +92,7 @@ impl Drop for Sheet {
 
 pub struct Screen {
     /// What the registry calls the output, which is how its going is said.
-    global: u32,
+    pub global: u32,
     output: wl_output::WlOutput,
     /// What the compositor calls it: "eDP-1".
     pub name: String,
@@ -98,6 +116,10 @@ pub struct Desk {
     /// Not every compositor has one, and one without it scales by whole
     /// numbers, which its outputs say.
     fractions: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
+    /// Where frames can be handed over as dma-bufs, and whether the plain
+    /// kind this draws is one the compositor has said it takes.
+    pub dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
+    pub takes_plain: bool,
     pub screens: Vec<Screen>,
 }
 
@@ -107,13 +129,14 @@ impl Desk {
         layers: zwlr_layer_shell_v1::ZwlrLayerShellV1,
         viewporter: wp_viewporter::WpViewporter,
         fractions: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
+        dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
     ) -> Desk {
-        Desk { compositor, layers, viewporter, fractions, screens: Vec::new() }
+        Desk { compositor, layers, viewporter, fractions, dmabuf, takes_plain: false, screens: Vec::new() }
     }
 
-    /// What there is to draw on, on every screen that has been given a size.
-    pub fn canvases(&mut self) -> impl Iterator<Item = &mut Canvas> {
-        self.screens.iter_mut().filter_map(|screen| screen.sheet.as_mut()?.canvas.as_mut())
+    /// The surface on every screen that has one.
+    pub fn sheets(&mut self) -> impl Iterator<Item = &mut Sheet> {
+        self.screens.iter_mut().filter_map(|screen| screen.sheet.as_mut())
     }
 
     pub fn output_came(&mut self, registry: &wl_registry::WlRegistry, global: u32, version: u32, queue: &QueueHandle<Desk>) {
@@ -148,7 +171,19 @@ impl Desk {
         let fraction = self.fractions.as_ref().map(|fractions| fractions.get_fractional_scale(&surface, queue, global));
         // The first commit has no picture: it asks what size to be.
         surface.commit();
-        Sheet { canvas: None, hung: None, surface, layer, viewport, fraction, size: (0, 0), resized: false, scale: None }
+        Sheet {
+            canvas: None,
+            hung: None,
+            surface,
+            layer,
+            viewport,
+            fraction,
+            size: (0, 0),
+            resized: false,
+            scale: None,
+            asked: false,
+            drawn: None,
+        }
     }
 }
 
@@ -199,7 +234,10 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for Desk {
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
                 layer.ack_configure(serial);
-                if let Some(sheet) = &mut screen.sheet {
+                // Said again whenever anything on the output reserves a strip
+                // of it, at the same size as before: only a new size is
+                // something to make a new picture for.
+                if let Some(sheet) = screen.sheet.as_mut().filter(|sheet| sheet.size != (width, height)) {
                     (sheet.size, sheet.resized) = ((width, height), true);
                 }
             }
@@ -222,6 +260,52 @@ impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, u32> for Desk {
         let sheet = desk.screens.iter_mut().find(|screen| screen.global == *global).and_then(|screen| screen.sheet.as_mut());
         if let Some(sheet) = sheet.filter(|sheet| sheet.scale != Some(scale)) {
             (sheet.scale, sheet.resized) = (Some(scale), true);
+        }
+    }
+}
+
+impl Dispatch<wl_callback::WlCallback, u32> for Desk {
+    fn event(desk: &mut Self, _: &wl_callback::WlCallback, event: wl_callback::Event, global: &u32, _: &Connection, _: &QueueHandle<Self>) {
+        let wl_callback::Event::Done { .. } = event else { return };
+        let sheet = desk.screens.iter_mut().find(|screen| screen.global == *global).and_then(|screen| screen.sheet.as_mut());
+        if let Some(sheet) = sheet {
+            sheet.asked = false;
+        }
+    }
+}
+
+/// XRGB8888, as a fourcc, and the modifier that says "laid out plainly".
+const XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
+const LINEAR: u64 = 0;
+
+impl Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, ()> for Desk {
+    fn event(desk: &mut Self, _: &zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, event: zwp_linux_dmabuf_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let zwp_linux_dmabuf_v1::Event::Modifier { format, modifier_hi, modifier_lo } = event
+            && format == XRGB8888
+            && (u64::from(modifier_hi) << 32 | u64::from(modifier_lo)) == LINEAR
+        {
+            desk.takes_plain = true;
+        }
+    }
+}
+
+impl Dispatch<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1, ()> for Desk {
+    fn event(desk: &mut Self, _: &zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1, event: zwp_linux_buffer_params_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let zwp_linux_buffer_params_v1::Event::Failed = event {
+            // Swapchains from here on: whatever the compositor said, it will
+            // say it again.
+            eprintln!("cae: the background: the compositor would not take a frame directly, so it goes through a swapchain");
+            desk.takes_plain = false;
+        }
+    }
+}
+
+/// Whether the compositor still holds a frame handed to it, which it says it
+/// does not once it has let go.
+impl Dispatch<wl_buffer::WlBuffer, Arc<AtomicBool>> for Desk {
+    fn event(_: &mut Self, _: &wl_buffer::WlBuffer, event: wl_buffer::Event, held: &Arc<AtomicBool>, _: &Connection, _: &QueueHandle<Self>) {
+        if let wl_buffer::Event::Release = event {
+            held.store(false, Ordering::Release);
         }
     }
 }
