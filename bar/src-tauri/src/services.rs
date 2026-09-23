@@ -208,17 +208,6 @@ pub fn set_power_profile(profile: &str) {
 
 // ---- feature modes -------------------------------------------------------
 
-/// Parses `maxPerf: off; antiHeat: off; lidStay: on`.
-fn parse_features(status: &str) -> Vec<Feature> {
-    status
-        .split(';')
-        .filter_map(|part| {
-            let (id, state) = part.split_once(':')?;
-            Some(Feature { id: id.trim().to_string(), enabled: state.trim() == "on" })
-        })
-        .collect()
-}
-
 /// The state directory the shell keeps its modes in.
 fn state_dir() -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
@@ -582,15 +571,6 @@ mod tests {
     }
 
     #[test]
-    fn features_are_read_as_switches() {
-        let features = parse_features("maxPerf: off; antiHeat: off; lidStay: on");
-        assert_eq!(features.len(), 3);
-        assert_eq!(features[0].id, "maxPerf");
-        assert!(!features[0].enabled);
-        assert!(features[2].enabled);
-    }
-
-    #[test]
     fn a_missing_handler_is_not_an_answer() {
         // `qs` exits zero and prints this, so a caller that only checked the
         // exit status would take it for the handler's reply.
@@ -637,16 +617,13 @@ fn nodes(kind: &str) -> Vec<AudioNode> {
     // a person picks a device by the second of those.
     let long = output("pactl", &["list", &format!("{kind}s")]).unwrap_or_default();
     let mut descriptions: Vec<(String, String)> = Vec::new();
-    let (mut name, mut description) = (String::new(), String::new());
+    let mut name = String::new();
     for line in long.lines() {
         let line = line.trim();
         if let Some(value) = line.strip_prefix("Name: ") {
             name = value.to_string();
-        } else if let Some(value) = line.strip_prefix("Description: ") {
-            description = value.to_string();
-            if !name.is_empty() {
-                descriptions.push((std::mem::take(&mut name), std::mem::take(&mut description)));
-            }
+        } else if let Some(description) = line.strip_prefix("Description: ").filter(|_| !name.is_empty()) {
+            descriptions.push((std::mem::take(&mut name), description.to_string()));
         }
     }
 

@@ -28,6 +28,7 @@ fn now() -> u64 {
 }
 
 impl Usage {
+    #[cfg(test)]
     pub fn empty() -> Usage {
         Usage { launches: HashMap::new(), path: None }
     }
@@ -52,6 +53,7 @@ impl Usage {
 
     /// A launch is worth 100 when it happens and halves every fortnight, so a
     /// handful of recent launches outweighs a pile of stale ones.
+    #[cfg(test)]
     pub fn score(&self, id: &str) -> i64 {
         self.score_at(id, self.now_secs())
     }
