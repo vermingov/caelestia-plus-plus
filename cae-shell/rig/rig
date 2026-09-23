@@ -44,6 +44,11 @@ RUN=/tmp/cae-rig-$(id -u)
 # Spelt the way it will appear in a process list, which is what stops it.
 # RIG_SHELL=PATH tries another build, a profiling one for instance.
 CAE=$(readlink -m "${RIG_SHELL:-$HERE/../target/fast/cae-shell}")
+# What the shell inside may run: the shims before anything real. The shell
+# puts the directory it was installed in at the front of PATH when that is
+# missing from it, to run the programs installed beside it; listed here,
+# behind the shims, it is already there and nothing gets past them.
+SHIMMED=$HERE/shims:$PATH:$(dirname "$CAE")
 USER_RUN=/run/user/$(id -u)
 # Where the shell inside keeps its settings: a home of its own.
 KEPT=$CACHE/home
@@ -86,6 +91,17 @@ keep_a_copy() {
     cp -r "$real_state/caelestia/wallpaper" "$KEPT/state/caelestia/" 2>/dev/null
 }
 
+# Stops the shell inside, and only that one: by the runtime directory it
+# lives in, not by the path it was started from. RIG_SHELL may name the very
+# binary the desktop runs from, and a pattern on the path took the desktop's
+# own shell down with the rig's.
+stop_inside() {
+    local pid
+    for pid in $(pgrep -f "^$CAE"); do
+        { tr '\0' '\n' <"/proc/$pid/environ"; } 2>/dev/null | grep -qx "XDG_RUNTIME_DIR=$RUN" && kill "$pid"
+    done
+}
+
 # A shell starts with the real levels, and with somewhere to hear of
 # pretend ones.
 forget_levels() {
@@ -116,27 +132,27 @@ case "${1:-}" in
     up) up ;;
     down)
         [ -f "$RUN/hypr/rig/pid" ] && kill "$(cat "$RUN/hypr/rig/pid")" 2>/dev/null
-        pkill -f "^$CAE"; pkill -f "[r]ig-pointer $RUN/input"; pkill -f "[c]ae-rig/root/usr/bin/sway"; true ;;
+        stop_inside; pkill -f "[r]ig-pointer $RUN/input"; pkill -f "[c]ae-rig/root/usr/bin/sway"; true ;;
     cae)
         shift; up
         # Whichever way the last one was started: one left over from `serve`
         # still answers the sockets, and what is asked of the new shell is
         # then done by the old one.
-        pkill -f "^$CAE"; sleep 0.3
+        stop_inside; sleep 0.3
         keep_a_copy
         forget_levels
         # The shell under test may look at the machine and may not change it.
-        RIG_ASKED=$CACHE/asked.log RIG_PRETEND=$PRETEND RIG_REAL_PATH=$PATH PATH="$HERE/shims:$PATH" \
+        RIG_ASKED=$CACHE/asked.log RIG_PRETEND=$PRETEND RIG_REAL_PATH=$PATH PATH="$SHIMMED" \
             inside setsid -f "$CAE" --preview "$@" >"$CACHE/cae.log" 2>&1
         sleep 2 ;;
     serve)
         shift; up
-        pkill -f "^$CAE"; sleep 0.3
+        stop_inside; sleep 0.3
         # The real history is rewritten by whoever serves, and the real
         # pictures are pruned against it: neither may be this shell's.
         mkdir -p "$CACHE/served/state" "$CACHE/served/cache"
         forget_levels
-        RIG_ASKED=$CACHE/asked.log RIG_PRETEND=$PRETEND RIG_REAL_PATH=$PATH PATH="$HERE/shims:$PATH" \
+        RIG_ASKED=$CACHE/asked.log RIG_PRETEND=$PRETEND RIG_REAL_PATH=$PATH PATH="$SHIMMED" \
             RIG_STATE="$CACHE/served/state" XDG_CACHE_HOME="$CACHE/served/cache" \
             inside setsid -f dbus-run-session -- sh -c 'echo "$DBUS_SESSION_BUS_ADDRESS" >"$0"; exec "$@"' \
             "$RUN/bus" "$CAE" "$@" >"$CACHE/cae.log" 2>&1
