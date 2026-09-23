@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use cae_core::hypr;
 use gpui::{
-    AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, Entity, IntoElement, Render, Size, Styled,
+    AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, Entity, Global, IntoElement, Render, Size, Styled,
     Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, layer_shell::*,
     point, prelude::*, px,
 };
@@ -54,7 +54,17 @@ pub fn keep_on_every_output(cx: &mut App, screens: &Entity<Screens>, feeds: &Fee
         Surfaces { feeds: feeds.clone(), screens: HashMap::new() }
     });
     surfaces.update(cx, |surfaces, cx| surfaces.corners(cx));
+    cx.set_global(Kept { _surfaces: surfaces });
 }
+
+/// What keeps the surfaces, and so what they observe, for the life of the
+/// shell: held, never read. Without it they went the moment this returned,
+/// and with them every toast and the hot corner.
+struct Kept {
+    _surfaces: Entity<Surfaces>,
+}
+
+impl Global for Kept {}
 
 /// A layer surface down the right-hand edge of `display`, over everything:
 /// whether a notification may appear over a fullscreen window is a setting,
