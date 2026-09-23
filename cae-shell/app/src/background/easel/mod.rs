@@ -251,7 +251,7 @@ impl Work {
                 asked.set(true);
             }
         });
-        keep_track(sheet, painted, asked.get());
+        self.again = sooner(self.again, keep_track(sheet, painted, asked.get()));
     }
 
     /// The picture on every screen, cut for each, taking over from whatever
@@ -310,7 +310,7 @@ impl Work {
                     asked.set(true);
                 }
             });
-            keep_track(sheet, painted, asked.get());
+            self.again = sooner(self.again, keep_track(sheet, painted, asked.get()));
         }
         Ok(())
     }
@@ -377,24 +377,33 @@ fn handing_over(desk: &Desk) -> Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1> {
     desk.dmabuf.clone().filter(|_| desk.takes_plain && !asked_not_to)
 }
 
-/// Keeps track of a frame that was drawn, or has to be tried again.
-fn keep_track(sheet: &mut Sheet, painted: Painted, asked: bool) {
+/// Keeps track of a frame that was drawn, or has to be tried again, and
+/// says when to look again where nothing else will wake the thread for it.
+fn keep_track(sheet: &mut Sheet, painted: Painted, asked: bool) -> Option<Instant> {
     match painted {
         Painted::Shown => {
             sheet.drawn = Some(Instant::now());
             sheet.asked |= asked;
+            None
         }
-        // No image was free: the compositor lets go of one by saying so on
-        // the connection this thread sleeps on, which wakes it to try again —
-        // no timer needed.
-        Painted::NotNow => {
-            // A frame asked for and never sent would leave the request waiting
-            // on a commit that never comes: send it bare.
-            if asked {
-                sheet.surface.commit();
-                sheet.asked = true;
-            }
+        // No image was free. A frame asked for and never sent would leave
+        // the request waiting on a commit that never comes, so it goes bare,
+        // and its answer is the next try. Without one, a timer: the compositor
+        // may let go of an image without a word on the connection.
+        Painted::NotNow if asked => {
+            sheet.surface.commit();
+            sheet.asked = true;
+            None
         }
+        Painted::NotNow => Some(Instant::now() + card::LOOK_AGAIN),
+    }
+}
+
+/// The earlier of when to look again and `at`.
+fn sooner(again: Option<Instant>, at: Option<Instant>) -> Option<Instant> {
+    match (again, at) {
+        (Some(again), Some(at)) => Some(again.min(at)),
+        (again, at) => again.or(at),
     }
 }
 
@@ -442,7 +451,7 @@ fn run(told: &Mutex<Told>, woken: &mut UnixStream) -> Result<(), String> {
     let mut work = Work {
         display: NonNull::new(connection.backend().display_ptr().cast::<c_void>()).ok_or("the connection has no display")?,
         queue: events.handle(),
-        painter: Painter::new()?,
+        painter: Painter::new(desk.gpu)?,
         helix: Helix::default(),
         shown: None,
         turning: Turning::default(),
@@ -464,5 +473,20 @@ fn run(told: &Mutex<Told>, woken: &mut UnixStream) -> Result<(), String> {
         };
         work.show(&mut desk, &wishes)?;
         desk::wait(&connection, &events, Some(woken), work.again)?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sooner_of_two_is_kept_and_nothing_is_no_time() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(5);
+        assert_eq!(sooner(Some(later), Some(now)), Some(now));
+        assert_eq!(sooner(None, Some(later)), Some(later));
+        assert_eq!(sooner(Some(now), None), Some(now));
+        assert_eq!(sooner(None, None), None);
     }
 }

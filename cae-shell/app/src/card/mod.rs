@@ -23,15 +23,22 @@ mod frame;
 use std::ffi::{CStr, c_void};
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::{Mutex, PoisonError};
 
 use ash::vk;
 
 pub use canvas::{Canvas, Spec};
 pub use direct::{ARGB8888, Wayland, XRGB8888};
-pub use frame::{Fault, Frame, Painted};
+pub use frame::{Fault, Frame, LOOK_AGAIN, Painted};
 
 /// The loader and the instance: what a surface is made with, before there is
 /// a card to show it.
+///
+/// One for the whole process, shared by everything that draws here, and
+/// never destroyed. NVIDIA's driver tears down state that every instance in
+/// the process shares when any one of them goes: the cinema letting go of
+/// its own at the end of the film took GPUI's windows with it, and the shell
+/// fell over on a call to address nought on the thread that draws them.
 pub struct Vulkan {
     _entry: ash::Entry,
     pub instance: ash::Instance,
@@ -40,7 +47,24 @@ pub struct Vulkan {
 }
 
 impl Vulkan {
-    pub fn new() -> Result<Rc<Vulkan>, String> {
+    /// The instance, made the first time anything asks for it.
+    ///
+    /// Made under the lock: two threads that each made one, and threw the
+    /// spare away, would destroy an instance, which is the thing this exists
+    /// never to do. One that cannot be made is not remembered, and is tried
+    /// again by whoever asks next.
+    pub fn shared() -> Result<&'static Vulkan, String> {
+        static SHARED: Mutex<Option<&'static Vulkan>> = Mutex::new(None);
+        let mut shared = SHARED.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(vulkan) = *shared {
+            return Ok(vulkan);
+        }
+        let made: &'static Vulkan = Box::leak(Box::new(Vulkan::new()?));
+        *shared = Some(made);
+        Ok(made)
+    }
+
+    fn new() -> Result<Vulkan, String> {
         // SAFETY: loading the system's Vulkan loader, which is what it is for.
         let entry = unsafe { ash::Entry::load() }.map_err(|error| format!("no Vulkan here: {error}"))?;
         let application = vk::ApplicationInfo::default().application_name(c"cae").api_version(vk::API_VERSION_1_1);
@@ -50,7 +74,7 @@ impl Vulkan {
         let instance = unsafe { entry.create_instance(&asked, None) }.map_err(|error| format!("Vulkan refused an instance: {error}"))?;
         let surfaces = ash::khr::surface::Instance::new(&entry, &instance);
         let wayland = ash::khr::wayland_surface::Instance::new(&entry, &instance);
-        Ok(Rc::new(Vulkan { _entry: entry, instance, surfaces, wayland }))
+        Ok(Vulkan { _entry: entry, instance, surfaces, wayland })
     }
 
     /// A Vulkan surface for a Wayland one.
@@ -65,17 +89,9 @@ impl Vulkan {
     }
 }
 
-impl Drop for Vulkan {
-    fn drop(&mut self) {
-        // SAFETY: everything made from the instance holds an `Rc` of this,
-        // so nothing made from it is left.
-        unsafe { self.instance.destroy_instance(None) };
-    }
-}
-
 /// The card chosen to draw on, and what every drawer needs made on it.
 pub struct Card {
-    pub vulkan: Rc<Vulkan>,
+    pub vulkan: &'static Vulkan,
     pub physical: vk::PhysicalDevice,
     pub device: ash::Device,
     pub queue: vk::Queue,
@@ -91,10 +107,42 @@ pub struct Card {
     pub commands: vk::CommandPool,
 }
 
+/// A graphics card as the PCI bus knows it: whose it is, and which.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Gpu {
+    pub vendor: u32,
+    pub device: u32,
+}
+
+impl Gpu {
+    /// The card behind a device number: what the compositor gives as the one
+    /// it draws with.
+    pub fn of(number: u64) -> Option<Gpu> {
+        let (major, minor) = device_number(number);
+        let read = |what: &str| {
+            let text = std::fs::read_to_string(format!("/sys/dev/char/{major}:{minor}/device/{what}")).ok()?;
+            u32::from_str_radix(text.trim().trim_start_matches("0x"), 16).ok()
+        };
+        Some(Gpu { vendor: read("vendor")?, device: read("device")? })
+    }
+}
+
+/// A `dev_t` taken apart as glibc lays it out: twelve bits of major number
+/// and twenty of minor, each split across the two halves.
+fn device_number(number: u64) -> (u64, u64) {
+    let major = ((number >> 8) & 0xfff) | ((number >> 32) & 0xffff_f000);
+    let minor = (number & 0xff) | ((number >> 12) & 0xffff_ff00);
+    (major, minor)
+}
+
 impl Card {
-    /// The card that can show `surface` for the least power: on a laptop with
-    /// two, the one the screen is wired to, and the other stays asleep.
-    pub fn for_surface(vulkan: &Rc<Vulkan>, surface: vk::SurfaceKHR) -> Result<Rc<Card>, String> {
+    /// The card to draw `surface` on: the one the compositor draws with,
+    /// where it has said which (`theirs`). A frame from any other card
+    /// reaches it through a copy at best, and NVIDIA's, handed one from
+    /// another card, shows black. Where it has not said, the one that shows
+    /// the surface for the least power: on a laptop with two, the one the
+    /// screen is wired to, and the other stays asleep.
+    pub fn for_surface(vulkan: &'static Vulkan, surface: vk::SurfaceKHR, theirs: Option<Gpu>) -> Result<Rc<Card>, String> {
         let instance = &vulkan.instance;
         // SAFETY: the instance is alive for as long as `vulkan` is.
         let physicals = unsafe { instance.enumerate_physical_devices() }.map_err(|error| error.to_string())?;
@@ -109,20 +157,25 @@ impl Card {
                 (draws && shows).then_some(index)
             })
         };
-        let thrift = |physical: vk::PhysicalDevice| {
-            // SAFETY: as above.
-            match unsafe { instance.get_physical_device_properties(physical) }.device_type {
-                vk::PhysicalDeviceType::INTEGRATED_GPU => 0,
-                vk::PhysicalDeviceType::DISCRETE_GPU => 1,
-                vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
-                _ => 3,
-            }
+        // SAFETY: as above.
+        let properties = |physical: vk::PhysicalDevice| unsafe { instance.get_physical_device_properties(physical) };
+        let is_theirs = |physical: vk::PhysicalDevice| {
+            let properties = properties(physical);
+            theirs.is_some_and(|gpu| (gpu.vendor, gpu.device) == (properties.vendor_id, properties.device_id))
+        };
+        let thrift = |physical: vk::PhysicalDevice| match properties(physical).device_type {
+            vk::PhysicalDeviceType::INTEGRATED_GPU => 0,
+            vk::PhysicalDeviceType::DISCRETE_GPU => 1,
+            vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
+            _ => 3,
         };
         let (physical, family) = physicals
             .into_iter()
             .filter_map(|physical| Some((physical, can_show(physical)?)))
-            .min_by_key(|(physical, _)| thrift(*physical))
+            .min_by_key(|(physical, _)| (!is_theirs(*physical), thrift(*physical)))
             .ok_or("no graphics card here can show it")?;
+        let name = properties(physical).device_name_as_c_str().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        log::info!("card: {name}{}", if is_theirs(physical) { ", which the compositor draws with" } else { "" });
 
         let priorities = [1.0];
         let queues = [vk::DeviceQueueCreateInfo::default().queue_family_index(family).queue_priorities(&priorities)];
@@ -144,7 +197,7 @@ impl Card {
     }
 
     /// Everything that follows the device, made in the order it is needed.
-    fn on(vulkan: &Rc<Vulkan>, physical: vk::PhysicalDevice, device: ash::Device, family: u32, surface: vk::SurfaceKHR, exports: bool) -> Result<Card, String> {
+    fn on(vulkan: &'static Vulkan, physical: vk::PhysicalDevice, device: ash::Device, family: u32, surface: vk::SurfaceKHR, exports: bool) -> Result<Card, String> {
         let instance = &vulkan.instance;
         // SAFETY: a device just made on the instance, and a live surface.
         let (queue, memory, formats) = unsafe {
@@ -169,7 +222,7 @@ impl Card {
             return Err("the screen takes no format this draws in, or the card no commands".to_string());
         };
         Ok(Card {
-            vulkan: vulkan.clone(),
+            vulkan,
             physical,
             swapchains: ash::khr::swapchain::Device::new(instance, &device),
             exports: exports.then(|| ash::khr::external_memory_fd::Device::new(instance, &device)),
@@ -608,5 +661,42 @@ impl Drop for Picture {
             self.card.device.destroy_image(self.image, None);
             self.card.device.free_memory(self.memory, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// glibc's `makedev`, written out: the other half of what is tested.
+    fn makedev(major: u64, minor: u64) -> u64 {
+        ((major & 0xffff_f000) << 32) | ((major & 0xfff) << 8) | ((minor & 0xffff_ff00) << 12) | (minor & 0xff)
+    }
+
+    #[test]
+    fn a_device_number_comes_apart_the_way_glibc_puts_it_together() {
+        // The first render node, and numbers too big for the old eight bits
+        // a side, which live in both halves.
+        for (major, minor) in [(226, 128), (4000, 300_000), (0x12345, 0x6789a)] {
+            assert_eq!(device_number(makedev(major, minor)), (major, minor));
+        }
+    }
+
+    #[test]
+    fn a_render_node_is_found_on_the_bus() {
+        use std::os::unix::fs::MetadataExt;
+        // Whatever this machine has, if it has one at all.
+        let Ok(node) = std::fs::metadata("/dev/dri/renderD128") else { return };
+        let gpu = Gpu::of(node.rdev()).expect("a render node has a card behind it");
+        let vendor = std::fs::read_to_string("/sys/class/drm/renderD128/device/vendor").expect("a vendor");
+        assert_eq!(gpu.vendor, u32::from_str_radix(vendor.trim().trim_start_matches("0x"), 16).expect("hexadecimal"));
+    }
+
+    #[test]
+    fn there_is_one_instance_whoever_asks() {
+        // A machine without Vulkan has nothing to share.
+        let Ok(first) = Vulkan::shared() else { return };
+        let other = std::thread::spawn(|| Vulkan::shared().map(|vulkan| vulkan as *const Vulkan as usize)).join().expect("the thread");
+        assert_eq!(other, Ok(first as *const Vulkan as usize));
     }
 }

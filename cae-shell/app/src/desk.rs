@@ -19,13 +19,13 @@ use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_buffer, wl_callback, wl_compositor, wl_output, wl_region, wl_registry, wl_surface};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop};
 use wayland_protocols::wp::fractional_scale::v1::client::{wp_fractional_scale_manager_v1, wp_fractional_scale_v1};
-use wayland_protocols::wp::linux_dmabuf::zv1::client::{zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 pub use zwlr_layer_shell_v1::Layer;
 
-use crate::card::{ARGB8888, XRGB8888};
+use crate::card::{ARGB8888, Gpu, XRGB8888};
 
 /// The first version of `wl_output` that says what the output is called.
 const NAMED_OUTPUTS: u32 = 4;
@@ -144,6 +144,9 @@ pub struct Desk<C> {
     /// takes.
     pub dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
     pub takes_plain: bool,
+    /// The card the compositor draws with, where it says: the one to draw
+    /// on, so that a frame never has to cross from one card to another.
+    pub gpu: Option<Gpu>,
     pub screens: Vec<Screen<C>>,
     pub plan: Plan,
 }
@@ -163,9 +166,17 @@ pub fn open<C: 'static>(connection: &Connection, plan: Plan) -> Result<(EventQue
         // format and a modifier at a time, which is all this asks of it.
         dmabuf: globals.bind(&queue, 3..=3, ()).ok(),
         takes_plain: false,
+        gpu: None,
         screens: Vec::new(),
         plan,
     };
+    // Which card the compositor draws with is said only from version four,
+    // and only as feedback, which has none of the list above: bound a second
+    // time to be asked, and let go of once it has answered.
+    let asking = globals
+        .bind::<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, _, _>(&queue, 4..=4, Feedback)
+        .ok()
+        .map(|dmabuf| (dmabuf.get_default_feedback(&queue, ()), dmabuf));
     let outputs: Vec<(u32, u32)> = globals.contents().with_list(|all| {
         let is_output = |global: &&wayland_client::globals::Global| global.interface == wl_output::WlOutput::interface().name;
         all.iter().filter(is_output).map(|global| (global.name, global.version)).collect()
@@ -177,8 +188,16 @@ pub fn open<C: 'static>(connection: &Connection, plan: Plan) -> Result<(EventQue
     // and every output's name as it is: heard now, before the first surface
     // is given anything to draw on.
     events.roundtrip(&mut desk).map_err(|error| error.to_string())?;
+    if let Some((feedback, dmabuf)) = asking {
+        feedback.destroy();
+        dmabuf.destroy();
+    }
     Ok((events, desk))
 }
+
+/// What the second binding of the dma-buf global is known by, which is only
+/// ever asked which card the compositor draws with.
+pub struct Feedback;
 
 impl<C: 'static> Desk<C> {
     /// The surface on every screen that has one.
@@ -357,6 +376,22 @@ impl<C: 'static> Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, ()> for Desk<C>
             && (u64::from(modifier_hi) << 32 | u64::from(modifier_lo)) == LINEAR
         {
             desk.takes_plain = true;
+        }
+    }
+}
+
+/// Version four says nothing on the global itself: it is all feedback.
+impl<C: 'static> Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, Feedback> for Desk<C> {
+    fn event(_: &mut Self, _: &zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, _: zwp_linux_dmabuf_v1::Event, _: &Feedback, _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl<C: 'static> Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for Desk<C> {
+    fn event(desk: &mut Self, _: &zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, event: zwp_linux_dmabuf_feedback_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        // A `dev_t`, as the bytes it is in memory.
+        if let zwp_linux_dmabuf_feedback_v1::Event::MainDevice { device } = event
+            && let Ok(number) = <[u8; 8]>::try_from(device.as_slice())
+        {
+            desk.gpu = Gpu::of(u64::from_ne_bytes(number));
         }
     }
 }

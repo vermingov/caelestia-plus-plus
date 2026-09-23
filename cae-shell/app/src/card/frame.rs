@@ -1,6 +1,7 @@
 //! One image's worth of drawing: what it is drawn with, and the drawing.
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use ash::vk;
 
@@ -12,13 +13,20 @@ use super::{Card, Mapped};
 /// drawer rather than hanging it.
 pub const PATIENCE: u64 = 250_000_000;
 
+/// How soon a drawer tries again after `Painted::NotNow` when no frame has
+/// been asked for. The compositor may let go of an image without a word on
+/// the Wayland connection — through a timeline in the kernel, as Hyprland
+/// does with NVIDIA's driver — so a drawer that waited to hear from it
+/// could wait for good.
+pub const LOOK_AGAIN: Duration = Duration::from_millis(8);
+
 /// What became of asking for a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Painted {
     /// On its way to the screen.
     Shown,
     /// Not drawn: no image was free, or the swapchain has to be made again.
-    /// Nothing was sent to the compositor either.
+    /// Nothing was sent to the compositor either: see `LOOK_AGAIN`.
     NotNow,
 }
 

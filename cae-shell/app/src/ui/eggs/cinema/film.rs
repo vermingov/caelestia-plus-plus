@@ -14,7 +14,7 @@ use wayland_client::{Connection, Proxy};
 use super::kit::{Film, Kit};
 use super::marks::Marks;
 use super::{OVER, Stage, acts, portrait};
-use crate::card::{self, Card, Painted, Vulkan};
+use crate::card::{self, Card, LOOK_AGAIN, Painted, Vulkan};
 use crate::desk::{self, Layer, Plan};
 
 /// Its own name: it is not a panel, and must not be blurred or animated
@@ -89,7 +89,7 @@ fn run(on: Option<String>) -> Result<(), String> {
     desk.fall_back(&queue);
 
     let display = NonNull::new(connection.backend().display_ptr().cast::<c_void>()).ok_or("the connection has no display")?;
-    let vulkan = Vulkan::new()?;
+    let vulkan = Vulkan::shared()?;
     let mut drawing: Option<(Rc<Card>, Kit)> = None;
     let mut marks = Marks::with_room();
     // When the first frame went: the picture, and the track, start with it.
@@ -115,14 +115,14 @@ fn run(on: Option<String>) -> Result<(), String> {
                 // SAFETY: the display is the thread's own connection, which
                 // outlives everything made on it, and a sheet drops its
                 // canvas before it destroys its surface.
-                sheet.canvas = Some(unsafe { card::Canvas::new(&vulkan, display, surface) }?);
+                sheet.canvas = Some(unsafe { card::Canvas::new(vulkan, display, surface) }?);
             }
             sheet.fill(&desk.compositor, &queue, true);
             sheet.asked = false;
             let pixels = sheet.pixels(output_scale);
             let canvas = sheet.canvas.as_mut().expect("just made");
             if drawing.is_none() {
-                let card = Card::for_surface(&vulkan, canvas.surface)?;
+                let card = Card::for_surface(vulkan, canvas.surface, desk.gpu)?;
                 let picture = portrait::paint((pixels.1 as f32 * PORTRAIT) as u32).ok_or("the portrait could not be painted")?;
                 drawing = Some((card.clone(), Kit::new(&card, &picture)?));
             }
@@ -131,6 +131,8 @@ fn run(on: Option<String>) -> Result<(), String> {
             canvas.fit(card, pixels, wayland, &kit.spec).map_err(|fault| fault.said)?;
         }
 
+        // When to try again where nothing else will say: see `LOOK_AGAIN`.
+        let mut again = None;
         if let (Some((card, kit)), false) = (&drawing, sheet.asked)
             && let Some(canvas) = sheet.canvas.as_mut()
         {
@@ -168,6 +170,8 @@ fn run(on: Option<String>) -> Result<(), String> {
                     if asked.get() {
                         surface.commit();
                         sheet.asked = true;
+                    } else {
+                        again = Some(Instant::now() + LOOK_AGAIN);
                     }
                 }
                 Err(fault) => return Err(fault.said),
@@ -176,7 +180,8 @@ fn run(on: Option<String>) -> Result<(), String> {
 
         // Woken by the compositor, or at the end whether or not it asks for
         // anything more — a screen that is off asks for no frames.
-        let until = started.map(|at| at + Duration::from_millis(OVER as u64));
+        let over = started.map(|at| at + Duration::from_millis(OVER as u64));
+        let until = [over, again].into_iter().flatten().min();
         desk::wait(&connection, &events, None, until)?;
     }
 }

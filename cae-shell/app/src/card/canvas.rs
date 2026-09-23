@@ -36,7 +36,7 @@ enum Target<K> {
 
 /// One surface on the card, and what it is drawn on once it has a size.
 pub struct Canvas<K> {
-    vulkan: Rc<Vulkan>,
+    vulkan: &'static Vulkan,
     pub surface: vk::SurfaceKHR,
     size: (u32, u32),
     target: Option<Target<K>>,
@@ -48,10 +48,10 @@ impl<K: Copy + PartialEq> Canvas<K> {
     /// # Safety
     /// Both pointers must be what they are called, and both must outlive the
     /// canvas: it is to be dropped before the surface is destroyed.
-    pub unsafe fn new(vulkan: &Rc<Vulkan>, display: NonNull<c_void>, surface: NonNull<c_void>) -> Result<Canvas<K>, String> {
+    pub unsafe fn new(vulkan: &'static Vulkan, display: NonNull<c_void>, surface: NonNull<c_void>) -> Result<Canvas<K>, String> {
         // SAFETY: the caller's promise is the one this asks for.
         let surface = unsafe { vulkan.surface(display, surface) }?;
-        Ok(Canvas { vulkan: vulkan.clone(), surface, size: (0, 0), target: None })
+        Ok(Canvas { vulkan, surface, size: (0, 0), target: None })
     }
 
     pub fn size(&self) -> (u32, u32) {

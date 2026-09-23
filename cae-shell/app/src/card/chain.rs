@@ -8,6 +8,16 @@ use ash::vk;
 use super::frame::{Fault, Frame, PATIENCE, Painted, draw};
 use super::{Card, Mapped, Spec};
 
+/// How long a frame waits for the compositor to let go of an image, in
+/// nanoseconds: about a frame at sixty a second.
+///
+/// Not nought. A compositor that says it has let go through the kernel — a
+/// timeline it signals, which is how Hyprland and NVIDIA's driver do it —
+/// says nothing on the Wayland connection when it does, so a drawer that
+/// gave up at once and slept until it heard something slept until the end:
+/// the cinema showed two frames of its opening dark and nothing more.
+const FREE_WITHIN: u64 = 17_000_000;
+
 /// The swapchain, and a frame for each of its images.
 pub struct Chain<K> {
     card: Rc<Card>,
@@ -102,9 +112,10 @@ impl<K: Copy + PartialEq> Chain<K> {
             // SAFETY: a fence of this chain's.
             unsafe { self.card.device.wait_for_fences(&[self.frames[image].done], true, PATIENCE) }?;
         }
-        // An image that is not free yet is a frame for later.
+        // An image that is not free yet is waited for a little, and after
+        // that is a frame for later.
         // SAFETY: a live swapchain, and a semaphore nothing is waiting on.
-        let image = match unsafe { self.card.swapchains.acquire_next_image(self.swapchain, 0, acquired, vk::Fence::null()) } {
+        let image = match unsafe { self.card.swapchains.acquire_next_image(self.swapchain, FREE_WITHIN, acquired, vk::Fence::null()) } {
             Ok((image, _)) => image as usize,
             Err(vk::Result::NOT_READY | vk::Result::TIMEOUT | vk::Result::ERROR_OUT_OF_DATE_KHR) => return Ok(Painted::NotNow),
             Err(error) => return Err(error.into()),

@@ -24,10 +24,12 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1
 
 use super::helix::{MOST, Shape};
 use super::kit::{Change, Kit, SHAPES_AT, Scene};
-use crate::card::{self, Card, Fault, Mapped, Painted, Picture, Vulkan, Wayland};
+use crate::card::{self, Card, Fault, Gpu, Mapped, Painted, Picture, Vulkan, Wayland};
 
 pub struct Painter {
-    vulkan: Rc<Vulkan>,
+    vulkan: &'static Vulkan,
+    /// The card the compositor draws with, which is the one to draw on.
+    theirs: Option<Gpu>,
     card: Option<Rc<Card>>,
     kit: Option<Rc<Kit>>,
     /// What a first picture takes over from.
@@ -36,8 +38,8 @@ pub struct Painter {
 }
 
 impl Painter {
-    pub fn new() -> Result<Painter, String> {
-        Ok(Painter { vulkan: Vulkan::new()?, card: None, kit: None, black: None, refused: false })
+    pub fn new(theirs: Option<Gpu>) -> Result<Painter, String> {
+        Ok(Painter { vulkan: Vulkan::shared()?, theirs, card: None, kit: None, black: None, refused: false })
     }
 
     /// Something to draw on, for one Wayland surface.
@@ -47,7 +49,7 @@ impl Painter {
     /// canvas: it is to be dropped before the surface is destroyed.
     pub unsafe fn canvas(&self, display: NonNull<c_void>, surface: NonNull<c_void>) -> Result<Canvas, String> {
         // SAFETY: the caller's promise is the one this asks for.
-        let drawn = unsafe { card::Canvas::new(&self.vulkan, display, surface) }?;
+        let drawn = unsafe { card::Canvas::new(self.vulkan, display, surface) }?;
         Ok(Canvas { drawn, hung: None, hung_from: None })
     }
 
@@ -67,7 +69,7 @@ impl Painter {
     {
         let card = match &self.card {
             Some(card) => card.clone(),
-            None => self.card.insert(Card::for_surface(&self.vulkan, canvas.drawn.surface)?).clone(),
+            None => self.card.insert(Card::for_surface(self.vulkan, canvas.drawn.surface, self.theirs)?).clone(),
         };
         let kit = match &self.kit {
             Some(kit) => kit.clone(),
