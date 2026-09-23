@@ -20,12 +20,12 @@ use gpui::{
     layer_shell::*, point, prelude::*, px,
 };
 
-pub use outputs::keep_on_every_output;
 
 use crate::feeds::Feeds;
 use crate::theme;
 use crate::ui::rsx;
-use crate::ui::{pointer, screen};
+use crate::ui::screen::{self, Screens};
+use crate::ui::pointer;
 
 use strip::Strip;
 use visualiser::Visualiser;
@@ -46,8 +46,8 @@ impl Bar {
         // that can change while the bar is up.
         cx.observe(&feeds.settings, |_, _, cx| cx.notify()).detach();
         Bar {
+            visualiser: cx.new(|cx| Visualiser::new(output.clone(), feeds, cx)),
             strip: cx.new(|cx| Strip::new(output, feeds, cx)),
-            visualiser: cx.new(|cx| Visualiser::new(feeds, cx)),
             feeds: feeds.clone(),
         }
     }
@@ -79,6 +79,13 @@ impl Render for Bar {
             </div>
         }
     }
+}
+
+/// A bar on every output for the life of the shell, and the spectrum
+/// recorded only while one of them can show it.
+pub fn keep_on_every_output(cx: &mut App, screens: &Entity<Screens>, feeds: &Feeds, preview: bool) {
+    outputs::keep(cx, screens, feeds, preview);
+    visualiser::keep_wanted(cx, feeds);
 }
 
 /// Opens a bar on one output.

@@ -32,19 +32,29 @@ pub struct Strip {
     hover: Hover,
     date: String,
     time: String,
+    /// Whether a fullscreen window has this bar's screen, and the bar with
+    /// it. Hyprland goes on asking a hidden bar for frames, so while it is
+    /// hidden nothing is drawn: a readout redrawn every second for nobody is
+    /// a frame's work a second, for as long as the game lasts. Coming back
+    /// into view is itself a change, and draws everything as it is by then.
+    covered: bool,
 }
 
 impl Strip {
     pub fn new(output: String, feeds: &Feeds, cx: &mut Context<Self>) -> Strip {
         // Everything the strip draws, except the spectrum: that one repaints
         // fifteen times a second and has a view of its own for it.
-        cx.observe(&feeds.hypr, |_, _, cx| cx.notify()).detach();
-        cx.observe(&feeds.system, |_, _, cx| cx.notify()).detach();
-        cx.observe(&feeds.services, |_, _, cx| cx.notify()).detach();
-        cx.observe(&feeds.tray, |_, _, cx| cx.notify()).detach();
-        cx.observe(&feeds.media, |_, _, cx| cx.notify()).detach();
-        cx.observe(&feeds.settings, |_, _, cx| cx.notify()).detach();
-        cx.observe(&feeds.notifs, |_, _, cx| cx.notify()).detach();
+        cx.observe(&feeds.hypr, |strip: &mut Strip, hypr, cx| {
+            strip.covered = hypr.read(cx).value.fullscreen.contains(&strip.output);
+            strip.changed(cx);
+        })
+        .detach();
+        cx.observe(&feeds.system, |strip: &mut Strip, _, cx| strip.changed(cx)).detach();
+        cx.observe(&feeds.services, |strip: &mut Strip, _, cx| strip.changed(cx)).detach();
+        cx.observe(&feeds.tray, |strip: &mut Strip, _, cx| strip.changed(cx)).detach();
+        cx.observe(&feeds.media, |strip: &mut Strip, _, cx| strip.changed(cx)).detach();
+        cx.observe(&feeds.settings, |strip: &mut Strip, _, cx| strip.changed(cx)).detach();
+        cx.observe(&feeds.notifs, |strip: &mut Strip, _, cx| strip.changed(cx)).detach();
 
         // Aligned to the minute rather than ticking every second: the clock
         // shows minutes, so a second of work per second is fifty-nine wasted.
@@ -54,7 +64,7 @@ impl Strip {
                 cx.background_executor().timer(wait + Duration::from_millis(20)).await;
                 let ticked = strip.update(cx, |strip, cx| {
                     (strip.date, strip.time) = clock::now();
-                    cx.notify();
+                    strip.changed(cx);
                 });
                 if ticked.is_err() {
                     break;
@@ -65,6 +75,7 @@ impl Strip {
 
         let (date, time) = clock::now();
         let hover = Hover::new(cx.new(|_| Popouts::new(feeds)));
+        let covered = feeds.hypr.read(cx).value.fullscreen.contains(&output);
         Strip {
             output,
             feeds: feeds.clone(),
@@ -73,6 +84,14 @@ impl Strip {
             hover,
             date,
             time,
+            covered,
+        }
+    }
+
+    /// Something the strip shows has changed: drawn, unless nobody can see it.
+    fn changed(&mut self, cx: &mut Context<Self>) {
+        if !self.covered {
+            cx.notify();
         }
     }
 

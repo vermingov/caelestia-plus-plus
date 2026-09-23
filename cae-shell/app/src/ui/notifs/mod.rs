@@ -13,18 +13,17 @@ mod parts;
 mod toast;
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use cae_core::hypr;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, DisplayId, IntoElement, Render, Size, Styled,
+    AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, Entity, IntoElement, Render, Size, Styled,
     Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, layer_shell::*,
     point, prelude::*, px,
 };
 
 use crate::feeds::Feeds;
 use crate::ui::rsx;
-use crate::ui::screen::{self, STRETCH};
+use crate::ui::screen::{self, STRETCH, Screens};
 use column::Column;
 
 /// What the compositor's rules match on: the old surface's name, so that the
@@ -48,24 +47,13 @@ pub struct Surfaces {
 }
 
 /// Keeps the notification surfaces on every output for the life of the shell.
-pub fn keep_on_every_output(cx: &mut App, feeds: &Feeds) {
+pub fn keep_on_every_output(cx: &mut App, screens: &Entity<Screens>, feeds: &Feeds) {
     let surfaces = cx.new(|cx| {
         cx.observe(&feeds.notifs, |surfaces: &mut Surfaces, _, cx| surfaces.columns(cx)).detach();
+        cx.observe(screens, |surfaces: &mut Surfaces, _, cx| surfaces.corners(cx)).detach();
         Surfaces { feeds: feeds.clone(), screens: HashMap::new() }
     });
-    // Outputs come and go, and GPUI does not say when. Looked at on a slow
-    // tick, quickly at first: at startup the displays arrive a few
-    // milliseconds after the application does.
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut looks = 0_u32;
-        loop {
-            let found = surfaces.update(cx, |surfaces, cx| surfaces.corners(cx));
-            looks += 1;
-            let wait = if found == 0 && looks < 200 { 25 } else { 2000 };
-            cx.background_executor().timer(Duration::from_millis(wait)).await;
-        }
-    })
-    .detach();
+    surfaces.update(cx, |surfaces, cx| surfaces.corners(cx));
 }
 
 /// A layer surface down the right-hand edge of `display`, over everything:
@@ -93,8 +81,7 @@ fn surface(display: DisplayId, size: Size<gpui::Pixels>, anchor: Anchor) -> Wind
 
 impl Surfaces {
     /// A corner on every output there is, and none on one that has gone.
-    /// Says how many outputs there are.
-    fn corners(&mut self, cx: &mut Context<Self>) -> usize {
+    fn corners(&mut self, cx: &mut Context<Self>) {
         let outputs = screen::outputs(cx);
         self.screens.retain(|display, screen| {
             let stays = outputs.iter().any(|(_, wanted)| wanted == display);
@@ -130,7 +117,6 @@ impl Surfaces {
             }
         }
         self.columns(cx);
-        outputs.len()
     }
 
     /// A column wherever there is something to put in one. Each takes itself

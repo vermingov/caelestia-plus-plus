@@ -140,21 +140,22 @@ fn main() {
         let feeds = feeds::Feeds::start(cx, !preview);
         cx.set_global(feeds.clone());
         cx.set_global(actions::Desk { server: feeds.server.clone(), serving: feeds.serving });
+        let screens = ui::screen::keep(cx, &feeds);
         ui::launcher::Launchers::start(cx, &feeds);
         let answers = door::open(cx);
-        ui::bar::keep_on_every_output(cx, &feeds, preview);
+        ui::bar::keep_on_every_output(cx, &screens, &feeds, preview);
         // A shell that is only being looked at has no notifications of its
         // own to show: they are the other one's, on the other one's surfaces.
         if !preview {
-            ui::notifs::keep_on_every_output(cx, &feeds);
+            ui::notifs::keep_on_every_output(cx, &screens, &feeds);
         }
         // What opens by itself, when an edge is reached for or a level
         // changes, belongs to the shell that answers for the desktop: one
         // started beside it to be looked at would open a second of each.
         if answers {
-            ui::dashboard::keep_on_every_output(cx, &feeds);
-            ui::osd::keep_on_every_output(cx, &feeds);
-            ui::utilities::keep(cx, &feeds);
+            ui::dashboard::keep_on_every_output(cx, &screens, &feeds);
+            ui::osd::keep_on_every_output(cx, &screens, &feeds);
+            ui::utilities::keep(cx, &screens, &feeds);
             background::keep(cx, &feeds);
             idle::keep(cx, &feeds);
             battery::keep(cx, &feeds);

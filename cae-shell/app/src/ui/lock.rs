@@ -45,8 +45,15 @@ struct Locked(HashMap<DisplayId, WindowHandle<Face>>);
 
 impl Global for Locked {}
 
-pub fn is_locked(cx: &mut App) -> bool {
-    !cx.default_global::<Locked>().0.is_empty()
+/// Read without touching: taking the global mutably tells everything that
+/// observes it that it changed, and an observer that asks would hear itself.
+pub fn is_locked(cx: &App) -> bool {
+    cx.try_global::<Locked>().is_some_and(|locked| !locked.0.is_empty())
+}
+
+/// Calls `changed` each time the session is locked or unlocked.
+pub fn observe(cx: &mut App, mut changed: impl FnMut(&mut App) + 'static) {
+    cx.observe_global::<Locked>(move |cx| changed(cx)).detach();
 }
 
 /// What Quickshell is asked about before this is drawn: two session locks

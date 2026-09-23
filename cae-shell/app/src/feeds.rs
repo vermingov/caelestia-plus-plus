@@ -64,6 +64,9 @@ pub struct Feeds {
     pub guards: Entity<Feed<Vec<guards::Detail>>>,
     /// The guards themselves, for saying a word back to one.
     pub watcher: guards::Watcher,
+    /// Whether any bar that could show the spectrum is in view, which is
+    /// whether it is recorded at all. The bars say; see `ui::bar`.
+    pub spectrum_wanted: spectrum::Wanted,
     /// Wakes the slow feed early.
     ///
     /// Everything on that feed is a question put to another program, asked
@@ -183,6 +186,9 @@ impl Feeds {
             serving,
             guards: cx.new(|_| Feed { value: watcher.detail() }),
             watcher: watcher.clone(),
+            // Not until a bar has said it is in view: a shell starting under
+            // a fullscreen game has no reason to start recording.
+            spectrum_wanted: spectrum::Wanted::new(false),
             sooner: Sooner(sooner),
         };
 
@@ -194,8 +200,9 @@ impl Feeds {
             tray::watch(move |items| drop(tx.unbounded_send(items)))
         });
         pump(cx, &feeds.media, false, |tx| media::watch(move |now| drop(tx.unbounded_send(now))));
-        pump(cx, &feeds.spectrum, true, |tx| {
-            spectrum::watch(move |bars, live| drop(tx.unbounded_send(Spectrum { bars, live })))
+        let wanted = feeds.spectrum_wanted.clone();
+        pump(cx, &feeds.spectrum, true, move |tx| {
+            spectrum::watch(&wanted, move |bars, live| drop(tx.unbounded_send(Spectrum { bars, live })))
         });
         pump(cx, &feeds.system, false, sample_system);
         pump(cx, &feeds.guards, true, {

@@ -11,8 +11,12 @@
 //! in a linear algebra stack to do it would cost more to build than it saves
 //! to run.
 
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::process::{ChildStdout, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::children;
@@ -298,11 +302,64 @@ fn recorder() -> Command {
     command
 }
 
+/// Whether anything on screen would show the bars.
+///
+/// While nothing would — the bar is under a fullscreen film, the session is
+/// locked, the visualiser is switched off — the recorder is not running at
+/// all: no capture on the sink for PipeWire to feed, no windows to analyse,
+/// and no frames for a bar nobody can see to draw.
+#[derive(Clone)]
+pub struct Wanted(Arc<Want>);
+
+struct Want {
+    on: AtomicBool,
+    /// Written to when `on` changes, so a thread asleep on the recorder's
+    /// pipe hears of it without waiting for the next sound.
+    bell: UnixStream,
+    heard: UnixStream,
+}
+
+impl Wanted {
+    pub fn new(on: bool) -> Wanted {
+        let (bell, heard) = UnixStream::pair().expect("a socket pair can be made");
+        let _ = heard.set_nonblocking(true);
+        // Rung from the thread that draws, which must never wait on it: a
+        // bell that is full has been rung already.
+        let _ = bell.set_nonblocking(true);
+        Wanted(Arc::new(Want { on: AtomicBool::new(on), bell, heard }))
+    }
+
+    pub fn set(&self, on: bool) {
+        if self.0.on.swap(on, Ordering::SeqCst) != on {
+            let _ = (&self.0.bell).write(&[1]);
+        }
+    }
+
+    fn is(&self) -> bool {
+        self.0.on.load(Ordering::SeqCst)
+    }
+
+    /// Sleeps until the bars are wanted.
+    fn wait(&self) {
+        while !self.is() {
+            children::readable(&self.0.heard, None);
+            self.hush();
+        }
+    }
+
+    fn hush(&self) {
+        let mut rung = [0; 16];
+        while (&self.0.heard).read(&mut rung).is_ok_and(|read| read > 0) {}
+    }
+}
+
 /// What came of waiting for the next window.
 enum Next {
     Window,
     /// Nothing arrived in time: whatever was playing has stopped.
     Stalled,
+    /// Nothing on screen would show it any more.
+    Unwanted,
     /// The recorder is gone.
     Closed,
 }
@@ -327,10 +384,18 @@ impl Windows {
     /// Waits for the rest of the current window, giving up once the recorder
     /// has written nothing for `patience`. Without one it waits for as long
     /// as it takes. What had already arrived is kept for the next call.
-    fn next(&mut self, patience: Option<Duration>) -> Next {
+    fn next(&mut self, patience: Option<Duration>, wanted: &Wanted) -> Next {
         while self.filled < self.raw.len() {
-            if !children::readable(&self.stdout, patience) {
-                return Next::Stalled;
+            match either(&self.stdout, &wanted.0.heard, patience) {
+                Ready::Neither => return Next::Stalled,
+                Ready::Bell => {
+                    wanted.hush();
+                    if !wanted.is() {
+                        return Next::Unwanted;
+                    }
+                    continue;
+                }
+                Ready::Pipe => {}
             }
             match self.stdout.read(&mut self.raw[self.filled..]) {
                 Ok(0) => return Next::Closed,
@@ -348,6 +413,31 @@ impl Windows {
         for (sample, bytes) in samples.iter_mut().zip(self.raw.chunks_exact(4)) {
             *sample = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         }
+    }
+}
+
+/// Which of the two has something to read.
+enum Ready {
+    Pipe,
+    Bell,
+    Neither,
+}
+
+/// Waits up to `patience` (for good, given none) for the recorder's pipe or
+/// the bell. The bell first: a recorder with sound to give is never idle
+/// long enough to hear it otherwise.
+fn either(pipe: &impl AsRawFd, bell: &impl AsRawFd, patience: Option<Duration>) -> Ready {
+    let timeout = patience.map_or(-1, |wait| wait.as_millis() as libc::c_int);
+    let listen = |fd: i32| libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+    let mut both = [listen(pipe.as_raw_fd()), listen(bell.as_raw_fd())];
+    // SAFETY: two initialised `pollfd`s, which outlive the call.
+    if unsafe { libc::poll(both.as_mut_ptr(), 2, timeout) } <= 0 {
+        return Ready::Neither;
+    }
+    if both[1].revents != 0 {
+        Ready::Bell
+    } else {
+        Ready::Pipe
     }
 }
 
@@ -419,13 +509,15 @@ impl Feed {
 }
 
 /// Records the default sink's monitor and calls `on_frame` with each frame of
-/// bars, until the process ends.
+/// bars, for as long as they are `wanted`, until the process ends.
 ///
 /// Blocks; meant for its own thread. Silence is not sent: once the bars have
 /// drained to nothing, nothing is emitted until sound returns, so a quiet
-/// desktop costs one sleeping process and no repaints at all.
-pub fn watch(mut on_frame: impl FnMut(Vec<u8>, bool)) {
+/// desktop costs one sleeping process and no repaints at all. And while the
+/// bars are not wanted there is not even the process.
+pub fn watch(wanted: &Wanted, mut on_frame: impl FnMut(Vec<u8>, bool)) {
     loop {
+        wanted.wait();
         let Ok(mut recorder) = recorder().spawn() else {
             eprintln!("caelestia-bar: pw-record is not available, so no visualiser");
             return;
@@ -437,8 +529,8 @@ pub fn watch(mut on_frame: impl FnMut(Vec<u8>, bool)) {
         let mut samples = vec![0.0f32; WINDOW];
         let mut stalled = false;
 
-        loop {
-            match windows.next(patience(feed.showing, stalled)) {
+        let ended = loop {
+            match windows.next(patience(feed.showing, stalled), wanted) {
                 Next::Window => {
                     stalled = false;
                     windows.decode(&mut samples);
@@ -449,18 +541,26 @@ pub fn watch(mut on_frame: impl FnMut(Vec<u8>, bool)) {
                     stalled = true;
                     samples.fill(0.0);
                 }
-                Next::Closed => break,
+                ended @ (Next::Unwanted | Next::Closed) => break ended,
             }
 
             if let Some((bars, live)) = feed.window(&samples) {
                 on_frame(bars, live);
             }
-        }
+        };
 
-        // The recorder follows the default sink by itself, so it only exits
-        // when PipeWire does; that is a reconnect, not a failure.
+        // Down, so that whatever shows them next starts from nothing rather
+        // than from the chord that was playing when they went.
+        if feed.showing {
+            on_frame(vec![0; BARS], false);
+        }
+        let _ = recorder.kill();
         let _ = recorder.wait();
-        std::thread::sleep(Duration::from_millis(500));
+        // The recorder follows the default sink by itself, so it only exits
+        // by itself when PipeWire does; that is a reconnect, not a failure.
+        if matches!(ended, Next::Closed) {
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
 }
 

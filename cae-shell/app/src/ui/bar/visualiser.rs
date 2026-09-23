@@ -5,11 +5,11 @@
 //! own so that its fifteen frames a second are a repaint of a few hundred
 //! rectangles and nothing else.
 
-use gpui::{Bounds, Context, IntoElement, Pixels, Render, Size, Styled, Window, canvas, fill, point, px};
+use gpui::{App, Bounds, Context, IntoElement, Pixels, Render, Size, Styled, Window, canvas, fill, point, px};
 
 use crate::feeds::{Feed, Feeds, Spectrum};
 use crate::theme;
-use crate::ui::rsx;
+use crate::ui::{lock, rsx};
 
 /// Thin bars with air between them, repeated across the whole width. A band
 /// wide enough to read individually stops being a spectrum and starts being a
@@ -19,13 +19,54 @@ const GAP: f32 = 3.;
 
 pub struct Visualiser {
     spectrum: gpui::Entity<Feed<Spectrum>>,
+    output: String,
+    /// Whether a fullscreen window has this bar's screen, and the bar with
+    /// it: Hyprland goes on asking a hidden bar for frames, and every frame
+    /// drawn there is drawn for nobody.
+    covered: bool,
 }
 
 impl Visualiser {
-    pub fn new(feeds: &Feeds, cx: &mut Context<Self>) -> Visualiser {
-        cx.observe(&feeds.spectrum, |_, _, cx| cx.notify()).detach();
-        Visualiser { spectrum: feeds.spectrum.clone() }
+    pub fn new(output: String, feeds: &Feeds, cx: &mut Context<Self>) -> Visualiser {
+        cx.observe(&feeds.spectrum, |visualiser: &mut Visualiser, _, cx| {
+            if !visualiser.covered {
+                cx.notify();
+            }
+        })
+        .detach();
+        cx.observe(&feeds.hypr, |visualiser: &mut Visualiser, hypr, cx| {
+            let covered = hypr.read(cx).value.fullscreen.contains(&visualiser.output);
+            if covered != visualiser.covered {
+                visualiser.covered = covered;
+                cx.notify();
+            }
+        })
+        .detach();
+        let covered = feeds.hypr.read(cx).value.fullscreen.contains(&output);
+        Visualiser { spectrum: feeds.spectrum.clone(), output, covered }
     }
+}
+
+/// Keeps the spectrum recorded only while some bar that shows it can be
+/// seen: the entry is on, the session is not locked, and not every screen
+/// has a fullscreen window over its bar.
+pub fn keep_wanted(cx: &mut App, feeds: &Feeds) {
+    fn follow(feeds: &Feeds, cx: &mut App) {
+        let shown = feeds.settings.read(cx).value.layout.entries.iter().any(|entry| entry == "visualiser");
+        let hypr = &feeds.hypr.read(cx).value;
+        // No names at all is a compositor that does not say, which is no
+        // reason to think the bar hidden.
+        let in_view = hypr.outputs.is_empty() || hypr.outputs.iter().any(|output| !hypr.fullscreen.contains(output));
+        feeds.spectrum_wanted.set(shown && in_view && !lock::is_locked(cx));
+    }
+
+    follow(feeds, cx);
+    let watched = feeds.clone();
+    cx.observe(&feeds.settings, move |_, cx| follow(&watched, cx)).detach();
+    let watched = feeds.clone();
+    cx.observe(&feeds.hypr, move |_, cx| follow(&watched, cx)).detach();
+    let watched = feeds.clone();
+    lock::observe(cx, move |cx| follow(&watched, cx));
 }
 
 impl Render for Visualiser {

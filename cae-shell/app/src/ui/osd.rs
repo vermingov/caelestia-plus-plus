@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use cae_core::{config, hypr, levels, system, volume};
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, DispatchPhase, DisplayId, Entity, Global, IntoElement,
+    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, DispatchPhase, DisplayId, Entity, Global, IntoElement,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollWheelEvent, Size, Styled, Task, WeakEntity, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, canvas, div, layer_shell::*, point, prelude::*, px,
     relative,
@@ -25,7 +25,7 @@ use crate::feeds::Feeds;
 use crate::ours;
 use crate::theme;
 use crate::ui::glyph::glyph;
-use crate::ui::screen;
+use crate::ui::screen::{self, Screens};
 use crate::ui::{Ask, pointer, rsx};
 
 const PIECE: &str = "osd";
@@ -149,23 +149,14 @@ pub fn ask(ask: Ask, cx: &mut App) {
 
 /// Keeps the edge that opens it on every output, and watches the levels, for
 /// the life of the shell.
-pub fn keep_on_every_output(cx: &mut App, feeds: &Feeds) {
+pub fn keep_on_every_output(cx: &mut App, screens: &Entity<Screens>, feeds: &Feeds) {
     let osds = cx.new(|cx| {
         cx.observe(&feeds.system, |osds: &mut Osds, _, cx| osds.levels_moved(cx)).detach();
+        cx.observe(screens, |osds: &mut Osds, _, cx| osds.edges(cx)).detach();
         Osds { feeds: feeds.clone(), pane: None, opening: false, edges: HashMap::new(), seen: None }
     });
-    cx.set_global(Shared(osds.clone()));
-
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut looks = 0_u32;
-        loop {
-            let found = osds.update(cx, |osds, cx| osds.edges(cx));
-            looks += 1;
-            let wait = if found == 0 && looks < 200 { 25 } else { 2000 };
-            cx.background_executor().timer(Duration::from_millis(wait)).await;
-        }
-    })
-    .detach();
+    osds.update(cx, |osds, cx| osds.edges(cx));
+    cx.set_global(Shared(osds));
 }
 
 fn surface(display: Option<DisplayId>, size: Size<Pixels>) -> WindowOptions {
@@ -190,12 +181,13 @@ fn surface(display: Option<DisplayId>, size: Size<Pixels>) -> WindowOptions {
 }
 
 impl Osds {
-    fn edges(&mut self, cx: &mut Context<Self>) -> usize {
+    fn edges(&mut self, cx: &mut Context<Self>) {
         let outputs = screen::outputs(cx);
         // Quickshell has one of these on the same edge, and one started
         // before it knew to stand down still draws it.
         if !ours::is_ours(PIECE, cx) {
-            return outputs.len();
+            let this = cx.weak_entity();
+            return ours::once_ours(PIECE, cx, move |cx| drop(this.update(cx, |this, cx| this.edges(cx))));
         }
         self.edges.retain(|display, edge| {
             let stays = outputs.iter().any(|(_, wanted)| wanted == display);
@@ -215,7 +207,6 @@ impl Osds {
                 Err(error) => eprintln!("cae: cannot open the on-screen display's edge on {name}: {error}"),
             }
         }
-        outputs.len()
     }
 
     /// The readouts have been read again. If one of the three levels is not

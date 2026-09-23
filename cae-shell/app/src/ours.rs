@@ -48,6 +48,22 @@ pub fn is_ours(piece: &'static str, cx: &mut App) -> bool {
     false
 }
 
+/// Does `then` as soon as `piece` is this shell's: now, if it is known to be,
+/// or once Quickshell says so — asked again every so often for as long as it
+/// says no.
+pub fn once_ours(piece: &'static str, cx: &mut App, then: impl FnOnce(&mut App) + 'static) {
+    when_known(piece, cx, move |ours, cx| {
+        if ours {
+            return then(cx);
+        }
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(ASK_AGAIN).await;
+            cx.update(|cx| once_ours(piece, cx, then));
+        })
+        .detach();
+    });
+}
+
 /// Does `then` once it is known whose `piece` is, asking now if it is not
 /// known to be ours. For a key or a press, which is somebody waiting: the
 /// kept answer may be a no from before Quickshell had started answering.

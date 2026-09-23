@@ -10,17 +10,16 @@ mod cards;
 mod pane;
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, DisplayId, Entity, Global, Size,
+    AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, Entity, Global, Size,
     IntoElement, MouseMoveEvent, Render, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
     WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px,
 };
 
 use crate::feeds::Feeds;
 use crate::ours;
-use crate::ui::screen;
+use crate::ui::screen::{self, Screens};
 use crate::ui::rsx;
 use crate::ui::Ask;
 use pane::Pane;
@@ -49,23 +48,13 @@ impl Global for Shared {}
 
 /// Keeps it for the life of the shell: the strip that opens it on every
 /// screen, and nothing else until it is asked for.
-pub fn keep(cx: &mut App, feeds: &Feeds) {
-    let utilities = cx.new(|_| Utilities { feeds: feeds.clone(), open: None, edges: HashMap::new() });
-    cx.set_global(Shared(utilities.clone()));
-
-    // Outputs come and go, and GPUI does not say when. Looked at on a slow
-    // tick, quickly at first: at startup the displays arrive a few
-    // milliseconds after the application does.
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut looks = 0_u32;
-        loop {
-            let found = utilities.update(cx, |utilities, cx| utilities.edges(cx));
-            looks += 1;
-            let wait = if found == 0 && looks < 200 { 25 } else { 2000 };
-            cx.background_executor().timer(Duration::from_millis(wait)).await;
-        }
-    })
-    .detach();
+pub fn keep(cx: &mut App, screens: &Entity<Screens>, feeds: &Feeds) {
+    let utilities = cx.new(|cx| {
+        cx.observe(screens, |utilities: &mut Utilities, _, cx| utilities.edges(cx)).detach();
+        Utilities { feeds: feeds.clone(), open: None, edges: HashMap::new() }
+    });
+    utilities.update(cx, |utilities, cx| utilities.edges(cx));
+    cx.set_global(Shared(utilities));
 }
 
 /// What a key or the door asks for.
@@ -103,13 +92,13 @@ fn surface(display: Option<DisplayId>, size: Size<gpui::Pixels>) -> WindowOption
 
 impl Utilities {
     /// A strip on every output there is, and none on one that has gone.
-    /// Says how many outputs there are.
-    fn edges(&mut self, cx: &mut Context<Self>) -> usize {
+    fn edges(&mut self, cx: &mut Context<Self>) {
         let outputs = screen::outputs(cx);
         // Quickshell rises one out of the same corner, and one started
         // before it knew to stand down still does.
         if !ours::is_ours(PIECE, cx) {
-            return outputs.len();
+            let this = cx.weak_entity();
+            return ours::once_ours(PIECE, cx, move |cx| drop(this.update(cx, |this, cx| this.edges(cx))));
         }
         self.edges.retain(|display, edge| {
             let stays = outputs.iter().any(|(_, wanted)| wanted == display);
@@ -130,7 +119,6 @@ impl Utilities {
                 Err(error) => eprintln!("cae: cannot open the utilities' edge on {name}: {error}"),
             }
         }
-        outputs.len()
     }
 
     /// `display` is where the pointer reached for it, for an ask that came

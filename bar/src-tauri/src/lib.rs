@@ -1034,7 +1034,7 @@ fn sample_system(app: AppHandle) {
 /// a quiet desktop repaints nothing.
 fn watch_spectrum(app: AppHandle) {
     std::thread::spawn(move || {
-        spectrum::watch(|bars, live| {
+        spectrum::watch(&spectrum::Wanted::new(true), |bars, live| {
             let _ = app.emit("spectrum", (bars, live));
         });
     });

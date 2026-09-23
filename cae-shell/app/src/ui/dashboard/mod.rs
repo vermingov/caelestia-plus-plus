@@ -18,18 +18,17 @@ mod performance;
 mod weather;
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use cae_core::{config, hypr, services};
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, DisplayId, Entity, Global, IntoElement, Render, Size,
-    Styled, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div,
-    layer_shell::*, point, prelude::*, px,
+    AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, Entity, Global, IntoElement, Render, Size,
+    Styled, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    canvas, div, layer_shell::*, point, prelude::*, px,
 };
 
 use crate::feeds::Feeds;
 use crate::ours;
-use crate::ui::screen;
+use crate::ui::screen::{self, Screens};
 use crate::ui::{Ask, rsx};
 use forecast::Forecast;
 use pane::Pane;
@@ -58,8 +57,8 @@ const BAR: gpui::Pixels = px(50.);
 /// The strip under the middle of the bar that opens it: wide enough to be
 /// reached for without aiming, and thin enough to cost the window below it
 /// nothing but its top row of pixels. Its surface carries the bar's height
-/// above that strip, which nothing is drawn in and nothing can be clicked
-/// through.
+/// above that strip, which nothing is drawn in and which `reach` hands back
+/// to whatever is underneath.
 const EDGE: Size<gpui::Pixels> = Size { width: px(420.), height: px(50. + 2.) };
 
 /// Which of its pages the dashboard is on.
@@ -150,29 +149,13 @@ pub fn ask(ask: Ask, cx: &mut App) {
 }
 
 /// Keeps the edge that opens it on every output for the life of the shell.
-pub fn keep_on_every_output(cx: &mut App, feeds: &Feeds) {
-    let dashboards = cx.new(|cx| Dashboards {
-        feeds: feeds.clone(),
-        forecast: cx.new(|_| Forecast::default()),
-        open: None,
-        edges: HashMap::new(),
-        tab: Tab::Home,
+pub fn keep_on_every_output(cx: &mut App, screens: &Entity<Screens>, feeds: &Feeds) {
+    let dashboards = cx.new(|cx| {
+        cx.observe(screens, |dashboards: &mut Dashboards, _, cx| dashboards.edges(cx)).detach();
+        Dashboards { feeds: feeds.clone(), forecast: cx.new(|_| Forecast::default()), open: None, edges: HashMap::new(), tab: Tab::Home }
     });
-    cx.set_global(Shared(dashboards.clone()));
-
-    // Outputs come and go, and GPUI does not say when. Looked at on a slow
-    // tick, quickly at first: at startup the displays arrive a few
-    // milliseconds after the application does.
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut looks = 0_u32;
-        loop {
-            let found = dashboards.update(cx, |dashboards, cx| dashboards.edges(cx));
-            looks += 1;
-            let wait = if found == 0 && looks < 200 { 25 } else { 2000 };
-            cx.background_executor().timer(Duration::from_millis(wait)).await;
-        }
-    })
-    .detach();
+    dashboards.update(cx, |dashboards, cx| dashboards.edges(cx));
+    cx.set_global(Shared(dashboards));
 }
 
 fn surface(display: Option<DisplayId>, size: Size<gpui::Pixels>) -> WindowOptions {
@@ -204,14 +187,14 @@ fn surface(display: Option<DisplayId>, size: Size<gpui::Pixels>) -> WindowOption
 }
 
 impl Dashboards {
-    /// An edge on every output there is, and none on one that has gone. Says
-    /// how many outputs there are.
-    fn edges(&mut self, cx: &mut Context<Self>) -> usize {
+    /// An edge on every output there is, and none on one that has gone.
+    fn edges(&mut self, cx: &mut Context<Self>) {
         let outputs = screen::outputs(cx);
         // Quickshell has a dashboard that rises out of the same corner, and
         // one started before it knew to stand down still draws it.
         if !ours::is_ours(PIECE, cx) {
-            return outputs.len();
+            let this = cx.weak_entity();
+            return ours::once_ours(PIECE, cx, move |cx| drop(this.update(cx, |this, cx| this.edges(cx))));
         }
         self.edges.retain(|display, edge| {
             let stays = outputs.iter().any(|(_, wanted)| wanted == display);
@@ -232,7 +215,6 @@ impl Dashboards {
                 Err(error) => eprintln!("cae: cannot open the dashboard's edge on {name}: {error}"),
             }
         }
-        outputs.len()
     }
 
     /// `display` is where the pointer reached for it, for an ask that came
@@ -277,6 +259,21 @@ struct Edge {
     display: DisplayId,
 }
 
+/// Tells the compositor that the edge is the strip and nothing else.
+///
+/// The surface stands the bar's height taller than the strip, to put the
+/// strip under the bar without asking the compositor where the bar ends. A
+/// surface takes the pointer everywhere by default, so that height is a band
+/// of the screen that swallows clicks. Under the bar nobody notices, because
+/// the bar is there to be clicked. Over a fullscreen window it is the top of
+/// somebody's game: the bar is on the top layer and Hyprland stops offering
+/// it the pointer, this is on the overlay layer and it does not, and the
+/// clicks land on a surface that has been drawing nothing for as long as the
+/// game has been up.
+fn reach(window: &Window) {
+    window.set_input_region(Some(&[Bounds::new(point(px(0.), BAR), Size::new(EDGE.width, EDGE.height - BAR))]));
+}
+
 impl Render for Edge {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let (dashboards, display) = (self.dashboards.clone(), self.display);
@@ -302,7 +299,9 @@ impl Render for Edge {
                     })
                     .detach();
                 }}
-            />
+            >
+                <canvas class="absolute size-full" prepaint={|_, window: &mut Window, _: &mut App| reach(window)} paint={|_, _, _, _| ()} />
+            </div>
         }
     }
 }
