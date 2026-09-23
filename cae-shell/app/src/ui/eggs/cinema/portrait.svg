@@ -1,0 +1,185 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 300" width="240" height="300">
+  <!-- The portrait in the cinema's fourth act: head and shoulders, drawn
+       over the proportions of the official portrait (Avi Ohayon, Israeli
+       Government Press Office, CC BY-SA 3.0) and lit from above and to the
+       left. Painted once as the cinema starts, at the size it is shown
+       (see portrait.rs). -->
+  <defs>
+    <linearGradient id="suit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232b3d"/>
+      <stop offset="1" stop-color="#0c1018"/>
+    </linearGradient>
+    <linearGradient id="shirt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f9fc"/>
+      <stop offset="1" stop-color="#d3d9e2"/>
+    </linearGradient>
+    <linearGradient id="tie" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a3cbf3"/>
+      <stop offset="1" stop-color="#5d93d2"/>
+    </linearGradient>
+    <radialGradient id="skin" cx="0.44" cy="0.32" r="0.72">
+      <stop offset="0" stop-color="#f1c6a3"/>
+      <stop offset="0.6" stop-color="#dea883"/>
+      <stop offset="1" stop-color="#c58a66"/>
+    </radialGradient>
+    <linearGradient id="neck" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8e5a40"/>
+      <stop offset="1" stop-color="#b87e5c"/>
+    </linearGradient>
+    <radialGradient id="ear" cx="0.45" cy="0.4" r="0.7">
+      <stop offset="0" stop-color="#e6b08b"/>
+      <stop offset="1" stop-color="#b57856"/>
+    </radialGradient>
+    <linearGradient id="hair" x1="0.3" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#dfe1e4"/>
+      <stop offset="0.55" stop-color="#b7bbc1"/>
+      <stop offset="1" stop-color="#8c9199"/>
+    </linearGradient>
+    <linearGradient id="brow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#57504a"/>
+      <stop offset="1" stop-color="#2f2a27"/>
+    </linearGradient>
+    <radialGradient id="tip" cx="0.42" cy="0.32" r="0.66">
+      <stop offset="0" stop-color="#f1c4a0"/>
+      <stop offset="1" stop-color="#c78a65"/>
+    </radialGradient>
+    <radialGradient id="iris" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#a0835f"/>
+      <stop offset="0.7" stop-color="#6b5139"/>
+      <stop offset="1" stop-color="#34271c"/>
+    </radialGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+    <filter id="softer" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+    <filter id="blur1" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.1"/></filter>
+    <clipPath id="left-eye"><path d="M84 117 C89 111 101 110 107 115 C101 119 90 120 84 117 Z"/></clipPath>
+    <clipPath id="right-eye"><path d="M156 117 C151 111 139 110 133 115 C139 119 150 120 156 117 Z"/></clipPath>
+    <clipPath id="face-clip"><path d="M64 104 C62 126 63 148 68 164 C73 180 84 193 98 200 C106 204 113 206 120 206 C127 206 134 204 142 200 C156 193 167 180 172 164 C177 148 178 126 176 104 C174 84 168 70 160 60 C150 50 136 46 120 46 C104 46 90 50 80 60 C72 70 66 84 64 104 Z"/></clipPath>
+  </defs>
+
+  <!-- The suit, high on the shoulders, over a white shirt and a pale blue
+       tie. -->
+  <path d="M0 300 L0 228 C10 207 40 196 82 188 L120 185 L158 188 C200 196 230 207 240 228 L240 300 Z" fill="url(#suit)"/>
+  <path d="M84 186 L120 252 L156 186 Z" fill="url(#shirt)"/>
+  <path d="M96 194 L144 194 L140 206 L100 206 Z" fill="url(#neck)"/>
+  <ellipse cx="120" cy="203" rx="27" ry="7" fill="#4a2a1c" opacity="0.5" filter="url(#soft)"/>
+  <path d="M113 222 L127 222 L130 234 L124 238 L116 238 L110 234 Z" fill="url(#tie)"/>
+  <path d="M116 237 L124 237 L135 300 L105 300 Z" fill="url(#tie)"/>
+  <path d="M118 240 L121 240 L128 300 L120 300 Z" fill="#d6e8fb" opacity="0.35"/>
+  <path d="M84 188 L116 221 L103 233 Z" fill="url(#shirt)"/>
+  <path d="M156 188 L124 221 L137 233 Z" fill="url(#shirt)"/>
+  <path d="M84 188 L116 221 L103 233 Z" fill="none" stroke="#b8c0cc" stroke-width="0.8"/>
+  <path d="M156 188 L124 221 L137 233 Z" fill="none" stroke="#b8c0cc" stroke-width="0.8"/>
+  <!-- The lapels, and their edges catching the light. -->
+  <path d="M82 189 L112 246 L96 300 L56 300 L62 242 Z" fill="#1f2738"/>
+  <path d="M158 189 L128 246 L144 300 L184 300 L178 242 Z" fill="#181f2e"/>
+  <path d="M82 189 L112 246 L96 300" fill="none" stroke="#3d4964" stroke-width="1.4"/>
+  <path d="M158 189 L128 246 L144 300" fill="none" stroke="#34405a" stroke-width="1.4"/>
+  <path d="M6 222 C22 204 52 195 82 190" fill="none" stroke="#3a4560" stroke-width="1.6" opacity="0.6"/>
+  <path d="M234 222 C218 204 188 195 158 190" fill="none" stroke="#3a4560" stroke-width="1.6" opacity="0.6"/>
+
+  <!-- Ears: big, and standing off the head a little. -->
+  <path d="M63 100 C50 93 44 106 45 122 C46 138 52 150 64 148 Z" fill="url(#ear)"/>
+  <path d="M59 107 C51 106 49 115 50 123 C51 132 54 140 60 141" fill="none" stroke="#9c6345" stroke-width="1.8" opacity="0.7"/>
+  <path d="M177 100 C190 93 196 106 195 122 C194 138 188 150 176 148 Z" fill="url(#ear)"/>
+  <path d="M181 107 C189 106 191 115 190 123 C189 132 186 140 180 141" fill="none" stroke="#9c6345" stroke-width="1.8" opacity="0.7"/>
+
+  <!-- The face: broad, a strong square jaw, full at the cheeks. -->
+  <path d="M64 104 C62 126 63 148 68 164 C73 180 84 193 98 200 C106 204 113 206 120 206 C127 206 134 204 142 200 C156 193 167 180 172 164 C177 148 178 126 176 104 C174 84 168 70 160 60 C150 50 136 46 120 46 C104 46 90 50 80 60 C72 70 66 84 64 104 Z" fill="url(#skin)"/>
+  <g clip-path="url(#face-clip)">
+    <!-- Where it turns away from the light, and colour in the cheeks. -->
+    <ellipse cx="172" cy="140" rx="16" ry="50" fill="#8e5436" opacity="0.4" filter="url(#softer)"/>
+    <ellipse cx="68" cy="160" rx="10" ry="30" fill="#8e5436" opacity="0.25" filter="url(#softer)"/>
+    <ellipse cx="86" cy="142" rx="13" ry="9" fill="#d27458" opacity="0.3" filter="url(#softer)"/>
+    <ellipse cx="154" cy="142" rx="13" ry="9" fill="#d27458" opacity="0.28" filter="url(#softer)"/>
+    <ellipse cx="120" cy="196" rx="30" ry="10" fill="#8e5436" opacity="0.25" filter="url(#softer)"/>
+    <!-- The line of the jaw. -->
+    <path d="M72 168 C77 184 88 195 100 200" fill="none" stroke="#9d6243" stroke-width="2.4" opacity="0.4" filter="url(#blur1)"/>
+    <path d="M168 168 C163 184 152 195 140 200" fill="none" stroke="#9d6243" stroke-width="2.4" opacity="0.45" filter="url(#blur1)"/>
+    <!-- Lines across the forehead. -->
+    <path d="M94 70 C106 67 134 67 146 70" fill="none" stroke="#b07251" stroke-width="1.1" opacity="0.18"/>
+    <path d="M90 79 C105 75 135 75 150 79" fill="none" stroke="#b07251" stroke-width="1.1" opacity="0.16"/>
+    <path d="M96 88 C108 85 132 85 144 88" fill="none" stroke="#b07251" stroke-width="1" opacity="0.22"/>
+    <!-- The hollows under the brow, and the shadow at the root of the
+         nose between them. -->
+    <ellipse cx="95" cy="114" rx="16" ry="8" fill="#9a5c3d" opacity="0.42" filter="url(#soft)"/>
+    <ellipse cx="145" cy="114" rx="16" ry="8" fill="#9a5c3d" opacity="0.45" filter="url(#soft)"/>
+  </g>
+
+  <!-- The eyes: narrow, a little screwed up, hooded, bags under them. -->
+  <path d="M84 117 C89 111 101 110 107 115 C101 119 90 120 84 117 Z" fill="#ece5dc"/>
+  <g clip-path="url(#left-eye)">
+    <circle cx="96.5" cy="115.2" r="4.7" fill="url(#iris)"/>
+    <circle cx="96.5" cy="115.2" r="2" fill="#120d0a"/>
+    <path d="M84 113 C90 109 102 109 108 113 L108 115 C101 111.5 90 111.5 84 116 Z" fill="#6e4636" opacity="0.55"/>
+  </g>
+  <circle cx="95" cy="113.8" r="1" fill="#ffffff" opacity="0.9"/>
+  <path d="M156 117 C151 111 139 110 133 115 C139 119 150 120 156 117 Z" fill="#ece5dc"/>
+  <g clip-path="url(#right-eye)">
+    <circle cx="143.5" cy="115.2" r="4.7" fill="url(#iris)"/>
+    <circle cx="143.5" cy="115.2" r="2" fill="#120d0a"/>
+    <path d="M156 113 C150 109 138 109 132 113 L132 115 C139 111.5 150 111.5 156 116 Z" fill="#6e4636" opacity="0.55"/>
+  </g>
+  <circle cx="142" cy="113.8" r="1" fill="#ffffff" opacity="0.9"/>
+  <path d="M81 115 C87 106 101 105 110 113 C101 109 89 110 84 117 Z" fill="#cf916d"/>
+  <path d="M84 117 C90 111 101 110 107 115" fill="none" stroke="#33241d" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M159 115 C153 106 139 105 130 113 C139 109 151 110 156 117 Z" fill="#c98b68"/>
+  <path d="M156 117 C150 111 139 110 133 115" fill="none" stroke="#33241d" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M86 121 C93 126 102 125 107 120" fill="none" stroke="#9e6446" stroke-width="1.3" opacity="0.55"/>
+  <path d="M88 125 C95 130 103 129 107 125" fill="none" stroke="#9e6446" stroke-width="1" opacity="0.4"/>
+  <path d="M154 121 C147 126 138 125 133 120" fill="none" stroke="#9e6446" stroke-width="1.3" opacity="0.55"/>
+  <path d="M152 125 C145 130 137 129 133 125" fill="none" stroke="#9e6446" stroke-width="1" opacity="0.4"/>
+  <!-- Crow's feet. -->
+  <path d="M80 116 L75 114 M80 118 L75 119" stroke="#a56a4b" stroke-width="0.9" opacity="0.5"/>
+  <path d="M160 116 L165 114 M160 118 L165 119" stroke="#a56a4b" stroke-width="0.9" opacity="0.5"/>
+
+  <!-- Brows: dark, thick, nearly straight, low over the eyes. -->
+  <path d="M78 107 C87 102 100 102 112 108 L111 112.5 C100 107.5 88 107 79 111 Z" fill="url(#brow)"/>
+  <path d="M162 107 C153 102 140 102 128 108 L129 112.5 C140 107.5 152 107 161 111 Z" fill="url(#brow)"/>
+  <path d="M116 104 C115 108 115 112 116 115 M124 104 C125 108 125 112 124 115" fill="none" stroke="#9d6243" stroke-width="1" opacity="0.45"/>
+  <path d="M82 108 L88 105 M88 107 L95 104 M95 106 L102 104 M102 107 L109 106" stroke="#76706a" stroke-width="0.8" opacity="0.6"/>
+  <path d="M158 108 L152 105 M152 107 L145 104 M145 106 L138 104 M138 107 L131 106" stroke="#76706a" stroke-width="0.8" opacity="0.6"/>
+
+  <!-- The nose: long and straight, broad at the base, a rounded tip. -->
+  <path d="M114 116 C112 128 109 138 106 146" fill="none" stroke="#9d6243" stroke-width="3" opacity="0.45" filter="url(#blur1)"/>
+  <path d="M121 114 C122 124 122 134 122 141" fill="none" stroke="#f6d3b3" stroke-width="3.2" opacity="0.55" stroke-linecap="round" filter="url(#blur1)"/>
+  <path d="M104 152 C104 147 108 145 111 147 M136 152 C136 147 132 145 129 147" fill="none" stroke="#a86b4b" stroke-width="1.3" opacity="0.6"/>
+  <ellipse cx="120" cy="148.5" rx="9.5" ry="7" fill="url(#tip)" opacity="0.9"/>
+  <ellipse cx="117.5" cy="145.5" rx="3" ry="1.8" fill="#fbe0c8" opacity="0.6"/>
+  <path d="M110 154 C113 156 116 156 118 154.5 M130 154 C127 156 124 156 122 154.5" fill="none" stroke="#6a3b27" stroke-width="1.3" opacity="0.6" stroke-linecap="round"/>
+  <ellipse cx="120" cy="159.5" rx="12" ry="2.6" fill="#8a4f33" opacity="0.4" filter="url(#blur1)"/>
+
+  <!-- The folds from the nose to the corners of the mouth. -->
+  <path d="M103 150 C96 160 95 170 99 180" fill="none" stroke="#95593d" stroke-width="2" opacity="0.5" stroke-linecap="round"/>
+  <path d="M105 152 C99 161 98 170 101 178" fill="none" stroke="#efc19c" stroke-width="1.4" opacity="0.45"/>
+  <path d="M137 150 C144 160 145 170 141 180" fill="none" stroke="#95593d" stroke-width="2" opacity="0.5" stroke-linecap="round"/>
+
+  <!-- A wide, thin mouth, closed, the hint of a smile at one corner. -->
+  <path d="M100 171 C108 168 114 168.5 120 169.5 C126 168.5 133 167.5 141 169.5 C131 173 109 174 100 171 Z" fill="#a8604e"/>
+  <path d="M101 172 C111 177 130 177 140 171 C130 181 111 181 101 172 Z" fill="#bd7862"/>
+  <path d="M112 175 C118 177 124 177 129 175" fill="none" stroke="#e0a48d" stroke-width="0.9" opacity="0.6"/>
+  <path d="M100 171 C110 173.5 130 173 141 169.5" fill="none" stroke="#5a2e24" stroke-width="1.3" stroke-linecap="round"/>
+  <path d="M141 169.5 C143 168.5 144 167 144.5 165.5" fill="none" stroke="#5a2e24" stroke-width="0.9" opacity="0.6"/>
+  <path d="M100 171 C98.5 170.5 97.5 169.5 97 168.5" fill="none" stroke="#5a2e24" stroke-width="0.8" opacity="0.4"/>
+  <!-- The crease under the lip, and the chin in the light. -->
+  <path d="M111 186 C117 189 124 189 130 186" fill="none" stroke="#9d6243" stroke-width="1.2" opacity="0.45"/>
+  <ellipse cx="118" cy="195" rx="10" ry="4" fill="#f1c6a2" opacity="0.5" filter="url(#blur1)"/>
+
+  <!-- The hair: silver, full, combed straight back off a high forehead,
+       gone at the temples, short and darker over the ears. -->
+  <path d="M62 98 C60 112 60 122 62 128 C57 118 56 106 58 94 Z" fill="#8f949b"/>
+  <path d="M178 98 C180 112 180 122 178 128 C183 118 184 106 182 94 Z" fill="#8f949b"/>
+  <ellipse cx="120" cy="58" rx="38" ry="5" fill="#7f4f38" opacity="0.18" filter="url(#soft)"/>
+  <path d="M56 110 C49 92 48 70 58 52 C70 33 95 21 124 21 C153 21 178 33 189 52 C197 70 195 92 184 110 C181 106 178 104 176 104 C174 96 172 90 170 86 C167 78 163 72 159 68 C152 61 142 55 132 53 C126 52 114 52 108 53 C98 55 88 61 81 68 C77 72 73 78 70 86 C68 90 66 96 64 104 C62 104 59 106 56 110 Z" fill="url(#hair)"/>
+  <path d="M70 86 C73 78 77 72 81 68 C88 61 98 55 108 53 C114 52 126 52 132 53 C142 55 152 61 159 68 C163 72 167 78 170 86" fill="none" stroke="#e8eaed" stroke-width="2.2" opacity="0.75"/>
+  <path d="M56 110 C51 96 50 82 52 70 L60 76 C60 88 61 99 64 106 Z" fill="#6f747c" opacity="0.85"/>
+  <path d="M184 110 C189 96 190 82 188 70 L180 76 C180 88 179 99 176 106 Z" fill="#6f747c" opacity="0.85"/>
+  <!-- Its sweep back, strand by strand, and where the light catches it. -->
+  <path d="M76 74 C84 54 102 40 128 34" fill="none" stroke="#9aa0a8" stroke-width="1.3" opacity="0.7"/>
+  <path d="M94 60 C104 46 122 38 146 36" fill="none" stroke="#9aa0a8" stroke-width="1.2" opacity="0.6"/>
+  <path d="M114 53 C126 44 144 40 164 44" fill="none" stroke="#9aa0a8" stroke-width="1.2" opacity="0.55"/>
+  <path d="M136 54 C150 50 164 52 176 60" fill="none" stroke="#8d939b" stroke-width="1.2" opacity="0.55"/>
+  <path d="M66 64 C76 46 96 32 122 28" fill="none" stroke="#fafbfc" stroke-width="1.8" opacity="0.7"/>
+  <path d="M86 52 C100 38 120 32 144 31" fill="none" stroke="#fafbfc" stroke-width="1.3" opacity="0.6"/>
+  <path d="M168 76 C176 84 180 94 182 104" fill="none" stroke="#80858d" stroke-width="1.3" opacity="0.6"/>
+  <path d="M72 76 C66 86 63 96 60 105" fill="none" stroke="#80858d" stroke-width="1.3" opacity="0.6"/>
+</svg>

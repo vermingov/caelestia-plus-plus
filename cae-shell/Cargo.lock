@@ -729,6 +729,7 @@ dependencies = [
  "lyon",
  "naga",
  "raw-window-handle",
+ "resvg",
  "serde_json",
  "unicode-segmentation",
  "uuid",

@@ -50,6 +50,9 @@ wgpu = "29"
 ash = "0.38"
 naga = { version = "29", features = ["wgsl-in", "spv-out"] }
 bytemuck = { version = "1", features = ["derive"] }
+# The cinema's portrait, an SVG painted once as it starts: the renderer
+# GPUI draws its own SVGs with, at the same version, adding no features.
+resvg = { version = "0.46", default-features = false }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 raw-window-handle = "0.6"
 wayland-client = "0.31"

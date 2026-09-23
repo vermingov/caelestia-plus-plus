@@ -25,7 +25,7 @@ It is taking Quickshell's place a piece at a time. What it draws today:
 | idleness | what happens after a while: the lock, the screens off, the machine down |
 | the system scan | what the shell needs from the machine and whether it is there — with a fix per finding that is read before it is run, and one word about it a minute after startup when something is actually missing |
 | the battery | the warnings on the way down, and the hibernate before the charge runs out |
-| the eggs | both of them, drawn rather than loaded: GPUI will not turn an SVG, so every sticker, the portrait and the whole five-act cinema are the shapes their files were |
+| the eggs | the desktop one, drawn in GPUI from the shapes its files were; and the five-act cinema, drawn on the card from a thread of its own like the background (see below) |
 
 What is still Quickshell's: nothing that draws. What is left in `modules/`
 is the debug console, which is Quickshell's own log and goes with it, and the
@@ -104,6 +104,18 @@ or the card cannot take that (`CAE_BACKGROUND_SWAPCHAIN=1` asks for the
 swapchain regardless). About one percent of a core while it turns, nothing
 while it does not. A picture is cut to each screen's own pixels as it is
 hung, drawn while it takes over from the last one, and not again.
+
+What any of this needs is shared: the card, its frames, the swapchain and
+the hand-over in `app/src/card/`, the Wayland connection and its layer
+surfaces in `app/src/desk.rs`. The cinema is the other thing drawn that way
+(`app/src/ui/eggs/cinema/`): one surface over everything on the screen
+somebody is looking at, seen through and pressed through, for as long as its
+track plays. Every frame is a buffer of marks — strokes of light, motes out
+of focus, a flag of real cloth, eyes, a night sky with fireworks over a city
+— that one shader works out a pixel at a time, and the portrait
+(`portrait.svg`) is painted once with resvg as it starts. About four percent of a core at sixty
+frames a second where the GPUI one took all of one, and nothing at all once
+it is over.
 
 ## The utilities
 
@@ -202,8 +214,9 @@ changes nothing restarts nothing.
   `cargo check --features layer-shell` in `bar/src-tauri`.
 - `app/`: the binary. `ui/bar`, `ui/popout`, `ui/launcher`, `ui/notifs`,
   `ui/settings`, `ui/dashboard`, `ui/utilities`, `ui/session.rs`, `ui/osd.rs`,
-  `background/` and `awake.rs` (which are not GPUI's, see above), and what
-  they share: the text field
+  `background/`, `ui/eggs/cinema` and `awake.rs` (which are not GPUI's, see
+  above; the first two draw with `card/` and `desk.rs`), and what they share:
+  the text field
   (`ui/field.rs`), the controls (`ui/controls.rs`), the slider, the dial.
 - `rig/`: a desktop nobody is looking at, for trying the shell on. See below.
 
