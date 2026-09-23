@@ -471,8 +471,14 @@ cmd_update() {
     now=$(git -C "$SHELL_DIR" rev-parse HEAD)
     if [[ -n $PREVIOUS_HEAD && $now != "$PREVIOUS_HEAD" ]]; then
         warn "rolling the checkout back to $(git -C "$SHELL_DIR" log -1 --format=%h "$PREVIOUS_HEAD")"
-        git -C "$SHELL_DIR" reset --hard "$PREVIOUS_HEAD" >/dev/null
-        restart_shell && die "the new commits broke the shell; rolled back and restarted. Report the log above."
+        # --keep rather than --hard: it moves the checkout back all the same,
+        # but refuses rather than throw away what somebody changed in it by
+        # hand. A failed update is no reason to lose a day's work.
+        if git -C "$SHELL_DIR" reset --keep "$PREVIOUS_HEAD" >/dev/null 2>&1; then
+            restart_shell && die "the new commits broke the shell; rolled back and restarted. Report the log above."
+        else
+            warn "the checkout has local changes in the way; left on $(git -C "$SHELL_DIR" log -1 --format=%h)"
+        fi
     fi
     # Out of ways to get a shell up. If the session was handed to cae, it no
     # longer starts Quickshell either, and leaving it that way means the next
