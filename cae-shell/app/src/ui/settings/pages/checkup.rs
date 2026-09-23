@@ -82,7 +82,7 @@ impl Checkup {
         self.scanning = true;
         cx.notify();
         cx.spawn(async move |page, cx| {
-            let report = cx.background_spawn(async { checkup::scan() }).await;
+            let report = cx.background_spawn(async { checkup::scan(checkup::Pace::Asked) }).await;
             let _ = page.update(cx, |page: &mut Checkup, cx| {
                 page.at = crate::clock::now().1.into();
                 page.report = Some(report);

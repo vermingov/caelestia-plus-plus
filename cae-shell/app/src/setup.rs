@@ -66,8 +66,8 @@ impl Missing {
 
     /// Looks over the machine and keeps only what has not already been
     /// waved away. Blocking.
-    fn found() -> Missing {
-        let report = checkup::scan();
+    fn found(pace: checkup::Pace) -> Missing {
+        let report = checkup::scan(pace);
         let waved = Dismissed::read();
         let packages = waved.fresh_packages(&report.missing_packages());
         let halves = waved.fresh_halves(&report.outdated_halves(), &report.halves);
@@ -118,7 +118,7 @@ pub fn keep(cx: &mut App) {
         let _ = cx.update(|cx| {
             ours::when_known(PIECE, cx, |ours, cx| {
                 if ours {
-                    look(cx);
+                    look(checkup::Pace::Unasked, cx);
                 }
             })
         });
@@ -126,10 +126,10 @@ pub fn keep(cx: &mut App) {
     .detach();
 }
 
-/// Looks now. Also what `cae-shell scan` reaches.
-pub fn look(cx: &mut App) {
+/// Looks now. Also what `cae-shell scan now` reaches, which is asked for.
+pub fn look(pace: checkup::Pace, cx: &mut App) {
     cx.spawn(async move |cx| {
-        let missing = cx.background_spawn(async { Missing::found() }).await;
+        let missing = cx.background_spawn(async move { Missing::found(pace) }).await;
         if !missing.anything() {
             return;
         }

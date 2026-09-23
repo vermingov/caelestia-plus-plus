@@ -120,7 +120,7 @@ fn answer(line: &str, cx: &mut App) {
         Some("egg") => eggs::pop(cx),
         Some("cinema") => eggs::cinema::pop(cx),
         Some("scan") => match words.next() {
-            Some("now") => crate::setup::look(cx),
+            Some("now") => crate::setup::look(cae_core::checkup::Pace::Asked, cx),
             _ => settings::open(Some("scan"), cx),
         },
         Some("launcher") => drop(launcher::ask(words.next(), words.collect::<Vec<_>>().join(" "), cx)),

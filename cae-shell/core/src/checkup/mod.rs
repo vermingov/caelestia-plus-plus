@@ -198,24 +198,57 @@ fn walls_dir() -> PathBuf {
 
 /// Runs the whole scan. Blocking, and slow enough — seconds — that it wants
 /// a thread of its own.
-pub fn scan() -> Report {
+/// Whether somebody is waiting on a scan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    /// Asked for: as quick as the machine allows.
+    Asked,
+    /// The look a while after startup, which nobody is waiting on.
+    Unasked,
+}
+
+pub fn scan(pace: Pace) -> Report {
     let checkout = about::checkout();
     let script = checkout.join("assets/systemcheck-probe.sh");
     let binaries: Vec<&str> = rows::BINARIES.iter().map(|needed| needed.binary).collect();
-    let printed = Command::new("bash")
-        .arg(&script)
-        .arg(&checkout)
-        .arg(walls_dir())
-        .arg(binaries.join(" "))
-        .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .unwrap_or_default();
+    let mut probe = Command::new("bash");
+    probe.arg(&script).arg(&checkout).arg(walls_dir()).arg(binaries.join(" "));
+    if pace == Pace::Unasked {
+        out_of_the_way(&mut probe);
+    }
+    let printed = probe.output().map(|output| String::from_utf8_lossy(&output.stdout).into_owned()).unwrap_or_default();
 
     let probed = Probed::read(&printed);
     let mut report = Report { halves: probed.halves.clone(), rows: rows::all(&probed, &checkout) };
     // Problems first, untouchable notes next, what is well last.
     report.rows.sort_by_key(|row| row.status);
     report
+}
+
+/// Has `command`, and everything it starts, run only when nothing else wants
+/// the processor, and read the disk after everything else. The probe stats
+/// every file of every package and walks `/etc` and the package cache, for
+/// the better part of a minute — at startup, just when somebody is opening
+/// their first things.
+///
+/// A scheduling class rather than a nice value: ananicy, which CachyOS runs,
+/// re-nices every `bash` it sees, and would undo a nice the moment it was set.
+fn out_of_the_way(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    const IOPRIO_WHO_PROCESS: libc::c_int = 1;
+    // Best effort at its lowest, not idle: an idle one waits for as long as
+    // anything else reads the disk, which a game loading does for minutes.
+    const BEST_EFFORT_LOWEST: libc::c_int = (2 << 13) | 7;
+    // SAFETY: two system calls about the child itself, between fork and exec;
+    // neither allocates nor takes a lock.
+    unsafe {
+        command.pre_exec(|| {
+            let param = libc::sched_param { sched_priority: 0 };
+            libc::sched_setscheduler(0, libc::SCHED_IDLE, &param);
+            libc::syscall(libc::SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, BEST_EFFORT_LOWEST);
+            Ok(())
+        });
+    }
 }
 
 /// Runs a staged fix, handing each line of its output to `line` as it
@@ -312,7 +345,7 @@ mod tests {
     #[test]
     #[ignore = "runs the real probe on this machine"]
     fn the_scan_answers_on_this_machine() {
-        let report = scan();
+        let report = scan(Pace::Asked);
         for row in &report.rows {
             println!("{:>4} {:<52} {}", row.status.word(), row.name, row.fix.as_ref().map_or("", |fix| fix.label.as_str()));
         }
