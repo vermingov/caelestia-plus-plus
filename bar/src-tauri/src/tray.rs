@@ -262,9 +262,9 @@ pub fn items() -> Vec<Item> {
 
 /// Announces this process as a tray host and then keeps the item list current.
 ///
-/// Blocks; meant for its own thread. The watcher is somebody else's — the
-/// shell runs one — so this registers with whatever is already there rather
-/// than trying to own the name itself.
+/// Blocks; meant for its own thread. The watcher it registers with is the
+/// shell's own where the shell serves one (`watcher::serve`), or whatever
+/// else holds the name.
 pub fn watch(mut on_change: impl FnMut(Vec<Item>)) {
     let Some(connection) = connection() else {
         eprintln!("caelestia-bar: no session bus, so no tray");
@@ -277,11 +277,10 @@ pub fn watch(mut on_change: impl FnMut(Vec<Item>)) {
         let _ = proxy.call::<_, _, ()>("RegisterStatusNotifierHost", &(host.as_str(),));
     }
 
-    // The watcher emits when items come and go, and each item emits when it
-    // changes; subscribing to every one of those is a lot of plumbing for a
-    // list that is a handful of entries. Re-reading it on a slow tick, and
-    // only telling the front end when it actually differs, is the same
-    // outcome for a fraction of the code.
+    // Read again when the watcher says an item came or went, or an item says
+    // it changed — rather than asking every item every four seconds, which
+    // woke each of those applications to answer for as long as it ran.
+    let heard = crate::signals::listen(&connection, &SAID, "tray").map(|(_, heard)| heard);
     let mut last: Option<Vec<Item>> = None;
     let diagnosing = std::env::var_os("CAELESTIA_BAR_DIAG").is_some();
     loop {
@@ -293,11 +292,25 @@ pub fn watch(mut on_change: impl FnMut(Vec<Item>)) {
             last = Some(items.clone());
             on_change(items);
         }
-        // Four DBus round trips per item per pass, and a tray changes when a
-        // person starts or stops an application.
-        std::thread::sleep(Duration::from_secs(4));
+        crate::signals::wait(heard.as_ref(), LOOK_ANYWAY, SETTLE, Duration::from_secs(4));
     }
 }
+
+/// What the watcher says when an item comes or goes, and what an item says
+/// when anything about it changes, under either name the interface goes by.
+const SAID: [&str; 3] = [
+    "type='signal',interface='org.kde.StatusNotifierWatcher'",
+    "type='signal',interface='org.kde.StatusNotifierItem'",
+    "type='signal',interface='org.freedesktop.StatusNotifierItem'",
+];
+
+/// An application that has just started usually registers and then sets its
+/// icon and title straight after: read once, when it has.
+const SETTLE: Duration = Duration::from_millis(150);
+
+/// How long the items are trusted to say what changed before they are
+/// looked at anyway.
+const LOOK_ANYWAY: Duration = Duration::from_secs(30);
 
 /// A left click, which is whatever the application decided it is.
 pub fn activate(key: &str, x: i32, y: i32) {

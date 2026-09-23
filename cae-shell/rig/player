@@ -59,10 +59,16 @@ class Player(dbus.service.Object):
     def Get(self, interface, name):
         return self.all(interface)[name]
 
+    @dbus.service.signal(PROPERTIES, signature="sa{sv}as")
+    def PropertiesChanged(self, interface, changed, invalidated):
+        pass
+
     @dbus.service.method(PLAYER)
     def PlayPause(self):
         self.offset, self.since, self.playing = self.position(), time.monotonic(), not self.playing
         print("PlayPause ->", "playing" if self.playing else "paused", flush=True)
+        # Said, as a player is meant to: the shell is told, not asking.
+        self.PropertiesChanged(PLAYER, {"PlaybackStatus": "Playing" if self.playing else "Paused"}, [])
 
     @dbus.service.method(PLAYER)
     def Next(self):

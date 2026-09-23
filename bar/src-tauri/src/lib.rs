@@ -17,11 +17,13 @@ mod notifs;
 #[cfg(feature = "layer-shell")]
 mod repaint;
 mod services;
+mod signals;
 mod spectrum;
 mod startup;
 mod system;
 mod tray;
 mod volume;
+mod watcher;
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -1094,8 +1096,10 @@ fn watch_notifs(app: AppHandle) {
 }
 
 /// The tray, on its own thread because it holds a DBus connection open.
+/// This bar is always the desktop's, so it is always the tray's watcher too.
 fn watch_tray(app: AppHandle) {
     std::thread::spawn(move || {
+        watcher::serve();
         tray::watch(|items| {
             let _ = app.emit("tray", items);
         });

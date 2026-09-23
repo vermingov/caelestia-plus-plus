@@ -180,6 +180,7 @@ pub fn set_position(bus: &str, track: &str, position: i64) {
     if let Ok(proxy) = Proxy::new(&connection, bus, PATH, PLAYER) {
         let _ = proxy.call::<_, _, ()>("SetPosition", &(track, position));
     }
+    nudge();
 }
 
 /// `control`, for one player in particular.
@@ -193,6 +194,7 @@ pub fn control_on(bus: &str, action: &str) {
     if let Ok(proxy) = Proxy::new(&connection, bus, PATH, PLAYER) {
         let _ = proxy.call::<_, _, ()>(action, &());
     }
+    nudge();
 }
 
 /// What is playing right now, for a caller that has just started listening.
@@ -200,9 +202,33 @@ pub fn now() -> Option<NowPlaying> {
     connection().and_then(|connection| read(&connection))
 }
 
+/// What players say when anything about them changes, and what the bus says
+/// when one comes or goes.
+const SAID: [&str; 2] = [
+    "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/mpris/MediaPlayer2'",
+    "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'",
+];
+
+/// A new track is several things said at once — the metadata, then that it
+/// is playing — and they are read as one.
+const SETTLE: Duration = Duration::from_millis(80);
+
+/// How long the players are trusted to say what changed before it is looked
+/// at anyway. The specification has every player announce a new track or a
+/// pause; one that does not is shown it this late at worst.
+const LOOK_ANYWAY: Duration = Duration::from_secs(30);
+
 /// Calls `on_change` whenever what is playing changes. Blocks; own thread.
+///
+/// Told by the players rather than asking them. Asking was a round of calls
+/// every two seconds to every player there was — a browser woken to answer,
+/// all day, whether anything was playing or not.
 pub fn watch(mut on_change: impl FnMut(Option<NowPlaying>)) {
     let Some(connection) = connection() else { return };
+    let heard = crate::signals::listen(&connection, &SAID, "mpris").map(|(told, heard)| {
+        let _ = NUDGE.set(told);
+        heard
+    });
     let mut last: Option<Option<NowPlaying>> = None;
     loop {
         let playing = read(&connection);
@@ -210,9 +236,17 @@ pub fn watch(mut on_change: impl FnMut(Option<NowPlaying>)) {
             last = Some(playing.clone());
             on_change(playing);
         }
-        // A title changes at the pace of a song, not of a frame — and each
-        // pass is several DBus round trips per player.
-        std::thread::sleep(Duration::from_secs(2));
+        crate::signals::wait(heard.as_ref(), LOOK_ANYWAY, SETTLE, Duration::from_secs(2));
+    }
+}
+
+/// Wakes `watch` when this process has just told a player to do something:
+/// what it did is shown at once, whether or not the player says so itself.
+static NUDGE: std::sync::OnceLock<std::sync::mpsc::Sender<()>> = std::sync::OnceLock::new();
+
+fn nudge() {
+    if let Some(nudge) = NUDGE.get() {
+        let _ = nudge.send(());
     }
 }
 
@@ -230,6 +264,7 @@ pub fn control(action: &str) {
     if let Ok(proxy) = Proxy::new(&connection, bus, PATH, PLAYER) {
         let _ = proxy.call::<_, _, ()>(action, &());
     }
+    nudge();
 }
 
 #[cfg(test)]

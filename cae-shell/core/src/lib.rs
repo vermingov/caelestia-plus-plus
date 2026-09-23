@@ -56,6 +56,8 @@ pub mod media;
 pub mod notifs;
 #[path = "../../../bar/src-tauri/src/services.rs"]
 pub mod services;
+#[path = "../../../bar/src-tauri/src/signals.rs"]
+pub mod signals;
 #[path = "../../../bar/src-tauri/src/spectrum.rs"]
 pub mod spectrum;
 #[path = "../../../bar/src-tauri/src/startup.rs"]
@@ -66,3 +68,5 @@ pub mod system;
 pub mod tray;
 #[path = "../../../bar/src-tauri/src/volume.rs"]
 pub mod volume;
+#[path = "../../../bar/src-tauri/src/watcher.rs"]
+pub mod watcher;

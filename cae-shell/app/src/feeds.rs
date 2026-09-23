@@ -161,9 +161,10 @@ fn pump<T: Send + 'static>(
 
 impl Feeds {
     /// `serving` is whether this process is the desktop's notification
-    /// server. A shell run beside the real one, to look at it, must not be:
-    /// there is one bus name and one socket, and taking either would take it
-    /// from the shell that is actually in use.
+    /// server and tray watcher. A shell run beside the real one, to look at
+    /// it, must not be: there is one bus name for each, and one socket, and
+    /// taking any of them would take it from the shell that is actually in
+    /// use.
     pub fn start(cx: &mut App, serving: bool) -> Feeds {
         let watcher = guards::Watcher::start();
         let server = if serving { notifs::start() } else { notifs::Notifs::new() };
@@ -186,7 +187,12 @@ impl Feeds {
         };
 
         pump(cx, &feeds.hypr, false, |tx| hypr::watch(move |state| drop(tx.unbounded_send(state))));
-        pump(cx, &feeds.tray, false, |tx| tray::watch(move |items| drop(tx.unbounded_send(items))));
+        pump(cx, &feeds.tray, false, move |tx| {
+            if serving {
+                cae_core::watcher::serve();
+            }
+            tray::watch(move |items| drop(tx.unbounded_send(items)))
+        });
         pump(cx, &feeds.media, false, |tx| media::watch(move |now| drop(tx.unbounded_send(now))));
         pump(cx, &feeds.spectrum, true, |tx| {
             spectrum::watch(move |bars, live| drop(tx.unbounded_send(Spectrum { bars, live })))
