@@ -10,12 +10,13 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cae_core::hypr;
 use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, FocusHandle, Focusable, Global, IntoElement,
-    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Render, Size, Styled, Window,
+    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Render, RenderImage, Size, Styled, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, actions, div, img, layer_shell::*, point, prelude::*, px,
 };
 
@@ -108,7 +109,8 @@ pub fn ask(want: Want, cx: &mut App) {
             })
             .collect();
 
-        let at = Rc::new(Screen { x, y, windows: here, frozen, want });
+        let still = frozen.as_deref().and_then(pixels);
+        let at = Rc::new(Screen { x, y, windows: here, frozen, still, want });
         match cx.open_window(surface(display), move |window, cx| cx.new(|cx| Picker::new(at, window, cx))) {
             Ok(picker) => up.push(picker.into()),
             Err(error) => eprintln!("cae: cannot open the picker on {name}: {error}"),
@@ -149,6 +151,21 @@ fn freeze(name: &str) -> Option<PathBuf> {
     let still = somewhere_new(&cache, name);
     let grabbed = std::process::Command::new("grim").args(["-l", "0", "-o", name]).arg(&still).status();
     grabbed.is_ok_and(|status| status.success()).then_some(still)
+}
+
+/// A still as pixels, decoded before its surface is up. Handed to GPUI as a
+/// path, it was read only once the picker was already showing, and until then
+/// the screen went on moving under it: on a machine deep in swap, for the
+/// whole of the shot. GPUI also keeps what it reads from a path for as long as
+/// the shell runs, and each still has a path of its own; these go with the
+/// surface instead.
+fn pixels(still: &std::path::Path) -> Option<Arc<RenderImage>> {
+    let mut pixels = image::open(still).ok()?.into_rgba8();
+    // What GPUI draws is BGRA.
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])))
 }
 
 /// A path for this screen's still that has not been drawn from before, with
@@ -197,6 +214,8 @@ struct Screen {
     /// The windows on it, in the order they lie.
     windows: Vec<Bounds<Pixels>>,
     frozen: Option<PathBuf>,
+    /// The same, decoded.
+    still: Option<Arc<RenderImage>>,
     want: Want,
 }
 
@@ -382,7 +401,7 @@ impl Render for Picker {
                 // The other button is "never mind", as Escape is.
                 onMouseUp={(MouseButton::Right, |_, window: &mut Window, cx: &mut App| done(window, cx))}
             >
-                {...self.at.frozen.clone().map(|still| rsx! {
+                {...self.at.still.clone().map(|still| rsx! {
                     <img class="absolute size-full" src={still} object_fit={ObjectFit::Fill} />
                 })}
                 {...shade(chosen)}
@@ -424,6 +443,19 @@ fn shade(chosen: Option<Bounds<Pixels>>) -> Vec<gpui::Div> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_still_is_decoded_the_way_round_gpui_draws_it() {
+        let dir = std::env::temp_dir().join(format!("cae-still-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let still = dir.join("eDP-1-1.png");
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([200, 30, 60, 255])).save(&still).unwrap();
+
+        let decoded = pixels(&still).expect("a still that was written can be read");
+        assert_eq!(decoded.size(0), Size::new(gpui::DevicePixels(3), gpui::DevicePixels(2)));
+        assert_eq!(&decoded.as_bytes(0).unwrap()[..4], &[60, 30, 200, 255], "red and blue are swapped for BGRA");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn what_is_taken_is_cut_out_of_the_still_and_not_the_live_screen() {
