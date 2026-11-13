@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use cae_core::{config, lyrics, media, web};
 use gpui::{
-    AnyElement, AppContext, Context, Entity, FontWeight, IntoElement, ObjectFit, Render, RetainAllImageCache, ScrollHandle, SharedString, Window,
+    AnyElement, AppContext, Context, FontWeight, IntoElement, ObjectFit, Render, ScrollHandle, SharedString, Window,
     div, img, point, prelude::*, px,
 };
 
@@ -14,6 +14,7 @@ use super::pane::Reach;
 use crate::ease::{Curve, Tween};
 use crate::theme;
 use crate::ui::glyph::glyph;
+use crate::ui::pictures::Pictures;
 use crate::ui::rsx;
 use crate::ui::slider::{Slide, slider};
 
@@ -51,7 +52,7 @@ pub struct Media {
     scrolled: Tween,
     list: ScrollHandle,
     seek: Slide,
-    pictures: Entity<RetainAllImageCache>,
+    pictures: Pictures,
 }
 
 fn minutes(microseconds: i64) -> String {
@@ -108,7 +109,7 @@ impl Media {
             scrolled: Tween::still(0.),
             list: ScrollHandle::new(),
             seek: Slide::default(),
-            pictures: RetainAllImageCache::new(cx),
+            pictures: Pictures::new(cx),
         };
         page.look(cx);
         page
@@ -281,6 +282,7 @@ fn quiet(symbol: &'static str, says: &'static str) -> AnyElement {
 
 impl Render for Media {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.pictures.keep_only(self.cover.clone(), window, cx);
         let now = self.shown().cloned();
         let position = self.position();
         // The words move with the song, so while it plays this is drawn
@@ -339,7 +341,7 @@ impl Render for Media {
             .collect();
 
         rsx! {
-            <div class="flex size-full" image_cache={self.pictures.clone()}>
+            <div class="flex size-full" image_cache={self.pictures.cache()}>
                 <div class="flex flex-col flex-none justify-between w-[340px] h-full p-[24px]">
                     <div class="flex items-center gap-[18px]">
                         <div class="flex flex-none items-center justify-center size-[112px]" rounded={px(12.)} bg={theme::white(0.05)} shadow={theme::edge(0.06)} text_color={theme::text_faint()}>

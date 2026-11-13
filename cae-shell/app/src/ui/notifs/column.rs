@@ -5,14 +5,15 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use cae_core::logo;
 use cae_core::notifs::{Notification, reason};
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, Context, DispatchPhase, DisplayId, Entity, IntoElement, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, RetainAllImageCache, Styled, Task, WeakEntity, Window, canvas, div,
+    AnyElement, App, Bounds, ClipboardItem, Context, DispatchPhase, DisplayId, IntoElement, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Render, Styled, Task, WeakEntity, Window, canvas, div,
     prelude::*, px,
 };
 
@@ -20,6 +21,7 @@ use super::{Surfaces, markup};
 use crate::ease::{Curve, Tween};
 use crate::feeds::Feeds;
 use crate::theme;
+use crate::ui::pictures::Pictures;
 use crate::ui::{pointer, rsx};
 
 /// More than this and the newest few are shown with a count of the rest: a
@@ -151,10 +153,10 @@ pub struct Column {
     /// land, and what it was last told.
     pub(super) boxes: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     pub(super) told: Rc<RefCell<Vec<Bounds<Pixels>>>>,
-    /// The pictures this column has drawn, which go when it does. Left to
-    /// the application's own cache they would be kept, decoded, for as long
-    /// as the shell runs: every avatar of every message of the day.
-    pictures: Entity<RetainAllImageCache>,
+    /// The pictures this column has drawn, which go when their notification
+    /// does. Left to the application's own cache they would be kept, decoded,
+    /// for as long as the shell runs: every avatar of every message of the day.
+    pictures: Pictures,
 }
 
 fn now() -> i64 {
@@ -195,7 +197,7 @@ impl Column {
         let mut column = Column {
             output,
             display,
-            pictures: RetainAllImageCache::new(cx),
+            pictures: Pictures::new(cx),
             feeds: feeds.clone(),
             surfaces,
             config: logo::notifs_config(),
@@ -456,11 +458,19 @@ impl Render for Column {
         let column = cx.weak_entity();
         let (moved, let_go) = (column.clone(), column);
 
+        let feed = &self.feeds.notifs.read(cx).value.list;
+        let shown: Vec<PathBuf> = (self.toasts.iter().map(|toast| &toast.notif).chain(feed))
+            .flat_map(|notif| [&notif.image, &notif.app_icon])
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        self.pictures.keep_only(shown, window, cx);
+
         let toasts: Vec<AnyElement> = self.toasts.iter().map(|toast| self.toast(toast, cx)).collect();
         let waiting = self.waiting;
 
         rsx! {
-            <div class="relative size-full" font_family={theme::FONT} image_cache={self.pictures.clone()}>
+            <div class="relative size-full" font_family={theme::FONT} image_cache={self.pictures.cache()}>
                 <div class="absolute flex flex-col" top={px(6.)} right={px(12.)} w={TOAST}>
                     {...toasts}
                     {...(waiting > 0).then(|| rsx! {

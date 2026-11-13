@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use cae_core::tray;
-use gpui::{AnyElement, Image, ImageFormat, IntoElement, MouseButton, ObjectFit, Styled, img, prelude::*, px};
+use gpui::{AnyElement, App, Image, ImageFormat, ImageSource, IntoElement, MouseButton, ObjectFit, Styled, img, prelude::*, px};
 
 use super::pieces::{Tone, section, slot};
 use crate::ui::glyph::glyph;
@@ -24,10 +24,17 @@ pub struct Icons {
 }
 
 impl Icons {
-    /// Forgets icons no item is using any more. An application that animates
-    /// its tray icon sends a new one every frame of it.
-    pub fn keep_only(&mut self, items: &[tray::Item]) {
-        self.decoded.retain(|uri, _| items.iter().any(|item| &item.icon == uri));
+    /// Forgets icons no item is using any more, here and in GPUI, which keeps
+    /// what it has decoded until told. An application that animates its tray
+    /// icon sends a new one every frame of it.
+    pub fn keep_only(&mut self, items: &[tray::Item], cx: &mut App) {
+        let (kept, gone) = std::mem::take(&mut self.decoded)
+            .into_iter()
+            .partition(|(uri, _)| items.iter().any(|item| &item.icon == uri));
+        self.decoded = kept;
+        for (_, image) in gone {
+            ImageSource::from(image).remove_asset(cx);
+        }
     }
 
     fn pixels(&mut self, uri: &str) -> Option<Arc<Image>> {
@@ -65,11 +72,11 @@ fn base64(text: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-pub fn row(items: &[tray::Item], icons: &mut Icons, hover: &Hover) -> Option<impl IntoElement + use<>> {
+pub fn row(items: &[tray::Item], icons: &mut Icons, hover: &Hover, cx: &mut App) -> Option<impl IntoElement + use<>> {
+    icons.keep_only(items, cx);
     if items.is_empty() {
         return None;
     }
-    icons.keep_only(items);
 
     Some(rsx! {
         <div base={section()} class="gap-[1px]">

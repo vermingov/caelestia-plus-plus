@@ -138,7 +138,7 @@ impl Strip {
             .into_any_element(),
             "tray" => {
                 let items = self.feeds.tray.read(cx).value.clone();
-                tray::row(&items, &mut self.icons, &self.hover)?.into_any_element()
+                tray::row(&items, &mut self.icons, &self.hover, cx)?.into_any_element()
             }
             "statusIcons" => rsx! {
                 <div class="flex flex-none items-center" gap={theme::GAP}>

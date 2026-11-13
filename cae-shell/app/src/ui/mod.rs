@@ -21,6 +21,7 @@ pub mod lock;
 pub mod notifs;
 pub mod osd;
 pub mod picker;
+pub mod pictures;
 pub mod pointer;
 pub mod popout;
 pub mod screen;
